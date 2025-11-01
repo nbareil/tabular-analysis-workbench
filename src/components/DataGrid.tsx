@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { AgGridReact } from 'ag-grid-react';
-import type { CellContextMenuEvent } from 'ag-grid-community';
+import type { CellContextMenuEvent, ColumnState, SortChangedEvent } from 'ag-grid-community';
 
 import { useAppStore } from '@state/appStore';
 import { useDataStore, type GridRow, type LoaderStatus } from '@state/dataStore';
-import type { FilterState } from '@state/sessionStore';
+import type { FilterState, SessionSnapshot } from '@state/sessionStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
+import { useSortSync } from '@/hooks/useSortSync';
 
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
@@ -46,6 +47,29 @@ export const evaluateFilterMenuMetadata = (
   };
 };
 
+type SortState = SessionSnapshot['sorts'][number];
+
+const sortsEqual = (left: SortState[], right: SortState[]): boolean => {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every(
+    (sort, index) =>
+      sort.column === right[index]?.column && sort.direction === right[index]?.direction
+  );
+};
+
+export const buildSortStateFromColumnState = (columnState: ColumnState[]): SortState[] =>
+  columnState
+    .filter((state) => state.sort != null)
+    .sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0))
+    .map((state) => ({
+      column: state.colId ?? '',
+      direction: state.sort === 'desc' ? 'desc' : 'asc'
+    }))
+    .filter((sort) => Boolean(sort.column));
+
 interface FilterContextMenuState {
   x: number;
   y: number;
@@ -62,6 +86,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   const rows = useDataStore((state) => state.searchRows ?? state.filteredRows ?? state.rows);
   const theme = useAppStore((state) => state.theme);
   const { filters, applyFilters } = useFilterSync();
+  const { sorts, applySorts } = useSortSync();
   const [contextMenu, setContextMenu] = useState<FilterContextMenuState | null>(null);
 
   const columnDefs = useMemo(
@@ -76,9 +101,20 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         headerTooltip:
           column.confidence > 0
             ? `${column.type} • ${column.confidence}% confidence`
-            : column.type
+            : column.type,
+        ...((): { sort?: 'asc' | 'desc'; sortIndex?: number } => {
+          const sortPosition = sorts.findIndex((sort) => sort.column === column.key);
+          if (sortPosition < 0) {
+            return {};
+          }
+
+          return {
+            sort: sorts[sortPosition]?.direction,
+            sortIndex: sortPosition
+          };
+        })()
       })),
-    [columns]
+    [columns, sorts]
   );
 
   const defaultColDef = useMemo(
@@ -238,6 +274,18 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     closeMenu();
   }, [applyFilters, closeMenu, contextMenu, filters, menuMetadata]);
 
+  const handleSortChanged = useCallback(
+    (event: SortChangedEvent) => {
+      const columnState = event.columnApi.getColumnState();
+      const nextSorts = buildSortStateFromColumnState(columnState);
+
+      if (!sortsEqual(nextSorts, sorts)) {
+        void applySorts(nextSorts);
+      }
+    },
+    [applySorts, sorts]
+  );
+
   const renderContextMenu = () => {
     if (!contextMenu || !menuMetadata) {
       return null;
@@ -300,6 +348,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           getRowId={(params) => (params.data ? String(params.data.__rowId) : '')}
           tooltipShowDelay={0}
           onCellContextMenu={handleCellContextMenu}
+          onSortChanged={handleSortChanged}
         />
       )}
       {renderContextMenu()}

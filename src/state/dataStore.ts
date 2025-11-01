@@ -36,6 +36,7 @@ interface DataState {
   appendBatch: (batch: RowBatch) => void;
   complete: (summary: { rowsParsed: number; bytesParsed: number; durationMs: number }) => void;
   setError: (message: string) => void;
+  setRows: (rows: GridRow[]) => void;
   setFilterResult: (payload: { rows: GridRow[]; totalRows: number; matchedRows: number | null }) => void;
   setSearchResult: (payload: { rows: GridRow[]; totalRows: number; matchedRows: number }) => void;
   clearSearchResult: () => void;
@@ -162,6 +163,13 @@ export const useDataStore = create<DataState>((set) => ({
     set(() => ({
       status: 'error',
       message
+    })),
+  setRows: (rows) =>
+    set((state) => ({
+      rows,
+      totalRows: rows.length,
+      filteredRows: state.filteredRows,
+      searchRows: state.searchRows
     })),
   setFilterResult: ({ rows, totalRows, matchedRows }) =>
     set((state) => ({

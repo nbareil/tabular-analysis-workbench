@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { searchRows } from './searchEngine';
-import type { ColumnType } from './types';
+import type { ColumnType, FilterNode } from './types';
 import type { MaterializedRow } from './utils/materializeRowBatch';
 
 describe('searchEngine', () => {
@@ -35,5 +35,22 @@ describe('searchEngine', () => {
 
     expect(result.matchedRows).toBe(1);
     expect(result.rows.map((row) => row.__rowId)).toEqual([3]);
+  });
+
+  it('applies filter expression before searching', () => {
+    const filter: FilterNode = {
+      column: 'severity',
+      operator: 'eq',
+      value: 'High'
+    };
+
+    const result = searchRows(rows, columnTypes, {
+      query: 'error',
+      columns: ['message'],
+      filter
+    });
+
+    expect(result.matchedRows).toBe(1);
+    expect(result.rows.map((row) => row.__rowId)).toEqual([1]);
   });
 });

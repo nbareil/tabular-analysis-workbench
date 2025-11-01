@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 
-import { useDataStore } from '@state/dataStore';
+import { useDataStore, type GridRow } from '@state/dataStore';
 import { useSessionStore, type FilterState } from '@state/sessionStore';
 import { getDataWorker, type ApplyFilterRequest } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
@@ -21,31 +21,42 @@ export const useFilterSync = (): UseFilterSyncResult => {
     async (nextFilters: FilterState[]) => {
       setFilters(nextFilters);
 
-      if (nextFilters.length === 0) {
-        clearFilterResult();
-        clearSearchResult();
-        return;
-      }
-
-      const expression = buildFilterExpression(nextFilters);
-
-      if (!expression) {
-        clearFilterResult();
-        clearSearchResult();
-        return;
-      }
-
-      const request: ApplyFilterRequest = {
-        expression,
-        offset: 0,
-        limit: 500
-      };
-
       try {
         const worker = getDataWorker();
+
+        if (nextFilters.length === 0) {
+          await worker.applyFilter({
+            expression: null,
+            offset: 0,
+            limit: 500
+          });
+          clearFilterResult();
+          clearSearchResult();
+          return;
+        }
+
+        const expression = buildFilterExpression(nextFilters);
+
+        if (!expression) {
+          await worker.applyFilter({
+            expression: null,
+            offset: 0,
+            limit: 500
+          });
+          clearFilterResult();
+          clearSearchResult();
+          return;
+        }
+
+        const request: ApplyFilterRequest = {
+          expression,
+          offset: 0,
+          limit: 500
+        };
+
         const response = await worker.applyFilter(request);
         setFilterResult({
-          rows: response.rows,
+          rows: response.rows as GridRow[],
           totalRows: response.totalRows,
           matchedRows: response.matchedRows
         });

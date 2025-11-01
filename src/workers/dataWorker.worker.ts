@@ -52,6 +52,7 @@ export interface ApplySortRequest {
 export interface ApplySortResult {
   rows: MaterializedRow[];
   totalRows: number;
+  matchedRows: number;
   sorts: SortDefinition[];
 }
 
@@ -83,6 +84,7 @@ const state: {
   options: Required<WorkerInitOptions>;
   dataset: {
     rows: MaterializedRow[];
+    sortedRows: MaterializedRow[] | null;
     columnTypes: Record<string, ColumnType>;
     filteredRows: MaterializedRow[] | null;
     filterExpression: FilterNode | null;
@@ -95,6 +97,7 @@ const state: {
   },
   dataset: {
     rows: [],
+    sortedRows: null,
     columnTypes: {},
     filteredRows: null,
     filterExpression: null,
@@ -118,6 +121,7 @@ const api: DataWorkerApi = {
     }
 
     state.dataset.rows = [];
+    state.dataset.sortedRows = null;
     state.dataset.columnTypes = {};
     state.dataset.filteredRows = null;
     state.dataset.filterExpression = null;
@@ -243,7 +247,7 @@ const api: DataWorkerApi = {
   },
   async applySorts({ sorts, offset = 0, limit }): Promise<ApplySortResult> {
     if (!state.dataset.rows.length) {
-      return { rows: [], totalRows: 0, sorts: [] };
+      return { rows: [], totalRows: 0, matchedRows: 0, sorts: [] };
     }
 
     const validSorts = sorts.filter((sort) => state.dataset.columnTypes[sort.column] != null);
@@ -251,15 +255,20 @@ const api: DataWorkerApi = {
 
     applyTransforms();
 
-    const workingRows = state.dataset.filteredRows ?? state.dataset.rows;
+    const sortedRows = state.dataset.sortedRows ?? state.dataset.rows;
     const totalRows = state.dataset.rows.length;
+    const matchedRows =
+      state.dataset.filterExpression && state.dataset.filteredRows
+        ? state.dataset.filteredRows.length
+        : sortedRows.length;
     const start = Math.max(0, offset);
-    const end = typeof limit === 'number' ? start + Math.max(0, limit) : workingRows.length;
-    const slice = workingRows.slice(start, end);
+    const end = typeof limit === 'number' ? start + Math.max(0, limit) : sortedRows.length;
+    const slice = sortedRows.slice(start, end);
 
     return {
       rows: slice,
       totalRows,
+      matchedRows,
       sorts: validSorts
     };
   },
@@ -277,7 +286,8 @@ const api: DataWorkerApi = {
 
     applyTransforms();
 
-    const workingRows = state.dataset.filteredRows ?? state.dataset.rows;
+    const workingRows =
+      state.dataset.filteredRows ?? state.dataset.sortedRows ?? state.dataset.rows;
     const totalRows = state.dataset.rows.length;
     const matchedRows = workingRows.length;
     const start = Math.max(0, offset);
@@ -300,21 +310,23 @@ const api: DataWorkerApi = {
       };
     }
 
-    return searchRows(state.dataset.rows, state.dataset.columnTypes, request);
+    const workingRows = state.dataset.sortedRows ?? state.dataset.rows;
+    return searchRows(workingRows, state.dataset.columnTypes, request);
   }
 };
 
 const applyTransforms = (): void => {
   const { columnTypes, filterExpression, sorts } = state.dataset;
 
-  let workingRows = state.dataset.rows;
+  const baseRows = state.dataset.rows;
+  let sortedRows: MaterializedRow[] | null = null;
 
   if (sorts.length > 0) {
-    workingRows = sortMaterializedRows(workingRows, columnTypes, sorts).rows;
-    state.dataset.rows = workingRows;
-  } else {
-    state.dataset.rows = workingRows;
+    sortedRows = sortMaterializedRows(baseRows, columnTypes, sorts).rows;
   }
+
+  const workingRows = sortedRows ?? baseRows;
+  state.dataset.sortedRows = sortedRows;
 
   if (filterExpression) {
     const { matches } = evaluateFilterOnRows(workingRows, columnTypes, filterExpression);
