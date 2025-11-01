@@ -1,0 +1,310 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
+
+import { AgGridReact } from 'ag-grid-react';
+import type { CellContextMenuEvent } from 'ag-grid-community';
+
+import { useAppStore } from '@state/appStore';
+import { useDataStore, type GridRow, type LoaderStatus } from '@state/dataStore';
+import type { FilterState } from '@state/sessionStore';
+import { useFilterSync } from '@/hooks/useFilterSync';
+
+import 'ag-grid-community/styles/ag-grid.css';
+import 'ag-grid-community/styles/ag-theme-quartz.css';
+
+export interface FilterMenuMetadata {
+  eqIndex: number;
+  eqMatchesValue: boolean;
+  neqExists: boolean;
+}
+
+export const evaluateFilterMenuMetadata = (
+  filters: FilterState[],
+  columnId: string,
+  valueAsString: string
+): FilterMenuMetadata => {
+  const eqIndex = filters.findIndex(
+    (filter) => filter.column === columnId && filter.operator === 'eq'
+  );
+
+  const eqMatchesValue =
+    eqIndex >= 0 &&
+    String(filters[eqIndex]!.value ?? '') === valueAsString &&
+    !filters[eqIndex]!.fuzzy;
+
+  const neqExists = filters.some(
+    (filter) =>
+      filter.column === columnId &&
+      filter.operator === 'neq' &&
+      String(filter.value ?? '') === valueAsString
+  );
+
+  return {
+    eqIndex,
+    eqMatchesValue,
+    neqExists
+  };
+};
+
+interface FilterContextMenuState {
+  x: number;
+  y: number;
+  columnId: string;
+  displayValue: string;
+}
+
+interface DataGridProps {
+  status: LoaderStatus;
+}
+
+const DataGrid = ({ status }: DataGridProps): JSX.Element => {
+  const columns = useDataStore((state) => state.columns);
+  const rows = useDataStore((state) => state.searchRows ?? state.filteredRows ?? state.rows);
+  const theme = useAppStore((state) => state.theme);
+  const { filters, applyFilters } = useFilterSync();
+  const [contextMenu, setContextMenu] = useState<FilterContextMenuState | null>(null);
+
+  const columnDefs = useMemo(
+    () =>
+      columns.map((column) => ({
+        field: column.key,
+        headerName: column.headerName,
+        cellDataType: column.type,
+        sortable: true,
+        filter: true,
+        tooltipField: column.key,
+        headerTooltip:
+          column.confidence > 0
+            ? `${column.type} • ${column.confidence}% confidence`
+            : column.type
+      })),
+    [columns]
+  );
+
+  const defaultColDef = useMemo(
+    () => ({
+      flex: 1,
+      minWidth: 140,
+      resizable: true
+    }),
+    []
+  );
+
+  const themeClass = theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz';
+  const showPlaceholder = status !== 'loading' && rows.length === 0;
+  const menuMetadata = useMemo(() => {
+    if (!contextMenu) {
+      return null;
+    }
+
+    return evaluateFilterMenuMetadata(filters, contextMenu.columnId, contextMenu.displayValue);
+  }, [contextMenu, filters]);
+
+  const closeMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const handleGlobalMouseDown = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) {
+        closeMenu();
+        return;
+      }
+
+      if (event.target.closest('[data-grid-context-menu="true"]')) {
+        return;
+      }
+
+      closeMenu();
+    };
+
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeMenu();
+      }
+    };
+
+    const handleScroll = () => {
+      closeMenu();
+    };
+
+    window.addEventListener('mousedown', handleGlobalMouseDown);
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    window.addEventListener('scroll', handleScroll, true);
+
+    return () => {
+      window.removeEventListener('mousedown', handleGlobalMouseDown);
+      window.removeEventListener('keydown', handleGlobalKeyDown);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [closeMenu, contextMenu]);
+
+  const handleCellContextMenu = useCallback(
+    (params: CellContextMenuEvent<GridRow>) => {
+      const mouseEvent = params.event as MouseEvent;
+      mouseEvent.preventDefault();
+
+      const columnId = params.column?.getColId();
+      if (!columnId) {
+        return;
+      }
+
+      const rawValue = params.value;
+      if (rawValue == null) {
+        return;
+      }
+
+      const displayValue = typeof rawValue === 'string' ? rawValue : String(rawValue);
+
+      const menuWidth = 200;
+      const menuHeight = 96;
+      let x = mouseEvent.clientX;
+      let y = mouseEvent.clientY;
+
+      if (x + menuWidth > window.innerWidth) {
+        x = Math.max(0, window.innerWidth - menuWidth - 8);
+      }
+
+      if (y + menuHeight > window.innerHeight) {
+        y = Math.max(0, window.innerHeight - menuHeight - 8);
+      }
+
+      setContextMenu({
+        x,
+        y,
+        columnId,
+        displayValue
+      });
+    },
+    []
+  );
+
+  const handleFilterIn = useCallback(() => {
+    if (!contextMenu || !menuMetadata) {
+      return;
+    }
+
+    if (menuMetadata.eqMatchesValue) {
+      closeMenu();
+      return;
+    }
+
+    if (menuMetadata.eqIndex >= 0) {
+      const nextFilters = filters.slice();
+      nextFilters[menuMetadata.eqIndex] = {
+        ...nextFilters[menuMetadata.eqIndex]!,
+        operator: 'eq',
+        value: contextMenu.displayValue,
+        value2: undefined,
+        fuzzy: undefined
+      };
+      void applyFilters(nextFilters);
+    } else {
+      const predicate: FilterState = {
+        id: crypto.randomUUID(),
+        column: contextMenu.columnId,
+        operator: 'eq',
+        value: contextMenu.displayValue,
+        caseSensitive: false
+      };
+      void applyFilters([...filters, predicate]);
+    }
+
+    closeMenu();
+  }, [applyFilters, closeMenu, contextMenu, filters, menuMetadata]);
+
+  const handleFilterOut = useCallback(() => {
+    if (!contextMenu || !menuMetadata) {
+      return;
+    }
+
+    if (menuMetadata.neqExists) {
+      closeMenu();
+      return;
+    }
+
+    const predicate: FilterState = {
+      id: crypto.randomUUID(),
+      column: contextMenu.columnId,
+      operator: 'neq',
+      value: contextMenu.displayValue,
+      caseSensitive: false
+    };
+    void applyFilters([...filters, predicate]);
+    closeMenu();
+  }, [applyFilters, closeMenu, contextMenu, filters, menuMetadata]);
+
+  const renderContextMenu = () => {
+    if (!contextMenu || !menuMetadata) {
+      return null;
+    }
+
+    const menu = (
+      <div
+        data-grid-context-menu="true"
+        className="fixed z-50 min-w-[12rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
+        style={{ top: contextMenu.y, left: contextMenu.x }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Filters</div>
+        <button
+          type="button"
+          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 ${
+            menuMetadata.eqMatchesValue ? 'cursor-not-allowed opacity-50' : ''
+          }`}
+          onClick={handleFilterIn}
+          disabled={menuMetadata.eqMatchesValue}
+        >
+          Filter in
+          <span className="truncate text-slate-400">{contextMenu.displayValue}</span>
+        </button>
+        <button
+          type="button"
+          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 ${
+            menuMetadata.neqExists ? 'cursor-not-allowed opacity-50' : ''
+          }`}
+          onClick={handleFilterOut}
+          disabled={menuMetadata.neqExists}
+        >
+          Filter out
+          <span className="truncate text-slate-400">{contextMenu.displayValue}</span>
+        </button>
+      </div>
+    );
+
+    return createPortal(menu, document.body);
+  };
+
+  return (
+    <div
+      className={`${themeClass} h-full w-full`}
+      style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
+    >
+      {showPlaceholder ? (
+        <div className="flex h-full items-center justify-center text-sm text-slate-500">
+          Select a CSV or TSV file to begin.
+        </div>
+      ) : (
+        <AgGridReact<GridRow>
+          columnDefs={columnDefs}
+          defaultColDef={defaultColDef}
+          rowData={rows}
+          suppressRowClickSelection
+          suppressContextMenu
+          rowSelection="multiple"
+          animateRows
+          getRowId={(params) => (params.data ? String(params.data.__rowId) : '')}
+          tooltipShowDelay={0}
+          onCellContextMenu={handleCellContextMenu}
+        />
+      )}
+      {renderContextMenu()}
+    </div>
+  );
+};
+
+export default DataGrid;
