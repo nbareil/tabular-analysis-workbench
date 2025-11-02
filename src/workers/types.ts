@@ -112,6 +112,57 @@ export interface GroupingResult {
   totalRows: number;
 }
 
+export interface LabelDefinition {
+  id: string;
+  name: string;
+  color: string;
+  description?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TagRecord {
+  labelId: string | null;
+  note?: string;
+  color?: string;
+  updatedAt: number;
+}
+
+export interface TaggingSnapshot {
+  labels: LabelDefinition[];
+  tags: Record<number, TagRecord>;
+}
+
+export interface TagRowsRequest {
+  rowIds: number[];
+  labelId: string | null;
+  note?: string;
+}
+
+export interface TagRowsResponse {
+  updated: Record<number, TagRecord>;
+}
+
+export interface UpdateLabelRequest {
+  label: LabelDefinition;
+}
+
+export interface DeleteLabelRequest {
+  labelId: string;
+}
+
+export interface ExportTagsResponse {
+  labels: LabelDefinition[];
+  tags: Record<number, TagRecord>;
+  exportedAt: number;
+}
+
+export interface ImportTagsRequest {
+  labels: LabelDefinition[];
+  tags: Record<number, TagRecord>;
+  mergeStrategy?: 'replace' | 'merge';
+}
+
 export interface RowBatch {
   rowIds: Uint32Array;
   columns: Record<string, ColumnBatch>;

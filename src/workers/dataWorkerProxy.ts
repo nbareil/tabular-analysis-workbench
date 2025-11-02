@@ -11,7 +11,15 @@ import type {
   ApplyFilterRequest,
   ApplyFilterResult,
   GroupingRequest,
-  GroupingResult
+  GroupingResult,
+  TaggingSnapshot,
+  TagRowsRequest,
+  TagRowsResponse,
+  ExportTagsResponse,
+  UpdateLabelRequest,
+  DeleteLabelRequest,
+  ImportTagsRequest,
+  LabelDefinition
 } from './dataWorker.worker';
 
 let workerInstance: Remote<DataWorkerApi> | null = null;
@@ -40,5 +48,13 @@ export type {
   ApplyFilterRequest,
   ApplyFilterResult,
   GroupingRequest,
-  GroupingResult
+  GroupingResult,
+  TaggingSnapshot,
+  TagRowsRequest,
+  TagRowsResponse,
+  ExportTagsResponse,
+  UpdateLabelRequest,
+  DeleteLabelRequest,
+  ImportTagsRequest,
+  LabelDefinition
 };

@@ -9,6 +9,7 @@ import DataGrid from '@components/DataGrid';
 import FilterBuilder from '@components/filter/FilterBuilder';
 import PivotView from '@components/PivotView';
 import ColumnsPanel from '@components/ColumnsPanel';
+import LabelsPanel from '@components/LabelsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import type { RowBatch } from '@workers/types';
@@ -55,6 +56,7 @@ const App = (): JSX.Element => {
   const [searchTerm, setSearchTerm] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const [labelsOpen, setLabelsOpen] = useState(false);
   const [showPivot, setShowPivot] = useState(false);
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(true);
 
@@ -338,6 +340,14 @@ const App = (): JSX.Element => {
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+            onClick={() => setLabelsOpen(true)}
+            disabled={!workerReady}
+          >
+            Labels
+          </button>
+          <button
+            type="button"
+            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setShowPivot((value) => !value)}
             disabled={!workerReady || loaderStatus === 'loading'}
           >
@@ -390,6 +400,7 @@ const App = (): JSX.Element => {
         </section>
       </main>
       <OptionsPanel open={optionsOpen} onClose={() => setOptionsOpen(false)} />
+      <LabelsPanel open={labelsOpen} onClose={() => setLabelsOpen(false)} />
       <ColumnsPanel open={columnsOpen} onClose={() => setColumnsOpen(false)} />
     </div>
   );
