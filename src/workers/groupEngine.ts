@@ -29,7 +29,8 @@ interface GroupAggregatorState extends AggregatorTemplate {
 }
 
 interface GroupAccumulator {
-  key: unknown;
+  keySignature: string;
+  keyValues: unknown[];
   rowCount: number;
   aggregators: GroupAggregatorState[];
 }
@@ -41,7 +42,7 @@ const DEFAULT_AGGREGATIONS: GroupAggregationDefinition[] = [
   }
 ];
 
-const buildAlias = (definition: GroupAggregationDefinition): string => {
+export const resolveAggregationAlias = (definition: GroupAggregationDefinition): string => {
   if (definition.alias) {
     return definition.alias;
   }
@@ -61,7 +62,7 @@ const createTemplate = (
   const columnType = definition.column ? columnTypes[definition.column] : undefined;
 
   return {
-    alias: buildAlias(definition),
+    alias: resolveAggregationAlias(definition),
     operator: definition.operator,
     column: definition.column,
     columnType,
@@ -79,6 +80,32 @@ const cloneTemplateState = (template: AggregatorTemplate): GroupAggregatorState 
   maxComparable: null,
   maxValue: null
 });
+
+const serialiseGroupFragment = (value: unknown): string => {
+  if (value == null) {
+    return 'null';
+  }
+
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) {
+      return 'number:nan';
+    }
+    return `number:${value}`;
+  }
+
+  if (typeof value === 'boolean') {
+    return `boolean:${value ? '1' : '0'}`;
+  }
+
+  if (typeof value === 'string') {
+    return `string:${value}`;
+  }
+
+  return `${typeof value}:${String(value)}`;
+};
+
+const buildGroupSignature = (keyValues: unknown[]): string =>
+  keyValues.map(serialiseGroupFragment).join('|');
 
 const compareLess = (left: ComparableValue, right: ComparableValue): boolean => {
   if (typeof left === 'number' && typeof right === 'number') {
@@ -240,10 +267,37 @@ const finaliseGroup = (group: GroupAccumulator): GroupingRow => {
   }
 
   return {
-    key: group.key,
+    key: group.keyValues.length === 1 ? group.keyValues[0] : group.keyValues.slice(),
     rowCount: group.rowCount,
     aggregates
   };
+};
+
+export const normaliseGroupColumns = (groupBy: string | string[]): string[] => {
+  const columns = Array.isArray(groupBy) ? groupBy.filter(Boolean) : [groupBy];
+  if (!columns.length) {
+    throw new Error('At least one column must be provided for grouping.');
+  }
+
+  return columns;
+};
+
+export const paginateGroupingRows = (
+  rows: GroupingRow[],
+  offset?: number,
+  limit?: number
+): GroupingRow[] => {
+  const start = Math.max(0, offset ?? 0);
+  if (limit == null) {
+    return rows.slice(start);
+  }
+
+  const safeLimit = Math.max(0, limit);
+  if (safeLimit === 0) {
+    return [];
+  }
+
+  return rows.slice(start, start + safeLimit);
 };
 
 export const groupMaterializedRows = (
@@ -251,29 +305,28 @@ export const groupMaterializedRows = (
   columnTypes: Record<string, ColumnType>,
   request: GroupingRequest
 ): GroupingResult => {
-  if (!request.groupBy) {
-    throw new Error('groupBy column must be provided for grouping requests.');
-  }
-
+  const groupColumns = normaliseGroupColumns(request.groupBy);
   const aggregations =
     request.aggregations && request.aggregations.length > 0
       ? request.aggregations
       : DEFAULT_AGGREGATIONS;
 
   const templates = aggregations.map((definition) => createTemplate(definition, columnTypes));
-  const groups = new Map<unknown, GroupAccumulator>();
+  const groups = new Map<string, GroupAccumulator>();
 
   for (const row of rows) {
-    const key = row[request.groupBy];
-    let accumulator = groups.get(key);
+    const keyValues = groupColumns.map((column) => row[column]);
+    const keySignature = buildGroupSignature(keyValues);
+    let accumulator = groups.get(keySignature);
 
     if (!accumulator) {
       accumulator = {
-        key,
+        keySignature,
+        keyValues,
         rowCount: 0,
         aggregators: templates.map(cloneTemplateState)
       };
-      groups.set(key, accumulator);
+      groups.set(keySignature, accumulator);
     }
 
     accumulator.rowCount += 1;
@@ -287,15 +340,9 @@ export const groupMaterializedRows = (
   const totalGroups = groups.size;
   const groupRows = Array.from(groups.values(), finaliseGroup);
 
-  const offset = Math.max(0, request.offset ?? 0);
-  const limit = request.limit != null ? Math.max(0, request.limit) : null;
-
-  const sliced =
-    limit == null ? groupRows.slice(offset) : groupRows.slice(offset, offset + limit);
-
   return {
-    groupBy: request.groupBy,
-    rows: sliced,
+    groupBy: groupColumns,
+    rows: paginateGroupingRows(groupRows, request.offset, request.limit),
     totalGroups,
     totalRows
   };

@@ -8,7 +8,7 @@ import {
   findNearestCheckpoint
 } from './rowIndexStore';
 import { sortMaterializedRows } from './sortEngine';
-import { groupMaterializedRows } from './groupEngine';
+import { groupMaterializedRows, normaliseGroupColumns } from './groupEngine';
 import type {
   ColumnType,
   Delimiter,
@@ -20,6 +20,9 @@ import type {
 } from './types';
 import { evaluateFilterOnRows } from './filterEngine';
 import { searchRows, type SearchRequest, type SearchResult } from './searchEngine';
+import { shouldPreferDuckDb, tryGroupWithDuckDb } from './duckDbPlan';
+
+export type { GroupingRequest, GroupingResult } from './types';
 
 export interface WorkerInitOptions {
   enableDuckDb?: boolean;
@@ -312,23 +315,40 @@ const api: DataWorkerApi = {
     };
   },
   async groupBy(request: GroupingRequest): Promise<GroupingResult> {
-    if (!request.groupBy) {
-      throw new Error('groupBy column must be provided.');
-    }
-
     const workingRows =
       state.dataset.filteredRows ?? state.dataset.sortedRows ?? state.dataset.rows;
 
     if (!workingRows.length) {
       return {
-        groupBy: request.groupBy,
+        groupBy: normaliseGroupColumns(request.groupBy),
         rows: [],
         totalGroups: 0,
         totalRows: 0
       };
     }
 
-    return groupMaterializedRows(workingRows, state.dataset.columnTypes, request);
+    const groupColumns = normaliseGroupColumns(request.groupBy);
+    const normalisedRequest: GroupingRequest = {
+      ...request,
+      groupBy: groupColumns
+    };
+
+    if (
+      state.options.enableDuckDb &&
+      shouldPreferDuckDb(normalisedRequest, state.dataset.columnTypes, workingRows.length)
+    ) {
+      const duckResult = await tryGroupWithDuckDb(
+        workingRows,
+        state.dataset.columnTypes,
+        normalisedRequest
+      );
+
+      if (duckResult) {
+        return duckResult;
+      }
+    }
+
+    return groupMaterializedRows(workingRows, state.dataset.columnTypes, normalisedRequest);
   },
   async globalSearch(request: SearchRequest): Promise<SearchResult> {
     if (!state.dataset.rows.length) {

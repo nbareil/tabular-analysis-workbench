@@ -93,20 +93,20 @@ export interface GroupAggregationDefinition {
 }
 
 export interface GroupingRequest {
-  groupBy: string;
+  groupBy: string | string[];
   aggregations: GroupAggregationDefinition[];
   offset?: number;
   limit?: number;
 }
 
 export interface GroupingRow {
-  key: unknown;
+  key: unknown | unknown[];
   rowCount: number;
   aggregates: Record<string, unknown>;
 }
 
 export interface GroupingResult {
-  groupBy: string;
+  groupBy: string[];
   rows: GroupingRow[];
   totalGroups: number;
   totalRows: number;

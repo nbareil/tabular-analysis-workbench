@@ -29,6 +29,7 @@ describe('groupEngine', () => {
       ]
     });
 
+    expect(result.groupBy).toEqual(['category']);
     expect(result.totalRows).toBe(3);
     expect(result.totalGroups).toBe(2);
     expect(result.rows).toHaveLength(2);
@@ -62,6 +63,7 @@ describe('groupEngine', () => {
       limit: 1
     });
 
+    expect(result.groupBy).toEqual(['category']);
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.key).toBe('B');
     expect(result.rows[0]!.aggregates.totalCount).toBe(1);
@@ -84,6 +86,7 @@ describe('groupEngine', () => {
       aggregations: [{ operator: 'min', column: 'tag', alias: 'minTag' }]
     });
 
+    expect(result.groupBy).toEqual(['category']);
     expect(result.rows[0]!.aggregates.minTag).toBe('alpha');
     expect(result.rows[1]!.aggregates.minTag).toBe('gamma');
   });
@@ -94,7 +97,39 @@ describe('groupEngine', () => {
       aggregations: [{ operator: 'sum', column: 'missing', alias: 'missingSum' }]
     });
 
+    expect(result.groupBy).toEqual(['category']);
     expect(result.rows[0]!.aggregates.missingSum).toBeNull();
     expect(result.rows[1]!.aggregates.missingSum).toBeNull();
+  });
+
+  it('supports multi-column grouping keys', () => {
+    const rows: MaterializedRow[] = [
+      { __rowId: 1, category: 'A', region: 'EMEA', amount: 1 },
+      { __rowId: 2, category: 'A', region: 'EMEA', amount: 2 },
+      { __rowId: 3, category: 'A', region: 'NA', amount: 3 },
+      { __rowId: 4, category: 'B', region: 'NA', amount: 4 }
+    ];
+
+    const columnTypes: Record<string, ColumnType> = {
+      category: 'string',
+      region: 'string',
+      amount: 'number'
+    };
+
+    const result = groupMaterializedRows(rows, columnTypes, {
+      groupBy: ['category', 'region'],
+      aggregations: [
+        { operator: 'count', alias: 'totalCount' },
+        { operator: 'sum', column: 'amount', alias: 'sumAmount' }
+      ]
+    });
+
+    expect(result.groupBy).toEqual(['category', 'region']);
+    expect(result.totalGroups).toBe(3);
+
+    const keys = result.rows.map((entry) => entry.key);
+    expect(keys).toContainEqual(['A', 'EMEA']);
+    expect(keys).toContainEqual(['A', 'NA']);
+    expect(keys).toContainEqual(['B', 'NA']);
   });
 });
