@@ -1,4 +1,4 @@
-# Data Analysis Workbench
+# Tabular Analysis Workbench
 
 A modern, browser-native workbench for exploring and analyzing large structured datasets  
 (CSV, TSV, and gzipped variants) completely offline.
