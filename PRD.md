@@ -97,6 +97,7 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 - Column sidebar (visibility, type, aggregates).
 - Keyboard shortcuts: open, filter, export, theme toggle.
 
+- Filter sidebar can be collapsed to maximize grid width (toggle in header).
 ### 4.6 Session Management
 - Persist to OPFS:
   - File handle

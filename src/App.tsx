@@ -54,6 +54,7 @@ const App = (): JSX.Element => {
   const [searchTerm, setSearchTerm] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [showPivot, setShowPivot] = useState(false);
+  const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -342,8 +343,24 @@ const App = (): JSX.Element => {
         </div>
       </header>
       <main className="flex flex-1 overflow-hidden">
-        <aside className="hidden w-72 border-r border-slate-800 p-4 lg:block">
-          <FilterBuilder columns={columns} />
+        <aside
+          className={`hidden border-r border-slate-800 transition-all duration-200 lg:block ${
+            isSidebarCollapsed ? 'w-12' : 'w-72'
+          }`}
+        >
+          <div className="flex h-full flex-col">
+            <button
+              type="button"
+              className="flex items-center justify-center border-b border-slate-800 px-2 py-2 text-xs text-slate-300 hover:bg-slate-900"
+              onClick={() => setSidebarCollapsed((value) => !value)}
+              aria-label={isSidebarCollapsed ? 'Expand filters panel' : 'Collapse filters panel'}
+            >
+              {isSidebarCollapsed ? '»' : '«'}
+            </button>
+            <div className={`flex-1 overflow-auto p-4 ${isSidebarCollapsed ? 'sr-only' : ''}`}>
+              {!isSidebarCollapsed && <FilterBuilder columns={columns} />}
+            </div>
+          </div>
         </aside>
         <section className="flex flex-1 flex-col">
           <div className="flex-1 overflow-auto p-4">
