@@ -102,43 +102,69 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       return;
     }
 
-    const expectedOrder = columns.map((column) => column.key);
-    const ordersMatch =
-      columnLayout.order.length === expectedOrder.length &&
-      columnLayout.order.every((key, index) => key === expectedOrder[index]);
+    const existingOrder = columnLayout.order.length
+      ? [...columnLayout.order]
+      : [];
+    const seen = new Set(existingOrder);
+    let changed = false;
 
-    const nextVisibility: Record<string, boolean> = { ...columnLayout.visibility };
-    let visibilityChanged = false;
     for (const column of columns) {
-      if (nextVisibility[column.key] == null) {
-        nextVisibility[column.key] = true;
-        visibilityChanged = true;
+      if (!seen.has(column.key)) {
+        existingOrder.push(column.key);
+        seen.add(column.key);
+        changed = true;
       }
     }
 
-    if (!ordersMatch || visibilityChanged) {
+    const nextVisibility: Record<string, boolean> = { ...columnLayout.visibility };
+    for (const column of columns) {
+      if (!(column.key in nextVisibility)) {
+        nextVisibility[column.key] = true;
+        changed = true;
+      }
+    }
+
+    if (changed) {
       setColumnLayout({
-        order: expectedOrder,
+        order: existingOrder,
         visibility: nextVisibility
       });
     }
   }, [columnLayout.order, columnLayout.visibility, columns, setColumnLayout]);
 
+  const orderedColumns = useMemo(() => {
+    const baseOrder = columnLayout.order.length
+      ? columnLayout.order
+      : columns.map((column) => column.key);
+    const additions = columns
+      .map((column) => column.key)
+      .filter((key) => !baseOrder.includes(key));
+    const finalOrder = [...baseOrder, ...additions];
+
+    return finalOrder
+      .map((key) => columns.find((column) => column.key === key))
+      .filter((column): column is (typeof columns)[number] => Boolean(column));
+  }, [columnLayout.order, columns]);
+
   useEffect(() => {
-    const api = gridRef.current?.api;
-    if (!api) {
+    const columnApi = gridRef.current?.columnApi;
+    if (!columnApi) {
       return;
     }
 
-    for (const column of columns) {
-      const visible = columnLayout.visibility[column.key] !== false;
-      api.setColumnVisible(column.key, visible);
-    }
-  }, [columns, columnLayout.visibility]);
+    columnApi.applyColumnState({
+      state: orderedColumns.map((column, index) => ({
+        colId: column.key,
+        hide: columnLayout.visibility[column.key] === false,
+        order: index
+      })),
+      applyOrder: true
+    });
+  }, [orderedColumns, columnLayout.visibility]);
 
   const columnDefs = useMemo(
     () =>
-      columns.map((column) => ({
+      orderedColumns.map((column) => ({
         field: column.key,
         headerName: column.headerName,
         cellDataType: column.type,
@@ -162,7 +188,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           };
         })()
       })),
-    [columnLayout.visibility, columns, sorts]
+    [columnLayout.visibility, orderedColumns, sorts]
   );
 
   const defaultColDef = useMemo(
