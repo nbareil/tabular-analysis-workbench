@@ -56,7 +56,7 @@ const App = (): JSX.Element => {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [showPivot, setShowPivot] = useState(false);
-  const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setSidebarCollapsed] = useState(true);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
