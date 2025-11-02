@@ -1,4 +1,4 @@
-# Web Timeline Explorer (CSV/TSV) — Product Requirements Document (PRD)
+# Tabular Analysis Workbench (CSV/TSV) — Product Requirements Document (PRD)
 
 **Version:** 1.2  
 **Author:** [Your Name]  

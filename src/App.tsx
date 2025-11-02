@@ -282,7 +282,7 @@ const App = (): JSX.Element => {
     <div className="flex h-full flex-col bg-canvas text-slate-100">
       <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
         <div className="flex items-center gap-3">
-          <h1 className="text-lg font-semibold">Web Timeline Explorer</h1>
+          <h1 className="text-lg font-semibold">Tabular Analysis Workbench</h1>
           <span className="text-xs uppercase tracking-wide text-slate-400">
             {workerReady ? 'Data worker ready' : 'Initializing worker…'}
           </span>

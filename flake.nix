@@ -1,5 +1,5 @@
 {
-  description = "Web Timeline Explorer development environment";
+  description = "Tabular Analysis Workbench development environment";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -42,7 +42,7 @@
             export PNPM_HOME=''${PNPM_HOME:-$HOME/.pnpm}
             export PATH=$PNPM_HOME:$PATH
             export NODE_ENV=development
-            echo "Loaded Web Timeline Explorer dev shell"
+            echo "Loaded Tabular Analysis Workbench dev shell"
           '';
         };
       });

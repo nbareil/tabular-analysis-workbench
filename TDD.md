@@ -1,4 +1,4 @@
-# Technical Design Document -- Web Timeline Explorer
+# Technical Design Document -- Tabular Analysis Workbench
 
 ## 1. Purpose & Scope
 - Provide a detailed implementation plan for the browser-native timeline explorer described in PRD v1.2.
