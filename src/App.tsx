@@ -344,7 +344,7 @@ const App = (): JSX.Element => {
       </header>
       <main className="flex flex-1 overflow-hidden">
         <aside
-          className={`hidden border-r border-slate-800 transition-all duration-200 lg:block ${
+          className={`hidden border-r border-slate-800 lg:block ${
             isSidebarCollapsed ? 'w-6' : 'w-72'
           }`}
         >
