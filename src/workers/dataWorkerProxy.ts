@@ -9,7 +9,9 @@ import type {
   ApplySortRequest,
   ApplySortResult,
   ApplyFilterRequest,
-  ApplyFilterResult
+  ApplyFilterResult,
+  GroupingRequest,
+  GroupingResult
 } from './dataWorker.worker';
 
 let workerInstance: Remote<DataWorkerApi> | null = null;
@@ -36,5 +38,7 @@ export type {
   ApplySortRequest,
   ApplySortResult,
   ApplyFilterRequest,
-  ApplyFilterResult
+  ApplyFilterResult,
+  GroupingRequest,
+  GroupingResult
 };

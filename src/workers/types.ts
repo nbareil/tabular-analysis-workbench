@@ -84,6 +84,34 @@ export interface SortDefinition {
   direction: 'asc' | 'desc';
 }
 
+export type AggregateOperator = 'count' | 'sum' | 'min' | 'max' | 'avg';
+
+export interface GroupAggregationDefinition {
+  operator: AggregateOperator;
+  column?: string;
+  alias?: string;
+}
+
+export interface GroupingRequest {
+  groupBy: string;
+  aggregations: GroupAggregationDefinition[];
+  offset?: number;
+  limit?: number;
+}
+
+export interface GroupingRow {
+  key: unknown;
+  rowCount: number;
+  aggregates: Record<string, unknown>;
+}
+
+export interface GroupingResult {
+  groupBy: string;
+  rows: GroupingRow[];
+  totalGroups: number;
+  totalRows: number;
+}
+
 export interface RowBatch {
   rowIds: Uint32Array;
   columns: Record<string, ColumnBatch>;

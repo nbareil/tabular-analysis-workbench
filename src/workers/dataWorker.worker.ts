@@ -8,7 +8,16 @@ import {
   findNearestCheckpoint
 } from './rowIndexStore';
 import { sortMaterializedRows } from './sortEngine';
-import type { ColumnType, Delimiter, FilterNode, RowBatch, SortDefinition } from './types';
+import { groupMaterializedRows } from './groupEngine';
+import type {
+  ColumnType,
+  Delimiter,
+  FilterNode,
+  GroupingRequest,
+  GroupingResult,
+  RowBatch,
+  SortDefinition
+} from './types';
 import { evaluateFilterOnRows } from './filterEngine';
 import { searchRows, type SearchRequest, type SearchResult } from './searchEngine';
 
@@ -77,6 +86,7 @@ export interface DataWorkerApi {
   seekRows: (request: SeekRowsRequest) => Promise<SeekRowsResult | null>;
   applySorts: (request: ApplySortRequest) => Promise<ApplySortResult>;
   applyFilter: (request: ApplyFilterRequest) => Promise<ApplyFilterResult>;
+  groupBy: (request: GroupingRequest) => Promise<GroupingResult>;
   globalSearch: (request: SearchRequest) => Promise<SearchResult>;
 }
 
@@ -300,6 +310,25 @@ const api: DataWorkerApi = {
       matchedRows,
       expression
     };
+  },
+  async groupBy(request: GroupingRequest): Promise<GroupingResult> {
+    if (!request.groupBy) {
+      throw new Error('groupBy column must be provided.');
+    }
+
+    const workingRows =
+      state.dataset.filteredRows ?? state.dataset.sortedRows ?? state.dataset.rows;
+
+    if (!workingRows.length) {
+      return {
+        groupBy: request.groupBy,
+        rows: [],
+        totalGroups: 0,
+        totalRows: 0
+      };
+    }
+
+    return groupMaterializedRows(workingRows, state.dataset.columnTypes, request);
   },
   async globalSearch(request: SearchRequest): Promise<SearchResult> {
     if (!state.dataset.rows.length) {
