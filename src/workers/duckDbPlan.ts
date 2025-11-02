@@ -1,3 +1,12 @@
+import * as duckdb from '@duckdb/duckdb-wasm';
+import duckdbMvpWasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
+import duckdbEhWasm from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
+import duckdbCoiWasm from '@duckdb/duckdb-wasm/dist/duckdb-coi.wasm?url';
+import duckdbMvpWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
+import duckdbEhWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
+import duckdbCoiWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-coi.worker.js?url';
+import duckdbPthreadWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-coi.pthread.worker.js?url';
+
 import type { ColumnType, GroupingRequest, GroupingResult, GroupingRow } from './types';
 import type { MaterializedRow } from './utils/materializeRowBatch';
 import {
@@ -6,7 +15,35 @@ import {
   resolveAggregationAlias
 } from './groupEngine';
 
+const MANUAL_BUNDLES: duckdb.DuckDBBundles = {
+  mvp: {
+    mainModule: duckdbMvpWasm,
+    mainWorker: duckdbMvpWorker
+  },
+  eh: {
+    mainModule: duckdbEhWasm,
+    mainWorker: duckdbEhWorker
+  },
+  coi: {
+    mainModule: duckdbCoiWasm,
+    mainWorker: duckdbCoiWorker,
+    pthreadWorker: duckdbPthreadWorker
+  }
+};
+
 let duckDbAvailability: 'unknown' | 'available' | 'unavailable' = 'unknown';
+
+const toModuleUrl = (path?: string | null): string | undefined => {
+  if (!path) {
+    return undefined;
+  }
+
+  try {
+    return new URL(path, import.meta.url).toString();
+  } catch {
+    return path;
+  }
+};
 
 export const shouldPreferDuckDb = (
   request: GroupingRequest,
@@ -46,42 +83,23 @@ export const tryGroupWithDuckDb = async (
   }
 
   try {
-    const module = await import('@duckdb/duckdb-wasm');
-    if (!module) {
+    const bundle = await duckdb.selectBundle(MANUAL_BUNDLES);
+    if (!bundle || !bundle.mainWorker || !bundle.mainModule) {
       duckDbAvailability = 'unavailable';
       return null;
     }
 
-    const bundles =
-      typeof module.selectBundle === 'function' && typeof module.getJsDelivrBundles === 'function'
-        ? module.getJsDelivrBundles()
-        : null;
-
-    if (!bundles) {
+    const workerUrl = toModuleUrl(bundle.mainWorker);
+    if (!workerUrl) {
       duckDbAvailability = 'unavailable';
       return null;
     }
-
-    const bundle = await module.selectBundle(bundles);
-    if (!bundle) {
-      duckDbAvailability = 'unavailable';
-      return null;
-    }
-
-    if (!bundle.mainWorker || !bundle.mainModule) {
-      duckDbAvailability = 'unavailable';
-      return null;
-    }
-
-    const workerSource = bundle.mainWorker;
-    const workerUrl =
-      workerSource.startsWith('http') || workerSource.startsWith('blob:')
-        ? workerSource
-        : new URL(workerSource, import.meta.url).toString();
 
     const worker = new Worker(workerUrl, { type: 'module' });
-    const db = new module.AsyncDuckDB(new module.ConsoleLogger(), worker);
-    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
+    const mainModuleUrl = toModuleUrl(bundle.mainModule) ?? bundle.mainModule;
+    const pthreadWorkerUrl = toModuleUrl(bundle.pthreadWorker);
+    await db.instantiate(mainModuleUrl, pthreadWorkerUrl);
     duckDbAvailability = 'available';
 
     const connection = await db.connect();

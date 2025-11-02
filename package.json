@@ -11,6 +11,7 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@duckdb/duckdb-wasm": "^1.28.0",
     "ag-grid-community": "^31.0.2",
     "ag-grid-react": "^31.3.4",
     "comlink": "^4.4.1",
