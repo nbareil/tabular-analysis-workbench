@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { AgGridReact } from 'ag-grid-react';
-import type { CellContextMenuEvent, ColumnState, SortChangedEvent } from 'ag-grid-community';
+import type {
+  CellContextMenuEvent,
+  ColumnState,
+  SortChangedEvent
+} from 'ag-grid-community';
 
 import { useAppStore } from '@state/appStore';
 import { useDataStore, type GridRow, type LoaderStatus } from '@state/dataStore';
 import type { FilterState, SessionSnapshot } from '@state/sessionStore';
+import { useSessionStore } from '@state/sessionStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
 
@@ -88,6 +93,48 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   const { filters, applyFilters } = useFilterSync();
   const { sorts, applySorts } = useSortSync();
   const [contextMenu, setContextMenu] = useState<FilterContextMenuState | null>(null);
+  const columnLayout = useSessionStore((state) => state.columnLayout);
+  const setColumnLayout = useSessionStore((state) => state.setColumnLayout);
+  const gridRef = useRef<AgGridReact<GridRow>>(null);
+
+  useEffect(() => {
+    if (!columns.length) {
+      return;
+    }
+
+    const expectedOrder = columns.map((column) => column.key);
+    const ordersMatch =
+      columnLayout.order.length === expectedOrder.length &&
+      columnLayout.order.every((key, index) => key === expectedOrder[index]);
+
+    const nextVisibility: Record<string, boolean> = { ...columnLayout.visibility };
+    let visibilityChanged = false;
+    for (const column of columns) {
+      if (nextVisibility[column.key] == null) {
+        nextVisibility[column.key] = true;
+        visibilityChanged = true;
+      }
+    }
+
+    if (!ordersMatch || visibilityChanged) {
+      setColumnLayout({
+        order: expectedOrder,
+        visibility: nextVisibility
+      });
+    }
+  }, [columnLayout.order, columnLayout.visibility, columns, setColumnLayout]);
+
+  useEffect(() => {
+    const api = gridRef.current?.api;
+    if (!api) {
+      return;
+    }
+
+    for (const column of columns) {
+      const visible = columnLayout.visibility[column.key] !== false;
+      api.setColumnVisible(column.key, visible);
+    }
+  }, [columns, columnLayout.visibility]);
 
   const columnDefs = useMemo(
     () =>
@@ -102,6 +149,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           column.confidence > 0
             ? `${column.type} • ${column.confidence}% confidence`
             : column.type,
+        hide: columnLayout.visibility[column.key] === false,
         ...((): { sort?: 'asc' | 'desc'; sortIndex?: number } => {
           const sortPosition = sorts.findIndex((sort) => sort.column === column.key);
           if (sortPosition < 0) {
@@ -114,7 +162,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           };
         })()
       })),
-    [columns, sorts]
+    [columnLayout.visibility, columns, sorts]
   );
 
   const defaultColDef = useMemo(
@@ -286,10 +334,32 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     [applySorts, sorts]
   );
 
+  const handleToggleColumn = useCallback(
+    (columnId: string) => {
+      const visible = columnLayout.visibility[columnId] !== false;
+      const nextVisibility = {
+        ...columnLayout.visibility,
+        [columnId]: !visible
+      };
+      setColumnLayout({
+        order: columnLayout.order,
+        visibility: nextVisibility
+      });
+
+      const api = gridRef.current?.api;
+      if (api) {
+        api.setColumnVisible(columnId, !visible);
+      }
+    },
+    [columnLayout, setColumnLayout]
+  );
+
   const renderContextMenu = () => {
     if (!contextMenu || !menuMetadata) {
       return null;
     }
+
+    const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
 
     const menu = (
       <div
@@ -321,6 +391,19 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           Filter out
           <span className="truncate text-slate-400">{contextMenu.displayValue}</span>
         </button>
+        <div className="mt-1 border-t border-slate-800 pt-1">
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Columns</div>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800"
+            onClick={() => {
+              handleToggleColumn(contextMenu.columnId);
+              closeMenu();
+            }}
+          >
+            {columnVisible ? 'Hide column' : 'Show column'}
+          </button>
+        </div>
       </div>
     );
 
@@ -338,6 +421,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         </div>
       ) : (
         <AgGridReact<GridRow>
+          ref={gridRef}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
           rowData={rows}

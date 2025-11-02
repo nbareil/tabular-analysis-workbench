@@ -95,6 +95,7 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
   - Conditional coloring (e.g., by tag).  
   - Context menu integrates filter affordances (Filter in / Filter out) honoring active session filters.
 - Column sidebar (visibility, type, aggregates).
+- Column chooser accessible from top bar lists all columns with visibility toggles.
 - Keyboard shortcuts: open, filter, export, theme toggle.
 
 - Filter sidebar can be collapsed to maximize grid width (toggle in header).

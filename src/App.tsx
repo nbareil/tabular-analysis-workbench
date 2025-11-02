@@ -8,6 +8,7 @@ import { useSessionStore } from '@state/sessionStore';
 import DataGrid from '@components/DataGrid';
 import FilterBuilder from '@components/filter/FilterBuilder';
 import PivotView from '@components/PivotView';
+import ColumnsPanel from '@components/ColumnsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import type { RowBatch } from '@workers/types';
@@ -53,6 +54,7 @@ const App = (): JSX.Element => {
   const columns = useDataStore((state) => state.columns.map((column) => column.key));
   const [searchTerm, setSearchTerm] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [columnsOpen, setColumnsOpen] = useState(false);
   const [showPivot, setShowPivot] = useState(false);
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
 
@@ -328,6 +330,14 @@ const App = (): JSX.Element => {
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+            onClick={() => setColumnsOpen(true)}
+            disabled={!workerReady}
+          >
+            Columns
+          </button>
+          <button
+            type="button"
+            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setShowPivot((value) => !value)}
             disabled={!workerReady || loaderStatus === 'loading'}
           >
@@ -380,6 +390,7 @@ const App = (): JSX.Element => {
         </section>
       </main>
       <OptionsPanel open={optionsOpen} onClose={() => setOptionsOpen(false)} />
+      <ColumnsPanel open={columnsOpen} onClose={() => setColumnsOpen(false)} />
     </div>
   );
 };

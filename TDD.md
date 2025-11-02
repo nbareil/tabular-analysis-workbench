@@ -69,6 +69,7 @@
 - Grid implementation: AG Grid infinite row model configured with a custom data source adapter that requests row windows from the worker. Column definitions incorporate metadata (type, inferred format, aggregations).
 - Grid context menu: right-clicking any populated cell surfaces **Filter in** / **Filter out** actions that append or update filter predicates using shared filter-sync utilities so worker pipelines stay consistent with the filter builder; the default browser menu is suppressed to keep interactions within the app shell.
 - Dialogs and panels: Modular React components for filter builder, note editor (markdown with preview), and fuzzy search banner. Filter builder enumerates predicate operators including regex-specific **matches** / **not matches** entries and exposes a per-predicate **Case sensitive** checkbox (default off).
+- Top bar ships a Columns dialog exposing column visibility toggles synced with session layout; sidebar collapse toggle maximises workspace.
 - Filter sidebar includes collapse toggle to increase horizontal workspace; state synced in session store.
 - Global search control pairs the query input with a **Case sensitive** toggle that persists in session storage; searches run insensitive by default and recompute automatically when the toggle changes.
 - Typography variables cascade via CSS custom properties so interface and data grid can honor independent font families and sizes.
