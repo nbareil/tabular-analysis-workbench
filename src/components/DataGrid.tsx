@@ -66,7 +66,7 @@ export const buildSortStateFromColumnState = (columnState: ColumnState[]): SortS
     .sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0))
     .map((state) => ({
       column: state.colId ?? '',
-      direction: state.sort === 'desc' ? 'desc' : 'asc'
+      direction: state.sort === 'desc' ? ('desc' as const) : ('asc' as const)
     }))
     .filter((sort) => Boolean(sort.column));
 

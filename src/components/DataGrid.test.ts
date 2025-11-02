@@ -83,10 +83,10 @@ describe('buildSortStateFromColumnState', () => {
   });
 
   it('ignores columns without identifiers', () => {
-    const columnState: ColumnState[] = [
+    const columnState = [
       { colId: undefined, sort: 'asc', sortIndex: 0 },
       { colId: 'status', sort: 'desc', sortIndex: 1 }
-    ];
+    ] as unknown as ColumnState[];
 
     expect(buildSortStateFromColumnState(columnState)).toEqual([
       { column: 'status', direction: 'desc' }

@@ -33,15 +33,19 @@ const MANUAL_BUNDLES: duckdb.DuckDBBundles = {
 
 let duckDbAvailability: 'unknown' | 'available' | 'unavailable' = 'unknown';
 
-const toModuleUrl = (path?: string | null): string | undefined => {
+const toModuleUrl = (path?: string | null): URL | undefined => {
   if (!path) {
     return undefined;
   }
 
   try {
-    return new URL(path, import.meta.url).toString();
+    return new URL(path, import.meta.url);
   } catch {
-    return path;
+    try {
+      return new URL(path);
+    } catch {
+      return undefined;
+    }
   }
 };
 
@@ -89,17 +93,22 @@ export const tryGroupWithDuckDb = async (
       return null;
     }
 
-    const workerUrl = toModuleUrl(bundle.mainWorker);
-    if (!workerUrl) {
+    const workerSpecifier = toModuleUrl(bundle.mainWorker);
+    if (!workerSpecifier) {
       duckDbAvailability = 'unavailable';
       return null;
     }
 
-    const worker = new Worker(workerUrl, { type: 'module' });
+    const worker = new Worker(workerSpecifier, { type: 'module' });
     const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-    const mainModuleUrl = toModuleUrl(bundle.mainModule) ?? bundle.mainModule;
-    const pthreadWorkerUrl = toModuleUrl(bundle.pthreadWorker);
-    await db.instantiate(mainModuleUrl, pthreadWorkerUrl);
+    const mainModuleUrl =
+      toModuleUrl(bundle.mainModule)?.toString() ?? bundle.mainModule ?? '';
+    const pthreadWorkerUrl = toModuleUrl(bundle.pthreadWorker)?.toString() ?? null;
+    const instantiateDuckDb = db.instantiate.bind(db) as (
+      module: string,
+      pthreadWorker?: string | null
+    ) => Promise<unknown>;
+    await instantiateDuckDb(mainModuleUrl, pthreadWorkerUrl ?? null);
     duckDbAvailability = 'available';
 
     const connection = await db.connect();
@@ -137,13 +146,17 @@ export const tryGroupWithDuckDb = async (
       );
 
       const placeholders = columnList.map(() => '?').join(', ');
-      const insertSql = `INSERT INTO __csv_explorer_duckdb (${columnList
-        .map((column) => `"${column}"`)
-        .join(', ')}) VALUES (${placeholders})`;
-
-      for (const row of rows) {
-        const params = columnList.map((column) => row[column] ?? null);
-        await connection.query(insertSql, params);
+      const insertColumns = columnList.map((column) => `"${column}"`).join(', ');
+      const insertStatement = await connection.prepare(
+        `INSERT INTO __csv_explorer_duckdb (${insertColumns}) VALUES (${placeholders})`
+      );
+      try {
+        for (const row of rows) {
+          const params = columnList.map((column) => row[column] ?? null);
+          await insertStatement.query(...params);
+        }
+      } finally {
+        await insertStatement.close();
       }
 
       const selectExpressions = groupColumns.map((column) => `"${column}"`);
