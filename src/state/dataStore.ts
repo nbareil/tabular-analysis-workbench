@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-import type { ColumnInference, ColumnType, RowBatch } from '@workers/types';
+import type { ColumnInference, ColumnType, GroupingResult, RowBatch } from '@workers/types';
 import { materializeRowBatch } from '@workers/utils/materializeRowBatch';
 
 export interface GridColumn {
@@ -31,6 +31,14 @@ interface DataState {
   matchedRows: number | null;
   filterMatchedRows: number | null;
   searchMatchedRows: number | null;
+  grouping: {
+    status: LoaderStatus;
+    rows: GroupingResult['rows'];
+    groupBy: string[];
+    totalGroups: number;
+    totalRows: number;
+    error: string | null;
+  };
   startLoading: (fileName: string) => void;
   setHeader: (header: string[]) => void;
   appendBatch: (batch: RowBatch) => void;
@@ -41,6 +49,10 @@ interface DataState {
   setSearchResult: (payload: { rows: GridRow[]; totalRows: number; matchedRows: number }) => void;
   clearSearchResult: () => void;
   clearFilterResult: () => void;
+  setGroupingLoading: () => void;
+  setGroupingResult: (result: GroupingResult) => void;
+  setGroupingError: (message: string) => void;
+  clearGrouping: () => void;
   reset: () => void;
 }
 
@@ -72,6 +84,14 @@ export const useDataStore = create<DataState>((set) => ({
   matchedRows: null,
   filterMatchedRows: null,
   searchMatchedRows: null,
+  grouping: {
+    status: 'idle',
+    rows: [],
+    groupBy: [],
+    totalGroups: 0,
+    totalRows: 0,
+    error: null
+  },
   startLoading: (fileName) =>
     set(() => ({
       fileName,
@@ -85,7 +105,15 @@ export const useDataStore = create<DataState>((set) => ({
       totalRows: 0,
       matchedRows: null,
       filterMatchedRows: null,
-      searchMatchedRows: null
+      searchMatchedRows: null,
+      grouping: {
+        status: 'idle',
+        rows: [],
+        groupBy: [],
+        totalGroups: 0,
+        totalRows: 0,
+        error: null
+      }
     })),
   setHeader: (header) =>
     set((state) => ({
@@ -216,6 +244,47 @@ export const useDataStore = create<DataState>((set) => ({
           ? `Found ${state.searchMatchedRows.toLocaleString()} matches across ${state.totalRows.toLocaleString()} rows`
           : null
     })),
+  setGroupingLoading: () =>
+    set((state) => ({
+      grouping: {
+        ...state.grouping,
+        status: 'loading',
+        error: null
+      }
+    })),
+  setGroupingResult: (result) =>
+    set(() => ({
+      grouping: {
+        status: 'ready',
+        rows: result.rows,
+        groupBy: result.groupBy,
+        totalGroups: result.totalGroups,
+        totalRows: result.totalRows,
+        error: null
+      }
+    })),
+  setGroupingError: (message) =>
+    set(() => ({
+      grouping: {
+        status: 'error',
+        rows: [],
+        groupBy: [],
+        totalGroups: 0,
+        totalRows: 0,
+        error: message
+      }
+    })),
+  clearGrouping: () =>
+    set(() => ({
+      grouping: {
+        status: 'idle',
+        rows: [],
+        groupBy: [],
+        totalGroups: 0,
+        totalRows: 0,
+        error: null
+      }
+    })),
   reset: () =>
     set(() => ({
       fileName: null,
@@ -229,6 +298,14 @@ export const useDataStore = create<DataState>((set) => ({
       totalRows: 0,
       matchedRows: null,
       filterMatchedRows: null,
-      searchMatchedRows: null
+      searchMatchedRows: null,
+      grouping: {
+        status: 'idle',
+        rows: [],
+        groupBy: [],
+        totalGroups: 0,
+        totalRows: 0,
+        error: null
+      }
     }))
 }));

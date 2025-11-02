@@ -7,6 +7,7 @@ import { useDataStore } from '@state/dataStore';
 import { useSessionStore } from '@state/sessionStore';
 import DataGrid from '@components/DataGrid';
 import FilterBuilder from '@components/filter/FilterBuilder';
+import PivotView from '@components/PivotView';
 import OptionsPanel from '@components/options/OptionsPanel';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import type { RowBatch } from '@workers/types';
@@ -52,6 +53,7 @@ const App = (): JSX.Element => {
   const columns = useDataStore((state) => state.columns.map((column) => column.key));
   const [searchTerm, setSearchTerm] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [showPivot, setShowPivot] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -325,6 +327,14 @@ const App = (): JSX.Element => {
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+            onClick={() => setShowPivot((value) => !value)}
+            disabled={!workerReady || loaderStatus === 'loading'}
+          >
+            {showPivot ? 'Show Grid' : 'Pivot View'}
+          </button>
+          <button
+            type="button"
+            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={toggleTheme}
           >
             Toggle Theme
@@ -338,7 +348,7 @@ const App = (): JSX.Element => {
         <section className="flex flex-1 flex-col">
           <div className="flex-1 overflow-auto p-4">
             <div className="h-full rounded border border-slate-800">
-              <DataGrid status={loaderStatus} />
+              {showPivot ? <PivotView /> : <DataGrid status={loaderStatus} />}
             </div>
           </div>
           <footer className="border-t border-slate-800 px-4 py-2 text-xs text-slate-500">

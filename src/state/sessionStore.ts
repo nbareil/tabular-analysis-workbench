@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import { DATA_DEFAULT_FONT_ID, DEFAULT_FONT_ID, DEFAULT_FONT_SIZE } from '@constants/fonts';
+import type { GroupAggregationDefinition } from '@workers/types';
 
 export interface ColumnLayoutState {
   order: string[];
@@ -22,6 +23,7 @@ export interface SessionSnapshot {
   filters: FilterState[];
   sorts: { column: string; direction: 'asc' | 'desc' }[];
   groups: string[];
+  groupAggregations: GroupAggregationDefinition[];
   columnLayout: ColumnLayoutState;
   searchCaseSensitive: boolean;
   interfaceFontFamily: string;
@@ -36,6 +38,7 @@ interface SessionStore extends SessionSnapshot {
   setFilters: (filters: FilterState[]) => void;
   setSorts: (sorts: SessionSnapshot['sorts']) => void;
   setGroups: (groups: string[]) => void;
+  setGroupAggregations: (aggregations: GroupAggregationDefinition[]) => void;
   setColumnLayout: (layout: ColumnLayoutState) => void;
   setSearchCaseSensitive: (value: boolean) => void;
   setInterfaceFontFamily: (value: string) => void;
@@ -56,6 +59,12 @@ const initialState: SessionSnapshot = {
   filters: [],
   sorts: [],
   groups: [],
+  groupAggregations: [
+    {
+      operator: 'count',
+      alias: 'count'
+    }
+  ],
   columnLayout: defaultColumnLayout,
   searchCaseSensitive: false,
   interfaceFontFamily: DEFAULT_FONT_ID,
@@ -71,6 +80,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
   setFilters: (filters) => set(() => ({ filters, updatedAt: Date.now() })),
   setSorts: (sorts) => set(() => ({ sorts, updatedAt: Date.now() })),
   setGroups: (groups) => set(() => ({ groups, updatedAt: Date.now() })),
+  setGroupAggregations: (groupAggregations) =>
+    set(() => ({ groupAggregations, updatedAt: Date.now() })),
   setColumnLayout: (columnLayout) => set(() => ({ columnLayout, updatedAt: Date.now() })),
   setSearchCaseSensitive: (searchCaseSensitive) =>
     set(() => ({ searchCaseSensitive, updatedAt: Date.now() })),
