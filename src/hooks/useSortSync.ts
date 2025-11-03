@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { useDataStore, type GridRow } from '@state/dataStore';
+import { useDataStore } from '@state/dataStore';
 import { useSessionStore, type SessionSnapshot } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
-import { buildFilterExpression } from '@utils/filterExpression';
 
 type SortState = SessionSnapshot['sorts'][number];
 
@@ -31,10 +30,8 @@ export interface UseSortSyncResult {
 export const useSortSync = (): UseSortSyncResult => {
   const sorts = useSessionStore((state) => state.sorts);
   const setSorts = useSessionStore((state) => state.setSorts);
-  const filters = useSessionStore((state) => state.filters);
-  const setRows = useDataStore((state) => state.setRows);
-  const setFilterResult = useDataStore((state) => state.setFilterResult);
-  const clearFilterResult = useDataStore((state) => state.clearFilterResult);
+  const setMatchedRowCount = useDataStore((state) => state.setMatchedRowCount);
+  const bumpViewVersion = useDataStore((state) => state.bumpViewVersion);
   const totalRows = useDataStore((state) => state.totalRows);
   const bootstrapAppliedRef = useRef(false);
 
@@ -46,35 +43,13 @@ export const useSortSync = (): UseSortSyncResult => {
         const worker = getDataWorker();
         const response = await worker.applySorts({
           sorts: nextSorts,
-          offset: 0
+          offset: 0,
+          limit: 0
         });
 
-        setRows(response.rows as GridRow[]);
+        setMatchedRowCount(response.matchedRows ?? null);
+        bumpViewVersion();
         bootstrapAppliedRef.current = true;
-
-        try {
-          if (filters.length > 0) {
-            const expression = buildFilterExpression(filters);
-            if (expression) {
-              const filterResponse = await worker.applyFilter({
-                expression,
-                offset: 0,
-                limit: 500
-              });
-              setFilterResult({
-                rows: filterResponse.rows as GridRow[],
-                totalRows: filterResponse.totalRows,
-                matchedRows: filterResponse.matchedRows
-              });
-            } else {
-              clearFilterResult();
-            }
-          } else {
-            clearFilterResult();
-          }
-        } catch (error) {
-          console.error('Failed to refresh filtered rows after sort', error);
-        }
 
         if (persist) {
           setSorts(response.sorts);
@@ -86,7 +61,7 @@ export const useSortSync = (): UseSortSyncResult => {
         throw error;
       }
     },
-    [clearFilterResult, filters, setFilterResult, setRows, setSorts]
+    [bumpViewVersion, setMatchedRowCount, setSorts]
   );
 
   const applySorts = useCallback(
@@ -124,4 +99,3 @@ export const useSortSync = (): UseSortSyncResult => {
 
   return { sorts, applySorts, clearSorts };
 };
-

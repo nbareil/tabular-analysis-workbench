@@ -12,7 +12,6 @@ import ColumnsPanel from '@components/ColumnsPanel';
 import LabelsPanel from '@components/LabelsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
 import { getDataWorker } from '@workers/dataWorkerProxy';
-import type { RowBatch } from '@workers/types';
 import { buildFilterExpression } from '@utils/filterExpression';
 import { getFontStack } from '@constants/fonts';
 
@@ -42,7 +41,7 @@ const App = (): JSX.Element => {
   const setFileHandle = useSessionStore((state) => state.setFileHandle);
   const startLoading = useDataStore((state) => state.startLoading);
   const setHeader = useDataStore((state) => state.setHeader);
-  const appendBatch = useDataStore((state) => state.appendBatch);
+  const reportProgress = useDataStore((state) => state.reportProgress);
   const complete = useDataStore((state) => state.complete);
   const setError = useDataStore((state) => state.setError);
   const setSearchResult = useDataStore((state) => state.setSearchResult);
@@ -123,9 +122,9 @@ const App = (): JSX.Element => {
                 setHeader(columns);
               }
             },
-            onBatch: async (batch: RowBatch) => {
+            onProgress: async (progress) => {
               if (!cancelled) {
-                appendBatch(batch);
+                reportProgress(progress);
               }
             },
             onComplete: async (summary) => {
@@ -152,7 +151,7 @@ const App = (): JSX.Element => {
     return () => {
       cancelled = true;
     };
-  }, [appendBatch, complete, fileHandle, setError, setHeader, startLoading]);
+  }, [complete, fileHandle, reportProgress, setError, setHeader, startLoading]);
 
   const filterExpression = useMemo(() => buildFilterExpression(filters), [filters]);
 

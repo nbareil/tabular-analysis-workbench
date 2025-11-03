@@ -5,13 +5,16 @@ import { AgGridReact } from 'ag-grid-react';
 import type {
   CellContextMenuEvent,
   ColumnState,
-  SortChangedEvent
+  SortChangedEvent,
+  IDatasource,
+  IGetRowsParams
 } from 'ag-grid-community';
 
 import { useAppStore } from '@state/appStore';
 import { useDataStore, type GridRow, type LoaderStatus } from '@state/dataStore';
 import type { FilterState, SessionSnapshot } from '@state/sessionStore';
 import { useSessionStore } from '@state/sessionStore';
+import { getDataWorker } from '@workers/dataWorkerProxy';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
 
@@ -88,7 +91,9 @@ interface DataGridProps {
 
 const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   const columns = useDataStore((state) => state.columns);
-  const rows = useDataStore((state) => state.searchRows ?? state.filteredRows ?? state.rows);
+  const searchRows = useDataStore((state) => state.searchRows);
+  const matchedRows = useDataStore((state) => state.matchedRows);
+  const viewVersion = useDataStore((state) => state.viewVersion);
   const theme = useAppStore((state) => state.theme);
   const { filters, applyFilters } = useFilterSync();
   const { sorts, applySorts } = useSortSync();
@@ -200,8 +205,40 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     []
   );
 
+  useEffect(() => {
+    const gridApi = gridRef.current?.api;
+    if (!gridApi) {
+      return;
+    }
+
+    const datasource: IDatasource = {
+      getRows: async (params: IGetRowsParams) => {
+        try {
+          if (searchRows) {
+            const slice = searchRows.slice(params.startRow, params.endRow);
+            params.successCallback(slice, searchRows.length);
+            return;
+          }
+
+          const worker = getDataWorker();
+          const requestSize = params.endRow - params.startRow;
+          const response = await worker.fetchRows({
+            offset: params.startRow,
+            limit: requestSize
+          });
+          params.successCallback(response.rows as GridRow[], response.matchedRows);
+        } catch (error) {
+          console.error('Failed to fetch rows for grid', error);
+          params.failCallback();
+        }
+      }
+    };
+
+    gridApi.setDatasource(datasource);
+  }, [searchRows, viewVersion]);
+
   const themeClass = theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz';
-  const showPlaceholder = status !== 'loading' && rows.length === 0;
+  const showPlaceholder = status !== 'loading' && (matchedRows ?? 0) === 0;
   const menuMetadata = useMemo(() => {
     if (!contextMenu) {
       return null;
@@ -450,11 +487,13 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           ref={gridRef}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
-          rowData={rows}
           suppressRowClickSelection
           suppressContextMenu
           rowSelection="multiple"
           animateRows
+          rowModelType="infinite"
+          cacheBlockSize={500}
+          maxBlocksInCache={2}
           getRowId={(params) => (params.data ? String(params.data.__rowId) : '')}
           tooltipShowDelay={0}
           onCellContextMenu={handleCellContextMenu}

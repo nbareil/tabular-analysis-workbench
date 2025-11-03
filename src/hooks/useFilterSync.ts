@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 
-import { useDataStore, type GridRow } from '@state/dataStore';
+import { useDataStore } from '@state/dataStore';
 import { useSessionStore, type FilterState } from '@state/sessionStore';
 import { getDataWorker, type ApplyFilterRequest } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
@@ -13,8 +13,10 @@ export interface UseFilterSyncResult {
 export const useFilterSync = (): UseFilterSyncResult => {
   const filters = useSessionStore((state) => state.filters);
   const setFilters = useSessionStore((state) => state.setFilters);
-  const setFilterResult = useDataStore((state) => state.setFilterResult);
-  const clearFilterResult = useDataStore((state) => state.clearFilterResult);
+  const setFilterSummary = useDataStore((state) => state.setFilterSummary);
+  const clearFilterSummary = useDataStore((state) => state.clearFilterSummary);
+  const setMatchedRowCount = useDataStore((state) => state.setMatchedRowCount);
+  const bumpViewVersion = useDataStore((state) => state.bumpViewVersion);
   const clearSearchResult = useDataStore((state) => state.clearSearchResult);
 
   const applyFilters = useCallback(
@@ -25,47 +27,52 @@ export const useFilterSync = (): UseFilterSyncResult => {
         const worker = getDataWorker();
 
         if (nextFilters.length === 0) {
-          await worker.applyFilter({
+          const response = await worker.applyFilter({
             expression: null,
             offset: 0,
-            limit: 500
+            limit: 0
           });
-          clearFilterResult();
+          clearFilterSummary();
           clearSearchResult();
+          setMatchedRowCount(response.totalRows);
+          bumpViewVersion();
           return;
         }
 
         const expression = buildFilterExpression(nextFilters);
 
         if (!expression) {
-          await worker.applyFilter({
+          const response = await worker.applyFilter({
             expression: null,
             offset: 0,
-            limit: 500
+            limit: 0
           });
-          clearFilterResult();
+          clearFilterSummary();
           clearSearchResult();
+          setMatchedRowCount(response.totalRows);
+          bumpViewVersion();
           return;
         }
 
         const request: ApplyFilterRequest = {
           expression,
           offset: 0,
-          limit: 500
+          limit: 0
         };
 
         const response = await worker.applyFilter(request);
-        setFilterResult({
-          rows: response.rows as GridRow[],
-          totalRows: response.totalRows,
-          matchedRows: response.matchedRows
+        setFilterSummary({
+          matchedRows: response.matchedRows,
+          totalRows: response.totalRows
         });
         clearSearchResult();
+        setMatchedRowCount(response.matchedRows);
+        bumpViewVersion();
       } catch (error) {
         console.error('Failed to apply filter', error);
       }
     },
-    [setFilters, clearFilterResult, clearSearchResult, setFilterResult]
+    [setFilters, clearFilterSummary, clearSearchResult, setFilterSummary, setMatchedRowCount, bumpViewVersion]
   );
 
   return { filters, applyFilters };

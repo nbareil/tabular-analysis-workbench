@@ -10,6 +10,8 @@ import type {
   ApplySortResult,
   ApplyFilterRequest,
   ApplyFilterResult,
+  FetchRowsRequest,
+  FetchRowsResult,
   GroupingRequest,
   GroupingResult,
   TaggingSnapshot,
@@ -19,7 +21,8 @@ import type {
   UpdateLabelRequest,
   DeleteLabelRequest,
   ImportTagsRequest,
-  LabelDefinition
+  LabelDefinition,
+  LoadCompleteSummary
 } from './dataWorker.worker';
 
 let workerInstance: Remote<DataWorkerApi> | null = null;
@@ -47,6 +50,8 @@ export type {
   ApplySortResult,
   ApplyFilterRequest,
   ApplyFilterResult,
+  FetchRowsRequest,
+  FetchRowsResult,
   GroupingRequest,
   GroupingResult,
   TaggingSnapshot,
@@ -56,5 +61,6 @@ export type {
   UpdateLabelRequest,
   DeleteLabelRequest,
   ImportTagsRequest,
-  LabelDefinition
+  LabelDefinition,
+  LoadCompleteSummary
 };
