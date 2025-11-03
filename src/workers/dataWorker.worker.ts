@@ -2,6 +2,7 @@ import { expose } from 'comlink';
 
 import { parseDelimitedStream, type ParserOptions } from './csvParser';
 import type { MaterializedRow } from './utils/materializeRowBatch';
+import { detectCompression } from './utils/detectCompression';
 import {
   RowIndexStore,
   type RowIndexData,
@@ -234,12 +235,30 @@ const buildRowIdWindow = (offset: number, limit?: number): number[] => {
 
 const materializeViewWindow = async (offset: number, limit?: number): Promise<MaterializedRow[]> => {
   const rowIds = buildRowIdWindow(offset, limit);
+  if (import.meta.env.DEV) {
+    console.debug('[data-worker] materializeViewWindow', {
+      offset,
+      limit,
+      requested: rowIds.length,
+      firstRowId: rowIds[0],
+      lastRowId: rowIds[rowIds.length - 1],
+      activeRowCount: getActiveRowCount()
+    });
+  }
   if (!rowIds.length) {
     return [];
   }
 
   const batchStore = ensureBatchStore();
-  return batchStore.materializeRows(rowIds);
+  const rows = await batchStore.materializeRows(rowIds);
+  if (import.meta.env.DEV) {
+    console.debug('[data-worker] materializeViewWindow resolved', {
+      offset,
+      limit,
+      resolved: rows.length
+    });
+  }
+  return rows;
 };
 
 const compareStringValues = (a: unknown, b: unknown): number => {
@@ -380,7 +399,29 @@ const api: DataWorkerApi = {
     state.dataset.fileHandle = handle;
 
     const file = await handle.getFile();
-    const stream = file.stream();
+    const compression = detectCompression({
+      fileName: file.name ?? handle.name,
+      mimeType: file.type
+    });
+
+    let stream: ReadableStream<Uint8Array> = file.stream();
+
+    if (compression === 'gzip') {
+      if (typeof DecompressionStream === 'undefined') {
+        throw new Error('This browser does not support gzip decompression.');
+      }
+
+      try {
+        stream = stream.pipeThrough(new DecompressionStream('gzip'));
+      } catch (error) {
+        throw new Error(
+          error instanceof Error
+            ? `Failed to decompress gzip stream: ${error.message}`
+            : 'Failed to decompress gzip stream'
+        );
+      }
+    }
+
     const reader = stream.getReader();
     const targetCheckpointInterval = checkpointInterval ?? 50_000;
     const options: ParserOptions = {
@@ -653,7 +694,19 @@ const api: DataWorkerApi = {
     };
   },
   async fetchRows({ offset, limit }: FetchRowsRequest): Promise<FetchRowsResult> {
+    if (import.meta.env.DEV) {
+      console.debug('[data-worker] fetchRows request', {
+        offset,
+        limit,
+        hasBatchStore: Boolean(state.dataset.batchStore),
+        totalRows: state.dataset.totalRows,
+        activeRowCount: getActiveRowCount()
+      });
+    }
     if (!state.dataset.batchStore) {
+      if (import.meta.env.DEV) {
+        console.warn('[data-worker] fetchRows received request before dataset ready');
+      }
       return {
         rows: [],
         totalRows: 0,
@@ -662,6 +715,15 @@ const api: DataWorkerApi = {
     }
 
     const rows = await materializeViewWindow(offset, limit);
+    if (import.meta.env.DEV) {
+      console.debug('[data-worker] fetchRows resolved', {
+        offset,
+        limit,
+        rows: rows.length,
+        totalRows: state.dataset.totalRows,
+        matchedRows: getActiveRowCount()
+      });
+    }
     return {
       rows,
       totalRows: state.dataset.totalRows,

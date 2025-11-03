@@ -107,6 +107,12 @@ const App = (): JSX.Element => {
         return;
       }
 
+      if (import.meta.env.DEV) {
+        console.info('[app] Triggering loadFile for handle', {
+          name: fileHandle.name
+        });
+      }
+
       setSearchTerm('');
       clearSearchResult();
 
@@ -118,21 +124,33 @@ const App = (): JSX.Element => {
           { handle: fileHandle },
           proxy({
             onStart: async ({ columns }) => {
+              if (import.meta.env.DEV) {
+                console.debug('[app] Worker onStart', { columnCount: columns.length, columns });
+              }
               if (!cancelled) {
                 setHeader(columns);
               }
             },
             onProgress: async (progress) => {
+              if (import.meta.env.DEV) {
+                console.debug('[app] Worker onProgress', progress);
+              }
               if (!cancelled) {
                 reportProgress(progress);
               }
             },
             onComplete: async (summary) => {
+              if (import.meta.env.DEV) {
+                console.info('[app] Worker onComplete', summary);
+              }
               if (!cancelled) {
                 complete(summary);
               }
             },
             onError: async (error) => {
+              if (import.meta.env.DEV) {
+                console.error('[app] Worker onError', error);
+              }
               if (!cancelled) {
                 setError(error.message ?? 'Failed to load file');
               }
@@ -140,6 +158,9 @@ const App = (): JSX.Element => {
           })
         );
       } catch (error) {
+        if (import.meta.env.DEV) {
+          console.error('[app] loadFile threw', error);
+        }
         if (!cancelled) {
           setError(error instanceof Error ? error.message : String(error));
         }
@@ -246,7 +267,8 @@ const App = (): JSX.Element => {
             description: 'Delimited text',
             accept: {
               'text/csv': ['.csv'],
-              'text/tab-separated-values': ['.tsv']
+              'text/tab-separated-values': ['.tsv'],
+              'application/gzip': ['.csv.gz', '.tsv.gz']
             }
           }
         ]

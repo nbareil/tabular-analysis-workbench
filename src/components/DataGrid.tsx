@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { AgGridReact } from 'ag-grid-react';
@@ -7,11 +7,14 @@ import type {
   ColumnState,
   SortChangedEvent,
   IDatasource,
-  IGetRowsParams
+  IGetRowsParams,
+  GridApi,
+  ColumnApi,
+  GridReadyEvent
 } from 'ag-grid-community';
 
 import { useAppStore } from '@state/appStore';
-import { useDataStore, type GridRow, type LoaderStatus } from '@state/dataStore';
+import { useDataStore, type GridColumn, type GridRow, type LoaderStatus } from '@state/dataStore';
 import type { FilterState, SessionSnapshot } from '@state/sessionStore';
 import { useSessionStore } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
@@ -100,7 +103,8 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   const [contextMenu, setContextMenu] = useState<FilterContextMenuState | null>(null);
   const columnLayout = useSessionStore((state) => state.columnLayout);
   const setColumnLayout = useSessionStore((state) => state.setColumnLayout);
-  const gridRef = useRef<AgGridReact<GridRow>>(null);
+  const [gridApi, setGridApi] = useState<GridApi | null>(null);
+  const [columnApi, setColumnApi] = useState<ColumnApi | null>(null);
 
   useEffect(() => {
     if (!columns.length) {
@@ -152,7 +156,6 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   }, [columnLayout.order, columns]);
 
   useEffect(() => {
-    const columnApi = gridRef.current?.columnApi;
     if (!columnApi) {
       return;
     }
@@ -165,14 +168,24 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       })),
       applyOrder: true
     });
-  }, [orderedColumns, columnLayout.visibility]);
+  }, [columnApi, orderedColumns, columnLayout.visibility]);
+
+  const mapColumnTypeToAgDataType = useMemo(() => {
+    const mapping: Record<GridColumn['type'], 'text' | 'number' | 'boolean' | 'dateString'> = {
+      string: 'text',
+      number: 'number',
+      boolean: 'boolean',
+      datetime: 'dateString'
+    };
+    return (type: GridColumn['type']) => mapping[type] ?? 'text';
+  }, []);
 
   const columnDefs = useMemo(
     () =>
       orderedColumns.map((column) => ({
         field: column.key,
         headerName: column.headerName,
-        cellDataType: column.type,
+        cellDataType: mapColumnTypeToAgDataType(column.type),
         sortable: true,
         filter: true,
         tooltipField: column.key,
@@ -193,7 +206,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           };
         })()
       })),
-    [columnLayout.visibility, orderedColumns, sorts]
+    [columnLayout.visibility, mapColumnTypeToAgDataType, orderedColumns, sorts]
   );
 
   const defaultColDef = useMemo(
@@ -206,7 +219,6 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   );
 
   useEffect(() => {
-    const gridApi = gridRef.current?.api;
     if (!gridApi) {
       return;
     }
@@ -214,9 +226,23 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     const datasource: IDatasource = {
       getRows: async (params: IGetRowsParams) => {
         try {
+          if (import.meta.env.DEV) {
+            console.debug('[grid] getRows request', {
+              startRow: params.startRow,
+              endRow: params.endRow,
+              usingSearchRows: Boolean(searchRows)
+            });
+          }
+
           if (searchRows) {
             const slice = searchRows.slice(params.startRow, params.endRow);
             params.successCallback(slice, searchRows.length);
+            if (import.meta.env.DEV) {
+              console.debug('[grid] Served search rows', {
+                served: slice.length,
+                totalMatches: searchRows.length
+              });
+            }
             return;
           }
 
@@ -227,6 +253,15 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
             limit: requestSize
           });
           params.successCallback(response.rows as GridRow[], response.matchedRows);
+          if (import.meta.env.DEV) {
+            console.debug('[grid] Worker fetchRows response', {
+              offset: params.startRow,
+              limit: requestSize,
+              rowsReceived: response.rows.length,
+              matchedRows: response.matchedRows,
+              totalRows: response.totalRows
+            });
+          }
         } catch (error) {
           console.error('Failed to fetch rows for grid', error);
           params.failCallback();
@@ -234,8 +269,25 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       }
     };
 
-    gridApi.setDatasource(datasource);
-  }, [searchRows, viewVersion]);
+    if (typeof gridApi.setGridOption === 'function') {
+      gridApi.setGridOption('datasource', datasource);
+    } else if (typeof gridApi.setDatasource === 'function') {
+      gridApi.setDatasource(datasource);
+    }
+  }, [gridApi, searchRows, viewVersion]);
+
+  useEffect(() => {
+    if (status !== 'ready') {
+      return;
+    }
+
+    if (gridApi && typeof gridApi.refreshInfiniteCache === 'function') {
+      if (import.meta.env.DEV) {
+        console.debug('[grid] refreshing infinite cache after ready status');
+      }
+      gridApi.refreshInfiniteCache();
+    }
+  }, [gridApi, status]);
 
   const themeClass = theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz';
   const showPlaceholder = status !== 'loading' && (matchedRows ?? 0) === 0;
@@ -409,12 +461,11 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         visibility: nextVisibility
       });
 
-      const api = gridRef.current?.api;
-      if (api) {
-        api.setColumnVisible(columnId, !visible);
+      if (gridApi) {
+        gridApi.setColumnVisible(columnId, !visible);
       }
     },
-    [columnLayout, setColumnLayout]
+    [columnLayout, gridApi, setColumnLayout]
   );
 
   const renderContextMenu = () => {
@@ -484,7 +535,6 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         </div>
       ) : (
         <AgGridReact<GridRow>
-          ref={gridRef}
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
           suppressRowClickSelection
@@ -498,6 +548,10 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           tooltipShowDelay={0}
           onCellContextMenu={handleCellContextMenu}
           onSortChanged={handleSortChanged}
+          onGridReady={(event: GridReadyEvent) => {
+            setGridApi(event.api);
+            setColumnApi(event.columnApi);
+          }}
         />
       )}
       {renderContextMenu()}

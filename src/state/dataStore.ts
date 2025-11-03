@@ -114,28 +114,53 @@ export const useDataStore = create<DataState>((set) => ({
       grouping: initialGroupingState()
     })),
   setHeader: (header) =>
-    set(() => ({
-      columns: header.map((key, index) => ({
-        key,
-        headerName: key || `column_${index + 1}`,
-        type: 'string' as ColumnType,
-        confidence: 0,
-        examples: []
-      }))
-    })),
+    set((state) => {
+      if (import.meta.env.DEV) {
+        console.debug('[data-store] setHeader', {
+          headerCount: header.length,
+          previousColumnCount: state.columns.length
+        });
+      }
+      return {
+        columns: header.map((key, index) => ({
+          key,
+          headerName: key || `column_${index + 1}`,
+          type: 'string' as ColumnType,
+          confidence: 0,
+          examples: []
+        }))
+      };
+    }),
   reportProgress: (progress) =>
-    set((state) => ({
-      stats: {
-        rowsParsed: progress.rowsParsed,
-        bytesParsed: progress.bytesParsed,
-        eof: false
-      },
-      totalRows: progress.rowsParsed,
-      status: state.status === 'idle' ? 'loading' : state.status,
-      message: `Streaming… parsed ${progress.rowsParsed.toLocaleString()} rows (${formatBytes(progress.bytesParsed)})`
-    })),
+    set((state) => {
+      if (import.meta.env.DEV) {
+        console.debug('[data-store] reportProgress', {
+          rowsParsed: progress.rowsParsed,
+          bytesParsed: progress.bytesParsed,
+          previousTotalRows: state.totalRows
+        });
+      }
+      return {
+        stats: {
+          rowsParsed: progress.rowsParsed,
+          bytesParsed: progress.bytesParsed,
+          eof: false
+        },
+        totalRows: progress.rowsParsed,
+        status: state.status === 'idle' ? 'loading' : state.status,
+        message: `Streaming… parsed ${progress.rowsParsed.toLocaleString()} rows (${formatBytes(progress.bytesParsed)})`
+      };
+    }),
   complete: (summary) =>
     set((state) => {
+      if (import.meta.env.DEV) {
+        console.info('[data-store] complete', {
+          rowsParsed: summary.rowsParsed,
+          bytesParsed: summary.bytesParsed,
+          previousStatus: state.status,
+          currentColumnCount: state.columns.length
+        });
+      }
       const updatedColumns =
         state.columns.length > 0
           ? state.columns.map((column) => {
@@ -172,7 +197,7 @@ export const useDataStore = create<DataState>((set) => ({
             ? state.filterMatchedRows
             : summary.rowsParsed;
 
-      return {
+      const nextState = {
         status: 'ready' as LoaderStatus,
         message: `Loaded ${summary.rowsParsed.toLocaleString()} rows in ${(summary.durationMs / 1000).toFixed(
           1
@@ -186,12 +211,28 @@ export const useDataStore = create<DataState>((set) => ({
         matchedRows,
         columns: updatedColumns
       };
+
+      if (import.meta.env.DEV) {
+        console.debug('[data-store] complete applied', {
+          status: nextState.status,
+          totalRows: nextState.totalRows,
+          matchedRows: nextState.matchedRows,
+          columnCount: nextState.columns.length
+        });
+      }
+
+      return nextState;
     }),
   setError: (message) =>
-    set(() => ({
-      status: 'error',
-      message
-    })),
+    set((state) => {
+      if (import.meta.env.DEV) {
+        console.error('[data-store] setError', { message, previousStatus: state.status });
+      }
+      return {
+        status: 'error',
+        message
+      };
+    }),
   setFilterSummary: ({ matchedRows, totalRows }) =>
     set(() => ({
       filterMatchedRows: matchedRows,
@@ -201,7 +242,7 @@ export const useDataStore = create<DataState>((set) => ({
   clearFilterSummary: () =>
     set((state) => ({
       filterMatchedRows: null,
-      matchedRows: state.searchMatchedRows
+      matchedRows: state.searchMatchedRows ?? state.totalRows
     })),
   setMatchedRowCount: (value) =>
     set(() => ({
@@ -223,7 +264,7 @@ export const useDataStore = create<DataState>((set) => ({
   clearSearchResult: () =>
     set((state) => ({
       searchRows: null,
-      matchedRows: state.filterMatchedRows,
+      matchedRows: state.filterMatchedRows ?? state.totalRows,
       searchMatchedRows: null,
       message:
         state.filterMatchedRows != null
