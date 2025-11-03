@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { AgGridReact } from 'ag-grid-react';
@@ -88,6 +88,13 @@ interface FilterContextMenuState {
   displayValue: string;
 }
 
+const AUTO_WIDTH_PERCENTILE = 0.8;
+const AUTO_WIDTH_MAX_SAMPLE_ROWS = 1_000;
+const AUTO_WIDTH_BLOCK_SIZE = 250;
+const CELL_HORIZONTAL_PADDING_PX = 32;
+const MIN_COLUMN_WIDTH = 120;
+const MAX_COLUMN_WIDTH = 520;
+
 interface DataGridProps {
   status: LoaderStatus;
 }
@@ -97,6 +104,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   const searchRows = useDataStore((state) => state.searchRows);
   const matchedRows = useDataStore((state) => state.matchedRows);
   const viewVersion = useDataStore((state) => state.viewVersion);
+  const totalRows = useDataStore((state) => state.totalRows);
   const theme = useAppStore((state) => state.theme);
   const { filters, applyFilters } = useFilterSync();
   const { sorts, applySorts } = useSortSync();
@@ -105,6 +113,9 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   const setColumnLayout = useSessionStore((state) => state.setColumnLayout);
   const [gridApi, setGridApi] = useState<GridApi | null>(null);
   const [columnApi, setColumnApi] = useState<ColumnApi | null>(null);
+  const [autoColumnWidths, setAutoColumnWidths] = useState<Record<string, number>>({});
+  const loadingVersionRef = useRef<number | null>(null);
+  const computedVersionRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!columns.length) {
@@ -164,11 +175,14 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       state: orderedColumns.map((column, index) => ({
         colId: column.key,
         hide: columnLayout.visibility[column.key] === false,
-        order: index
+        order: index,
+        ...(autoColumnWidths[column.key] != null
+          ? { width: Math.round(autoColumnWidths[column.key]!) }
+          : {})
       })),
       applyOrder: true
     });
-  }, [columnApi, orderedColumns, columnLayout.visibility]);
+  }, [autoColumnWidths, columnApi, orderedColumns, columnLayout.visibility]);
 
   const mapColumnTypeToAgDataType = useMemo(() => {
     const mapping: Record<GridColumn['type'], 'text' | 'number' | 'boolean' | 'dateString'> = {
@@ -288,6 +302,169 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       gridApi.refreshInfiniteCache();
     }
   }, [gridApi, status]);
+
+  useEffect(() => {
+    if (status === 'loading') {
+      loadingVersionRef.current = viewVersion;
+      computedVersionRef.current = null;
+      setAutoColumnWidths({});
+    }
+  }, [status, viewVersion]);
+
+  useEffect(() => {
+    if (status !== 'ready' || !gridApi || !columns.length || totalRows <= 0) {
+      return;
+    }
+
+    const targetVersion = loadingVersionRef.current ?? viewVersion;
+    if (computedVersionRef.current === targetVersion) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const computeAutoWidths = async () => {
+      try {
+        const worker = getDataWorker();
+        const effectiveTotalRows = Math.max(0, totalRows);
+        const maxSamples = Math.min(AUTO_WIDTH_MAX_SAMPLE_ROWS, effectiveTotalRows);
+        const blockSize = Math.min(AUTO_WIDTH_BLOCK_SIZE, maxSamples || AUTO_WIDTH_BLOCK_SIZE);
+        const blockCount = Math.max(1, Math.ceil((maxSamples || 1) / Math.max(1, blockSize)));
+        const offsets: number[] = [];
+
+        if (blockCount === 1) {
+          offsets.push(0);
+        } else {
+          const maxOffset = Math.max(0, effectiveTotalRows - blockSize);
+          const step = blockCount > 1 ? Math.max(1, Math.floor(maxOffset / (blockCount - 1))) : 0;
+          for (let index = 0; index < blockCount; index += 1) {
+            const offset = Math.min(maxOffset, index * step);
+            offsets.push(offset);
+          }
+        }
+
+        const sampledRows: GridRow[] = [];
+        for (const offset of offsets) {
+          if (cancelled) {
+            return;
+          }
+          const limit = Math.min(blockSize, effectiveTotalRows - offset);
+          if (limit <= 0) {
+            continue;
+          }
+          const response = await worker.fetchRows({ offset, limit });
+          if (cancelled) {
+            return;
+          }
+          sampledRows.push(...((response.rows as GridRow[]) ?? []));
+          if (sampledRows.length >= AUTO_WIDTH_MAX_SAMPLE_ROWS) {
+            break;
+          }
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        if (!sampledRows.length) {
+          const response = await worker.fetchRows({
+            offset: 0,
+            limit: Math.min(blockSize, effectiveTotalRows)
+          });
+          sampledRows.push(...((response.rows as GridRow[]) ?? []));
+        }
+
+        if (!sampledRows.length) {
+          computedVersionRef.current = targetVersion;
+          return;
+        }
+
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        if (!context) {
+          computedVersionRef.current = targetVersion;
+          return;
+        }
+
+        const rootStyle = window.getComputedStyle(document.documentElement);
+        const fontFamilyValue = rootStyle.getPropertyValue('--data-font-family').trim();
+        const fontSizeValue = rootStyle.getPropertyValue('--data-font-size').trim();
+        const fallbackFontFamily = fontFamilyValue || 'Inter, sans-serif';
+        const parsedFontSize = parseFloat(fontSizeValue || '');
+        const fontSize = Number.isFinite(parsedFontSize) && parsedFontSize > 0 ? parsedFontSize : 13;
+        context.font = `${fontSize}px ${fallbackFontFamily}`;
+
+        const measureCache = new Map<string, number>();
+        const columnWidthSamples: Record<string, number[]> = {};
+
+        const measureText = (text: string): number => {
+          const cached = measureCache.get(text);
+          if (cached != null) {
+            return cached;
+          }
+          const width = context.measureText(text).width + CELL_HORIZONTAL_PADDING_PX;
+          measureCache.set(text, width);
+          return width;
+        };
+
+        for (const column of columns) {
+          columnWidthSamples[column.key] = [];
+        }
+
+        for (const row of sampledRows) {
+          for (const column of columns) {
+            const rawValue = row[column.key];
+            const text = rawValue == null ? '' : String(rawValue);
+            columnWidthSamples[column.key]!.push(measureText(text));
+          }
+        }
+
+        for (const column of columns) {
+          const headerText = column.headerName || column.key;
+          columnWidthSamples[column.key]!.push(measureText(headerText));
+        }
+
+        const nextWidths: Record<string, number> = {};
+
+        for (const column of columns) {
+          const samples = columnWidthSamples[column.key] ?? [];
+          if (!samples.length) {
+            nextWidths[column.key] = MIN_COLUMN_WIDTH;
+            continue;
+          }
+
+          samples.sort((a, b) => a - b);
+          const percentileIndex = Math.max(
+            0,
+            Math.floor((samples.length - 1) * AUTO_WIDTH_PERCENTILE)
+          );
+          const percentileWidth = samples[percentileIndex] ?? MIN_COLUMN_WIDTH;
+          const boundedWidth = Math.min(
+            MAX_COLUMN_WIDTH,
+            Math.max(MIN_COLUMN_WIDTH, Math.ceil(percentileWidth))
+          );
+          nextWidths[column.key] = boundedWidth;
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setAutoColumnWidths(nextWidths);
+        computedVersionRef.current = targetVersion;
+      } catch (error) {
+        if (import.meta.env.DEV) {
+          console.warn('[grid] Failed to compute auto column widths', error);
+        }
+      }
+    };
+
+    void computeAutoWidths();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [columns, gridApi, status, totalRows, viewVersion]);
 
   const themeClass = theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz';
   const showPlaceholder = status !== 'loading' && (matchedRows ?? 0) === 0;
