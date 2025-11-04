@@ -32,6 +32,14 @@ import type {
 import { evaluateFilterOnRows } from './filterEngine';
 import type { SearchRequest, SearchResult } from './searchEngine';
 import { shouldPreferDuckDb, tryGroupWithDuckDb } from './duckDbPlan';
+import {
+  FuzzyIndexStore,
+  type FuzzyIndexSnapshot,
+  type FuzzyIndexFingerprint,
+  type FuzzyColumnSnapshot,
+  FUZZY_INDEX_STORE_VERSION
+} from './fuzzyIndexStore';
+import { createFuzzyFingerprint, fuzzySnapshotMatchesFingerprint } from './fuzzyIndexUtils';
 import { logDebug } from '../utils/debugLog';
 
 export type {
@@ -89,6 +97,15 @@ export interface SeekRowsResult {
   checkpointInterval: number;
 }
 
+export interface PersistFuzzyIndexRequest {
+  createdAt?: number;
+  rowCount: number;
+  bytesParsed: number;
+  tokenLimit: number;
+  trigramSize: number;
+  columns: FuzzyColumnSnapshot[];
+}
+
 export interface ApplySortRequest {
   sorts: SortDefinition[];
   offset?: number;
@@ -144,6 +161,11 @@ export interface DataWorkerApi {
   deleteLabel: (request: DeleteLabelRequest) => Promise<{ deleted: boolean }>;
   exportTags: () => Promise<ExportTagsResponse>;
   importTags: (request: ImportTagsRequest) => Promise<TaggingSnapshot>;
+  getFuzzyIndexSnapshot: () => Promise<FuzzyIndexSnapshot | null>;
+  persistFuzzyIndexSnapshot: (
+    request: PersistFuzzyIndexRequest
+  ) => Promise<FuzzyIndexSnapshot | null>;
+  clearFuzzyIndexSnapshot: () => Promise<void>;
 }
 
 const state: {
@@ -166,6 +188,9 @@ const state: {
     totalRows: number;
     bytesParsed: number;
     fileHandle: FileSystemFileHandle | null;
+    fuzzyIndexStore: FuzzyIndexStore | null;
+    fuzzyIndexSnapshot: FuzzyIndexSnapshot | null;
+    fuzzyFingerprint: FuzzyIndexFingerprint | null;
   };
   tagging: {
     labels: LabelDefinition[];
@@ -190,7 +215,10 @@ const state: {
     sortedRowIds: null,
     totalRows: 0,
     bytesParsed: 0,
-    fileHandle: null
+    fileHandle: null,
+    fuzzyIndexStore: null,
+    fuzzyIndexSnapshot: null,
+    fuzzyFingerprint: null
   },
   tagging: {
     labels: [],
@@ -207,6 +235,7 @@ const roundMs = (value: number): number => {
 
   return Math.round(value * 100) / 100;
 };
+
 
 const ensureBatchStore = (): RowBatchStore => {
   if (!state.dataset.batchStore) {
@@ -445,6 +474,9 @@ const api: DataWorkerApi = {
     state.dataset.totalRows = 0;
     state.dataset.bytesParsed = 0;
     state.dataset.fileHandle = handle;
+    state.dataset.fuzzyIndexStore = null;
+    state.dataset.fuzzyIndexSnapshot = null;
+    state.dataset.fuzzyFingerprint = null;
 
     const fileStart = now();
     const file = await handle.getFile();
@@ -454,6 +486,34 @@ const api: DataWorkerApi = {
       size: file.size,
       type: file.type
     });
+
+    const fuzzyFingerprint = createFuzzyFingerprint(file, handle);
+    const fuzzyStoreStart = now();
+    const fuzzyIndexStore = await FuzzyIndexStore.create(handle);
+    debugLog('FuzzyIndexStore.create completed', {
+      durationMs: roundMs(now() - fuzzyStoreStart)
+    });
+    state.dataset.fuzzyIndexStore = fuzzyIndexStore;
+    state.dataset.fuzzyFingerprint = fuzzyFingerprint;
+
+    const cachedFuzzyIndex = await fuzzyIndexStore.load();
+    if (
+      cachedFuzzyIndex &&
+      fuzzySnapshotMatchesFingerprint(cachedFuzzyIndex, fuzzyFingerprint)
+    ) {
+      state.dataset.fuzzyIndexSnapshot = cachedFuzzyIndex;
+      debugLog('Hydrated fuzzy index snapshot from cache', {
+        createdAt: cachedFuzzyIndex.createdAt,
+        columnCount: cachedFuzzyIndex.columns.length,
+        tokenLimit: cachedFuzzyIndex.tokenLimit
+      });
+    } else if (cachedFuzzyIndex) {
+      debugLog('Discarded stale fuzzy index snapshot', {
+        cachedFingerprint: cachedFuzzyIndex.fingerprint,
+        expectedFingerprint: fuzzyFingerprint
+      });
+      await fuzzyIndexStore.clear();
+    }
 
     const compression = detectCompression({
       fileName: file.name ?? handle.name,
@@ -1192,6 +1252,70 @@ const api: DataWorkerApi = {
       labels: state.tagging.labels,
       tags: state.tagging.tags
     };
+  },
+  async getFuzzyIndexSnapshot(): Promise<FuzzyIndexSnapshot | null> {
+    return state.dataset.fuzzyIndexSnapshot;
+  },
+  async persistFuzzyIndexSnapshot(
+    request: PersistFuzzyIndexRequest
+  ): Promise<FuzzyIndexSnapshot | null> {
+    const fingerprint = state.dataset.fuzzyFingerprint;
+    if (!fingerprint) {
+      return null;
+    }
+
+    if (!Array.isArray(request.columns)) {
+      throw new Error('Fuzzy index snapshot requires a columns array.');
+    }
+
+    const rowCount =
+      typeof request.rowCount === 'number' && Number.isFinite(request.rowCount)
+        ? Math.max(0, Math.floor(request.rowCount))
+        : state.dataset.totalRows;
+    const bytesParsed =
+      typeof request.bytesParsed === 'number' && Number.isFinite(request.bytesParsed)
+        ? Math.max(0, Math.floor(request.bytesParsed))
+        : state.dataset.bytesParsed;
+    const tokenLimit =
+      typeof request.tokenLimit === 'number' && Number.isFinite(request.tokenLimit)
+        ? Math.max(0, Math.floor(request.tokenLimit))
+        : 0;
+    const trigramSize =
+      typeof request.trigramSize === 'number' && Number.isFinite(request.trigramSize)
+        ? Math.max(1, Math.floor(request.trigramSize))
+        : 3;
+    const createdAt =
+      typeof request.createdAt === 'number' && Number.isFinite(request.createdAt)
+        ? request.createdAt
+        : Date.now();
+
+    const snapshot: FuzzyIndexSnapshot = {
+      version: FUZZY_INDEX_STORE_VERSION,
+      createdAt,
+      rowCount,
+      bytesParsed,
+      tokenLimit,
+      trigramSize,
+      fingerprint,
+      columns: request.columns
+    };
+
+    state.dataset.fuzzyIndexSnapshot = snapshot;
+
+    if (
+      state.dataset.fuzzyIndexStore &&
+      fuzzySnapshotMatchesFingerprint(snapshot, fingerprint)
+    ) {
+      await state.dataset.fuzzyIndexStore.save(snapshot);
+    }
+
+    return snapshot;
+  },
+  async clearFuzzyIndexSnapshot(): Promise<void> {
+    state.dataset.fuzzyIndexSnapshot = null;
+    if (state.dataset.fuzzyIndexStore) {
+      await state.dataset.fuzzyIndexStore.clear();
+    }
   }
 };
 

@@ -22,7 +22,9 @@ import type {
   DeleteLabelRequest,
   ImportTagsRequest,
   LabelDefinition,
-  LoadCompleteSummary
+  LoadCompleteSummary,
+  PersistFuzzyIndexRequest,
+  FuzzyIndexSnapshot
 } from './dataWorker.worker';
 
 let workerInstance: Remote<DataWorkerApi> | null = null;
@@ -62,5 +64,7 @@ export type {
   DeleteLabelRequest,
   ImportTagsRequest,
   LabelDefinition,
-  LoadCompleteSummary
+  LoadCompleteSummary,
+  PersistFuzzyIndexRequest,
+  FuzzyIndexSnapshot
 };
