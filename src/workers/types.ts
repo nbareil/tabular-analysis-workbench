@@ -151,6 +151,11 @@ export interface DeleteLabelRequest {
   labelId: string;
 }
 
+export interface DeleteLabelResponse {
+  deleted: boolean;
+  updated: Record<number, TagRecord>;
+}
+
 export interface ExportTagsResponse {
   labels: LabelDefinition[];
   tags: Record<number, TagRecord>;

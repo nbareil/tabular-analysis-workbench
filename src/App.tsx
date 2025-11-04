@@ -5,6 +5,7 @@ import { proxy } from 'comlink';
 import { useAppStore } from '@state/appStore';
 import { useDataStore } from '@state/dataStore';
 import { useSessionStore } from '@state/sessionStore';
+import { useTagStore } from '@state/tagStore';
 import DataGrid from '@components/DataGrid';
 import FilterBuilder from '@components/filter/FilterBuilder';
 import PivotView from '@components/PivotView';
@@ -177,6 +178,10 @@ const App = (): JSX.Element => {
       cancelled = true;
     };
   }, [complete, fileHandle, reportProgress, setError, setHeader, startLoading]);
+
+  useEffect(() => {
+    useTagStore.getState().reset();
+  }, [fileHandle]);
 
   const filterExpression = useMemo(() => buildFilterExpression(filters), [filters]);
 

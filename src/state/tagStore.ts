@@ -61,13 +61,26 @@ export const useTagStore = create<TagState>((set, get) => ({
     try {
       const worker = getDataWorker();
       const response = await worker.tagRows(request);
-      set((state) => ({
-        tags: {
-          ...state.tags,
-          ...response.updated
-        },
-        status: 'ready'
-      }));
+      set((state) => {
+        const nextTags: Record<number, TagRecord> = { ...state.tags };
+        for (const [rowId, record] of Object.entries(response.updated)) {
+          const numericRowId = Number(rowId);
+          if (!Number.isFinite(numericRowId)) {
+            continue;
+          }
+
+          if (record.labelId == null && !record.note) {
+            delete nextTags[numericRowId];
+          } else {
+            nextTags[numericRowId] = record;
+          }
+        }
+
+        return {
+          tags: nextTags,
+          status: 'ready'
+        };
+      });
       return response;
     } catch (error) {
       set({
@@ -138,12 +151,31 @@ export const useTagStore = create<TagState>((set, get) => ({
     try {
       const worker = getDataWorker();
       const response = await worker.deleteLabel({ labelId });
-      if (response.deleted) {
-        set((state) => ({
-          labels: state.labels.filter((label) => label.id !== labelId),
+      set((state) => {
+        const nextLabels = response.deleted
+          ? state.labels.filter((label) => label.id !== labelId)
+          : state.labels;
+        const nextTags = { ...state.tags };
+
+        for (const [rowId, record] of Object.entries(response.updated)) {
+          const numericRowId = Number(rowId);
+          if (!Number.isFinite(numericRowId)) {
+            continue;
+          }
+
+          if (record.labelId == null && !record.note) {
+            delete nextTags[numericRowId];
+          } else {
+            nextTags[numericRowId] = record;
+          }
+        }
+
+        return {
+          labels: nextLabels,
+          tags: nextTags,
           status: 'ready'
-        }));
-      }
+        };
+      });
       return response.deleted;
     } catch (error) {
       set({

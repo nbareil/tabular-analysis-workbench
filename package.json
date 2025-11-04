@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx",
-    "test": "vitest"
+    "test": "vitest --run"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "^1.28.0",

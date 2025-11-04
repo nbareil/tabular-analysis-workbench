@@ -26,6 +26,7 @@ import type {
   ExportTagsResponse,
   UpdateLabelRequest,
   DeleteLabelRequest,
+  DeleteLabelResponse,
   ImportTagsRequest,
   TagRecord
 } from './types';
@@ -41,6 +42,8 @@ import {
 } from './fuzzyIndexStore';
 import { createFuzzyFingerprint, fuzzySnapshotMatchesFingerprint } from './fuzzyIndexUtils';
 import { logDebug } from '../utils/debugLog';
+import { TaggingStore } from './taggingStore';
+import { buildTagRecord, cascadeLabelDeletion, isTagRecordEmpty } from './taggingHelpers';
 
 export type {
   GroupingRequest,
@@ -51,6 +54,7 @@ export type {
   ExportTagsResponse,
   UpdateLabelRequest,
   DeleteLabelRequest,
+  DeleteLabelResponse,
   ImportTagsRequest,
   LabelDefinition,
   TagRecord
@@ -158,7 +162,7 @@ export interface DataWorkerApi {
   tagRows: (request: TagRowsRequest) => Promise<TagRowsResponse>;
   clearTag: (rowIds: number[]) => Promise<TagRowsResponse>;
   updateLabel: (request: UpdateLabelRequest) => Promise<LabelDefinition>;
-  deleteLabel: (request: DeleteLabelRequest) => Promise<{ deleted: boolean }>;
+  deleteLabel: (request: DeleteLabelRequest) => Promise<DeleteLabelResponse>;
   exportTags: () => Promise<ExportTagsResponse>;
   importTags: (request: ImportTagsRequest) => Promise<TaggingSnapshot>;
   getFuzzyIndexSnapshot: () => Promise<FuzzyIndexSnapshot | null>;
@@ -195,6 +199,10 @@ const state: {
   tagging: {
     labels: LabelDefinition[];
     tags: Record<number, TagRecord>;
+    store: TaggingStore | null;
+    dirty: boolean;
+    persistTimer: number | null;
+    fingerprint: FuzzyIndexFingerprint | null;
   };
 } = {
   options: {
@@ -222,7 +230,11 @@ const state: {
   },
   tagging: {
     labels: [],
-    tags: {}
+    tags: {},
+    store: null,
+    dirty: false,
+    persistTimer: null,
+    fingerprint: null
   }
 };
 
@@ -236,6 +248,124 @@ const roundMs = (value: number): number => {
   return Math.round(value * 100) / 100;
 };
 
+const TAG_PERSIST_DEBOUNCE_MS = 5_000;
+const DEFAULT_LABEL_COLOR = '#8899ff';
+
+const generateRandomId = (): string =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+const clearTaggingPersistTimer = (): void => {
+  if (state.tagging.persistTimer != null) {
+    clearTimeout(state.tagging.persistTimer);
+    state.tagging.persistTimer = null;
+  }
+};
+
+const persistTaggingNow = async (): Promise<void> => {
+  if (!state.tagging.store || !state.tagging.dirty) {
+    return;
+  }
+
+  try {
+    await state.tagging.store.save({
+      labels: state.tagging.labels,
+      tags: state.tagging.tags
+    });
+    state.tagging.dirty = false;
+  } catch (error) {
+    console.warn('[data-worker][tagging] Failed to persist snapshot', error);
+  }
+};
+
+const scheduleTaggingPersist = (): void => {
+  if (!state.tagging.store) {
+    return;
+  }
+
+  clearTaggingPersistTimer();
+  state.tagging.persistTimer = setTimeout(() => {
+    void persistTaggingNow();
+  }, TAG_PERSIST_DEBOUNCE_MS) as unknown as number;
+};
+
+const resetTaggingState = (): void => {
+  clearTaggingPersistTimer();
+  state.tagging.labels = [];
+  state.tagging.tags = {};
+  state.tagging.store = null;
+  state.tagging.dirty = false;
+  state.tagging.fingerprint = null;
+};
+
+const hydrateTaggingStore = async (
+  handle: FileSystemFileHandle,
+  fingerprint: FuzzyIndexFingerprint
+): Promise<void> => {
+  clearTaggingPersistTimer();
+
+  try {
+    const store = await TaggingStore.create(handle, fingerprint);
+    state.tagging.store = store;
+    state.tagging.fingerprint = fingerprint;
+
+    const snapshot = await store.load();
+    if (snapshot) {
+      state.tagging.labels = snapshot.labels ?? [];
+      state.tagging.tags = snapshot.tags ?? {};
+      state.tagging.dirty = false;
+    } else {
+      state.tagging.labels = [];
+      state.tagging.tags = {};
+      state.tagging.dirty = false;
+    }
+  } catch (error) {
+    console.warn('[data-worker][tagging] Failed to hydrate tagging store', error);
+    state.tagging.store = null;
+    state.tagging.fingerprint = null;
+    state.tagging.labels = [];
+    state.tagging.tags = {};
+    state.tagging.dirty = false;
+  }
+};
+
+const markTaggingDirty = (): void => {
+  state.tagging.dirty = true;
+  scheduleTaggingPersist();
+};
+
+const normaliseImportedLabel = (label: LabelDefinition, fallbackTimestamp: number): LabelDefinition => {
+  const safeId =
+    typeof label.id === 'string' && label.id.trim().length > 0 ? label.id.trim() : generateRandomId();
+  const safeName =
+    typeof label.name === 'string' && label.name.trim().length > 0 ? label.name.trim() : 'Untitled label';
+  const safeColor =
+    typeof label.color === 'string' && label.color.trim().length > 0
+      ? label.color.trim()
+      : DEFAULT_LABEL_COLOR;
+  const createdAt =
+    typeof label.createdAt === 'number' && Number.isFinite(label.createdAt)
+      ? label.createdAt
+      : fallbackTimestamp;
+  const updatedAt =
+    typeof label.updatedAt === 'number' && Number.isFinite(label.updatedAt)
+      ? label.updatedAt
+      : fallbackTimestamp;
+  const description =
+    typeof label.description === 'string' && label.description.trim().length > 0
+      ? label.description.trim()
+      : undefined;
+
+  return {
+    id: safeId,
+    name: safeName,
+    color: safeColor,
+    description,
+    createdAt,
+    updatedAt
+  };
+};
 
 const ensureBatchStore = (): RowBatchStore => {
   if (!state.dataset.batchStore) {
@@ -432,6 +562,9 @@ const api: DataWorkerApi = {
       throw new Error('A file handle must be provided to loadFile.');
     }
 
+    await persistTaggingNow();
+    resetTaggingState();
+
     const debugEnabled = state.options.debugLogging;
     const slowBatchThreshold = state.options.slowBatchThresholdMs;
     let datasetKey = 'pending';
@@ -514,6 +647,8 @@ const api: DataWorkerApi = {
       });
       await fuzzyIndexStore.clear();
     }
+
+    await hydrateTaggingStore(handle, fuzzyFingerprint);
 
     const compression = detectCompression({
       fileName: file.name ?? handle.name,
@@ -1159,43 +1294,101 @@ const api: DataWorkerApi = {
     };
   },
   async tagRows({ rowIds, labelId, note }: TagRowsRequest): Promise<TagRowsResponse> {
-    const now = Date.now();
-    const label = labelId ? state.tagging.labels.find((entry) => entry.id === labelId) : undefined;
+    const timestamp = Date.now();
+    const resolvedLabelId = labelId ?? null;
+    const label = resolvedLabelId
+      ? state.tagging.labels.find((entry) => entry.id === resolvedLabelId)
+      : undefined;
     const updated: TagRowsResponse['updated'] = {};
+    let mutated = false;
 
     for (const rowId of rowIds) {
-      const record: TagRecord = {
-        labelId: labelId ?? null,
+      if (!Number.isFinite(rowId) || rowId < 0) {
+        continue;
+      }
+
+      const existing = state.tagging.tags[rowId];
+      const record = buildTagRecord({
+        existing,
+        label,
+        labelId: resolvedLabelId,
         note,
-        color: label?.color,
-        updatedAt: now
-      };
-      state.tagging.tags[rowId] = record;
+        timestamp
+      });
+
+      if (isTagRecordEmpty(record)) {
+        if (existing) {
+          delete state.tagging.tags[rowId];
+          mutated = true;
+        }
+      } else {
+        const changed =
+          !existing ||
+          existing.labelId !== record.labelId ||
+          existing.note !== record.note ||
+          existing.color !== record.color;
+        state.tagging.tags[rowId] = record;
+        mutated = mutated || changed;
+      }
+
       updated[rowId] = record;
+    }
+
+    if (mutated) {
+      markTaggingDirty();
     }
 
     return { updated };
   },
   async clearTag(rowIds: number[]): Promise<TagRowsResponse> {
-    const now = Date.now();
+    const timestamp = Date.now();
     const updated: TagRowsResponse['updated'] = {};
+    let mutated = false;
 
     for (const rowId of rowIds) {
-      delete state.tagging.tags[rowId];
+      if (!Number.isFinite(rowId) || rowId < 0) {
+        continue;
+      }
+
+      if (state.tagging.tags[rowId]) {
+        delete state.tagging.tags[rowId];
+        mutated = true;
+      }
+
       updated[rowId] = {
         labelId: null,
-        updatedAt: now
+        updatedAt: timestamp
       };
+    }
+
+    if (mutated) {
+      markTaggingDirty();
     }
 
     return { updated };
   },
   async updateLabel({ label }: UpdateLabelRequest): Promise<LabelDefinition> {
+    const timestamp = Date.now();
+    const safeName =
+      typeof label.name === 'string' && label.name.trim().length > 0
+        ? label.name.trim()
+        : 'Untitled label';
+    const safeColor =
+      typeof label.color === 'string' && label.color.trim().length > 0
+        ? label.color.trim()
+        : DEFAULT_LABEL_COLOR;
+    const safeDescription =
+      typeof label.description === 'string' && label.description.trim().length > 0
+        ? label.description.trim()
+        : undefined;
     const existingIndex = state.tagging.labels.findIndex((entry) => entry.id === label.id);
     const nextLabel: LabelDefinition = {
-      ...label,
-      createdAt: label.createdAt ?? Date.now(),
-      updatedAt: Date.now()
+      id: label.id,
+      name: safeName,
+      color: safeColor,
+      description: safeDescription,
+      createdAt: typeof label.createdAt === 'number' ? label.createdAt : timestamp,
+      updatedAt: timestamp
     };
 
     if (existingIndex >= 0) {
@@ -1204,22 +1397,57 @@ const api: DataWorkerApi = {
       state.tagging.labels.push(nextLabel);
     }
 
+    for (const [key, record] of Object.entries(state.tagging.tags)) {
+      if (record.labelId !== nextLabel.id) {
+        continue;
+      }
+
+      const rowId = Number(key);
+      if (!Number.isFinite(rowId) || rowId < 0) {
+        continue;
+      }
+
+      state.tagging.tags[rowId] = {
+        ...record,
+        color: nextLabel.color,
+        updatedAt: timestamp
+      };
+    }
+
+    markTaggingDirty();
+
     return nextLabel;
   },
-  async deleteLabel({ labelId }: DeleteLabelRequest): Promise<{ deleted: boolean }> {
+  async deleteLabel({ labelId }: DeleteLabelRequest): Promise<DeleteLabelResponse> {
     const before = state.tagging.labels.length;
     state.tagging.labels = state.tagging.labels.filter((label) => label.id !== labelId);
+    const timestamp = Date.now();
+    const updated: Record<number, TagRecord> = {};
 
     for (const [rowId, record] of Object.entries(state.tagging.tags)) {
       if (record.labelId === labelId) {
-        state.tagging.tags[Number(rowId)] = {
-          labelId: null,
-          updatedAt: Date.now()
-        };
+        const numericRowId = Number(rowId);
+        if (!Number.isFinite(numericRowId) || numericRowId < 0) {
+          continue;
+        }
+
+        const nextRecord = cascadeLabelDeletion(record, timestamp);
+        if (isTagRecordEmpty(nextRecord)) {
+          delete state.tagging.tags[numericRowId];
+        } else {
+          state.tagging.tags[numericRowId] = nextRecord;
+        }
+
+        updated[numericRowId] = nextRecord;
       }
     }
 
-    return { deleted: state.tagging.labels.length < before };
+    const deleted = state.tagging.labels.length < before;
+    if (deleted || Object.keys(updated).length > 0) {
+      markTaggingDirty();
+    }
+
+    return { deleted, updated };
   },
   async exportTags(): Promise<ExportTagsResponse> {
     return {
@@ -1229,23 +1457,83 @@ const api: DataWorkerApi = {
     };
   },
   async importTags(request: ImportTagsRequest): Promise<TaggingSnapshot> {
-    if (request.mergeStrategy === 'replace') {
-      state.tagging.labels = request.labels;
-      state.tagging.tags = request.tags;
-    } else {
-      const merged: Record<string, LabelDefinition> = {};
+    const strategy = request.mergeStrategy ?? 'merge';
+    const timestamp = Date.now();
+    const incomingLabels = Array.isArray(request.labels) ? request.labels : [];
+    const normalisedIncoming = incomingLabels.map((entry) => normaliseImportedLabel(entry, timestamp));
+
+    const labelMap: Map<string, LabelDefinition> = new Map();
+    if (strategy === 'merge') {
       for (const label of state.tagging.labels) {
-        merged[label.id] = label;
+        labelMap.set(label.id, label);
       }
-      for (const label of request.labels) {
-        merged[label.id] = label;
+    }
+    for (const label of normalisedIncoming) {
+      labelMap.set(label.id, label);
+    }
+    state.tagging.labels = Array.from(labelMap.values());
+
+    const nextTags: Record<number, TagRecord> =
+      strategy === 'merge' ? { ...state.tagging.tags } : {};
+    const incomingTags = request.tags ?? {};
+
+    let mutated = strategy === 'replace';
+
+    for (const [rowKey, record] of Object.entries(incomingTags)) {
+      const rowId = Number(rowKey);
+      if (!Number.isFinite(rowId) || rowId < 0) {
+        continue;
       }
 
-      state.tagging.labels = Object.values(merged);
-      state.tagging.tags = {
-        ...state.tagging.tags,
-        ...request.tags
-      };
+      const incomingLabelId =
+        typeof record.labelId === 'string' && record.labelId.trim().length > 0
+          ? record.labelId.trim()
+          : null;
+      if (incomingLabelId && !labelMap.has(incomingLabelId)) {
+        continue;
+      }
+
+      const label = incomingLabelId ? labelMap.get(incomingLabelId) : undefined;
+      const note =
+        typeof record.note === 'string'
+          ? record.note
+          : undefined;
+      const recordTimestamp =
+        typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
+          ? record.updatedAt
+          : timestamp;
+      const existing = strategy === 'merge' ? nextTags[rowId] : undefined;
+      const nextRecord = buildTagRecord({
+        existing,
+        label,
+        labelId: incomingLabelId,
+        note,
+        timestamp: recordTimestamp
+      });
+
+      if (isTagRecordEmpty(nextRecord)) {
+        if (nextTags[rowId]) {
+          delete nextTags[rowId];
+          mutated = true;
+        }
+        continue;
+      }
+
+      const previous = nextTags[rowId];
+      const changed =
+        !previous ||
+        previous.labelId !== nextRecord.labelId ||
+        previous.note !== nextRecord.note ||
+        previous.color !== nextRecord.color;
+
+      nextTags[rowId] = nextRecord;
+      mutated = mutated || changed;
+    }
+
+    state.tagging.tags = nextTags;
+
+    if (mutated || normalisedIncoming.length > 0) {
+      markTaggingDirty();
     }
 
     return {

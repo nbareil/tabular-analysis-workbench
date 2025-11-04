@@ -20,6 +20,7 @@ import type {
   ExportTagsResponse,
   UpdateLabelRequest,
   DeleteLabelRequest,
+  DeleteLabelResponse,
   ImportTagsRequest,
   LabelDefinition,
   LoadCompleteSummary,
