@@ -12,10 +12,12 @@ import PivotView from '@components/PivotView';
 import ColumnsPanel from '@components/ColumnsPanel';
 import LabelsPanel from '@components/LabelsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
+import TagNoteDialog from '@components/tagging/TagNoteDialog';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
 import { logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
+import { summariseLabelFilters } from '@utils/labelFilters';
 
 const formatBytes = (bytes: number): string => {
   if (bytes <= 0) {
@@ -54,12 +56,21 @@ const App = (): JSX.Element => {
   const totalRows = useDataStore((state) => state.totalRows);
   const stats = useDataStore((state) => state.stats);
   const columns = useDataStore((state) => state.columns.map((column) => column.key));
+  const tagLabels = useTagStore((state) => state.labels);
+  const tagRecords = useTagStore((state) => state.tags);
+  const applyTagToRows = useTagStore((state) => state.applyTag);
   const [searchTerm, setSearchTerm] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [showPivot, setShowPivot] = useState(false);
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [noteEditor, setNoteEditor] = useState<{
+    rowId: number;
+    labelId: string | null;
+    note: string;
+  } | null>(null);
+  const [noteSaving, setNoteSaving] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -181,29 +192,109 @@ const App = (): JSX.Element => {
 
   useEffect(() => {
     useTagStore.getState().reset();
+    setNoteEditor(null);
+    setNoteSaving(false);
   }, [fileHandle]);
 
   const filterExpression = useMemo(() => buildFilterExpression(filters), [filters]);
 
+  const labelFilterSummary = useMemo(
+    () => summariseLabelFilters(filters, tagLabels),
+    [filters, tagLabels]
+  );
+
   const statusText = useMemo(() => {
+    let base: string;
     if (matchedRows != null && totalRows > 0) {
-      return `Showing ${matchedRows.toLocaleString()} of ${totalRows.toLocaleString()} rows`;
+      base = `Showing ${matchedRows.toLocaleString()} of ${totalRows.toLocaleString()} rows`;
+    } else if (loaderMessage) {
+      base = loaderMessage;
+    } else if (loaderStatus === 'loading') {
+      base = stats
+        ? `Streaming… parsed ${stats.rowsParsed.toLocaleString()} rows (${formatBytes(stats.bytesParsed)})`
+        : 'Streaming CSV/TSV ingestion…';
+    } else {
+      base = 'Ready for streaming CSV/TSV ingestion.';
     }
 
-    if (loaderMessage) {
-      return loaderMessage;
+    if (labelFilterSummary) {
+      return `${base} • ${labelFilterSummary.summary}`;
     }
 
-    if (loaderStatus === 'loading') {
-      if (stats) {
-        return `Streaming… parsed ${stats.rowsParsed.toLocaleString()} rows (${formatBytes(stats.bytesParsed)})`;
+    return base;
+  }, [matchedRows, totalRows, loaderMessage, loaderStatus, stats, labelFilterSummary]);
+
+  const openNoteEditor = useCallback(
+    ({ rowId }: { rowId: number }) => {
+      const record = tagRecords[rowId] ?? null;
+      setNoteEditor({
+        rowId,
+        labelId: record?.labelId ?? null,
+        note: record?.note ?? ''
+      });
+    },
+    [tagRecords]
+  );
+
+  const submitNote = useCallback(
+    async (noteValue: string) => {
+      if (!noteEditor) {
+        return;
       }
 
-      return 'Streaming CSV/TSV ingestion…';
+      setNoteSaving(true);
+      try {
+        await applyTagToRows({
+          rowIds: [noteEditor.rowId],
+          labelId: noteEditor.labelId,
+          note: noteValue
+        });
+        setNoteEditor(null);
+      } catch (error) {
+        console.error('Failed to update note', error);
+      } finally {
+        setNoteSaving(false);
+      }
+    },
+    [applyTagToRows, noteEditor]
+  );
+
+  const handleSaveNote = useCallback(
+    (noteValue: string) => {
+      void submitNote(noteValue);
+    },
+    [submitNote]
+  );
+
+  const handleClearNote = useCallback(() => {
+    void submitNote('');
+  }, [submitNote]);
+
+  const noteEditorLabel = useMemo(() => {
+    if (!noteEditor) {
+      return undefined;
     }
 
-    return 'Ready for streaming CSV/TSV ingestion.';
-  }, [matchedRows, totalRows, loaderMessage, loaderStatus, stats]);
+    if (noteEditor.labelId == null) {
+      return {
+        name: 'No label',
+        color: undefined
+      };
+    }
+
+    const match = tagLabels.find((label) => label.id === noteEditor.labelId);
+    if (!match) {
+      return {
+        name: `Unknown label (${noteEditor.labelId})`,
+        color: undefined
+      };
+    }
+
+    return {
+      name: match.name,
+      color: match.color
+    };
+  }, [noteEditor, tagLabels]);
 
   useEffect(() => {
     if (!workerReady) {
@@ -421,7 +512,11 @@ const App = (): JSX.Element => {
         <section className="flex flex-1 flex-col">
           <div className="flex-1 overflow-auto p-4">
             <div className="h-full rounded border border-slate-800">
-              {showPivot ? <PivotView /> : <DataGrid status={loaderStatus} />}
+              {showPivot ? (
+                <PivotView />
+              ) : (
+                <DataGrid status={loaderStatus} onEditTagNote={openNoteEditor} />
+              )}
             </div>
           </div>
           <footer className="border-t border-slate-800 px-4 py-2 text-xs text-slate-500">
@@ -432,6 +527,20 @@ const App = (): JSX.Element => {
       <OptionsPanel open={optionsOpen} onClose={() => setOptionsOpen(false)} />
       <LabelsPanel open={labelsOpen} onClose={() => setLabelsOpen(false)} />
       <ColumnsPanel open={columnsOpen} onClose={() => setColumnsOpen(false)} />
+      <TagNoteDialog
+        open={noteEditor != null}
+        initialNote={noteEditor?.note ?? ''}
+        labelName={noteEditorLabel?.name}
+        labelColor={noteEditorLabel?.color}
+        onSave={handleSaveNote}
+        onClear={handleClearNote}
+        onClose={() => {
+          if (!noteSaving) {
+            setNoteEditor(null);
+          }
+        }}
+        saving={noteSaving}
+      />
     </div>
   );
 };

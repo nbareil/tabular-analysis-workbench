@@ -139,9 +139,10 @@ const TagCellRenderer = ({
 
 interface DataGridProps {
   status: LoaderStatus;
+  onEditTagNote?: (payload: { rowId: number }) => void;
 }
 
-const DataGrid = ({ status }: DataGridProps): JSX.Element => {
+const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const columns = useDataStore((state) => state.columns);
   const searchRows = useDataStore((state) => state.searchRows);
   const matchedRows = useDataStore((state) => state.matchedRows);
@@ -852,6 +853,15 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     [applyTagToRows, clearTagFromRows, closeMenu, contextMenu, getSelectedRowIds, tagMutationPending]
   );
 
+  const handleEditNote = useCallback(() => {
+    if (!contextMenu || contextMenu.rowId == null || !onEditTagNote) {
+      return;
+    }
+
+    onEditTagNote({ rowId: contextMenu.rowId });
+    closeMenu();
+  }, [closeMenu, contextMenu, onEditTagNote]);
+
   const handleSortChanged = useCallback(
     (event: SortChangedEvent) => {
       const columnState = event.columnApi.getColumnState();
@@ -967,6 +977,15 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
                 </button>
               );
             })}
+            {onEditTagNote ? (
+              <button
+                type="button"
+                className="mt-1 flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-slate-200 hover:bg-slate-800"
+                onClick={handleEditNote}
+              >
+                Edit note
+              </button>
+            ) : null}
             {hasTagOrNote ? (
               <button
                 type="button"
