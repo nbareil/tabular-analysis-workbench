@@ -10,15 +10,19 @@ import type {
   IGetRowsParams,
   GridApi,
   ColumnApi,
-  GridReadyEvent
+  GridReadyEvent,
+  ColDef,
+  ICellRendererParams
 } from 'ag-grid-community';
 
 import { useAppStore } from '@state/appStore';
 import { useDataStore, type GridColumn, type GridRow, type LoaderStatus } from '@state/dataStore';
+import { useTagStore } from '@state/tagStore';
 import type { FilterState, SessionSnapshot } from '@state/sessionStore';
 import { useSessionStore } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { logDebug } from '@utils/debugLog';
+import { buildTagCellValue, type TagCellValue } from '@utils/tagCells';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
 
@@ -87,6 +91,7 @@ interface FilterContextMenuState {
   y: number;
   columnId: string;
   displayValue: string;
+  rowId: number | null;
 }
 
 const AUTO_WIDTH_PERCENTILE = 0.8;
@@ -95,6 +100,40 @@ const AUTO_WIDTH_BLOCK_SIZE = 250;
 const CELL_HORIZONTAL_PADDING_PX = 32;
 const MIN_COLUMN_WIDTH = 120;
 const MAX_COLUMN_WIDTH = 520;
+
+const TagCellRenderer = ({
+  value
+}: ICellRendererParams<TagCellValue | null>): JSX.Element => {
+  if (!value) {
+    return (
+      <span className="flex items-center gap-2 text-[11px] text-slate-500">
+        <span className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-600" aria-hidden />
+        Add label
+      </span>
+    );
+  }
+
+  const { color, labelName, note } = value;
+  const text = labelName ?? (note ? 'No label' : 'Tagged');
+
+  return (
+    <span className="flex items-center gap-2 truncate text-xs text-slate-100">
+      <span
+        className="h-2.5 w-2.5 shrink-0 rounded-full"
+        style={
+          color
+            ? { backgroundColor: color }
+            : { border: '1px solid rgb(71 85 105)', backgroundColor: 'transparent' }
+        }
+        aria-hidden
+      />
+      <span className="truncate">{text}</span>
+      {note ? (
+        <span className="text-[10px] uppercase tracking-wide text-slate-400">Note</span>
+      ) : null}
+    </span>
+  );
+};
 
 interface DataGridProps {
   status: LoaderStatus;
@@ -115,9 +154,17 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   const [gridApi, setGridApi] = useState<GridApi | null>(null);
   const [columnApi, setColumnApi] = useState<ColumnApi | null>(null);
   const [autoColumnWidths, setAutoColumnWidths] = useState<Record<string, number>>({});
+  const tagLabels = useTagStore((state) => state.labels);
+  const tagRecords = useTagStore((state) => state.tags);
+  const tagStatus = useTagStore((state) => state.status);
+  const tagError = useTagStore((state) => state.error);
+  const loadTags = useTagStore((state) => state.load);
+  const applyTagToRows = useTagStore((state) => state.applyTag);
+  const clearTagFromRows = useTagStore((state) => state.clearTag);
   const initialRowsRequestedRef = useRef(false);
   const loadingVersionRef = useRef<number | null>(null);
   const computedVersionRef = useRef<number | null>(null);
+  const [tagMutationPending, setTagMutationPending] = useState(false);
 
   useEffect(() => {
     if (!columns.length) {
@@ -196,7 +243,78 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     return (type: GridColumn['type']) => mapping[type] ?? 'text';
   }, []);
 
-  const columnDefs = useMemo(
+  const labelLookup = useMemo(() => {
+    const map = new Map<string, (typeof tagLabels)[number]>();
+    for (const label of tagLabels) {
+      map.set(label.id, label);
+    }
+    return map;
+  }, [tagLabels]);
+
+  const tagDataRef = useRef({
+    tags: tagRecords,
+    labels: labelLookup
+  });
+
+  useEffect(() => {
+    tagDataRef.current = {
+      tags: tagRecords,
+      labels: labelLookup
+    };
+  }, [labelLookup, tagRecords]);
+
+  useEffect(() => {
+    if (status === 'ready' && tagStatus === 'idle') {
+      void loadTags();
+    }
+  }, [loadTags, status, tagStatus]);
+
+  useEffect(() => {
+    if (!gridApi) {
+      return;
+    }
+
+    gridApi.refreshCells({
+      columns: ['__tag'],
+      force: true,
+      suppressFlash: true
+    });
+  }, [gridApi, tagLabels, tagRecords]);
+
+  const tagColumnDef = useMemo<ColDef>(
+    () => ({
+      colId: '__tag',
+      headerName: 'Label',
+      headerTooltip: 'Row label',
+      pinned: 'left',
+      lockPosition: true,
+      suppressMenu: true,
+      sortable: false,
+      resizable: false,
+      suppressSizeToFit: true,
+      width: 160,
+      minWidth: 140,
+      maxWidth: 220,
+      cellRenderer: TagCellRenderer,
+      valueGetter: (params) => {
+        const { tags, labels } = tagDataRef.current;
+        return buildTagCellValue(params.data?.__rowId, tags, labels);
+      },
+      tooltipValueGetter: (params) => {
+        const value = params.value as TagCellValue | null;
+        if (!value) {
+          return null;
+        }
+        if (value.note) {
+          return value.note;
+        }
+        return value.labelName ?? null;
+      }
+    }),
+    []
+  );
+
+  const dataColumnDefs = useMemo(
     () =>
       orderedColumns.map((column) => ({
         field: column.key,
@@ -223,6 +341,11 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         })()
       })),
     [columnLayout.visibility, mapColumnTypeToAgDataType, orderedColumns, sorts]
+  );
+
+  const columnDefs = useMemo(
+    () => [tagColumnDef, ...dataColumnDefs],
+    [dataColumnDefs, tagColumnDef]
   );
 
   const defaultColDef = useMemo(
@@ -537,6 +660,12 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     };
   }, [closeMenu, contextMenu]);
 
+  useEffect(() => {
+    if (!contextMenu && tagMutationPending) {
+      setTagMutationPending(false);
+    }
+  }, [contextMenu, tagMutationPending]);
+
   const handleCellContextMenu = useCallback(
     (params: CellContextMenuEvent<GridRow>) => {
       const mouseEvent = params.event as MouseEvent;
@@ -552,10 +681,15 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         return;
       }
 
-      const displayValue = typeof rawValue === 'string' ? rawValue : String(rawValue);
+      if (tagStatus === 'idle') {
+        void loadTags();
+      }
 
-      const menuWidth = 200;
-      const menuHeight = 96;
+      const displayValue = typeof rawValue === 'string' ? rawValue : String(rawValue);
+      const rowId = Number.isFinite(params.data?.__rowId) ? Number(params.data?.__rowId) : null;
+
+      const menuWidth = 220;
+      const estimatedHeight = 140 + Math.min(tagLabels.length, 6) * 28;
       let x = mouseEvent.clientX;
       let y = mouseEvent.clientY;
 
@@ -563,19 +697,33 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         x = Math.max(0, window.innerWidth - menuWidth - 8);
       }
 
-      if (y + menuHeight > window.innerHeight) {
-        y = Math.max(0, window.innerHeight - menuHeight - 8);
+      if (y + estimatedHeight > window.innerHeight) {
+        y = Math.max(0, window.innerHeight - estimatedHeight - 8);
       }
 
       setContextMenu({
         x,
         y,
         columnId,
-        displayValue
+        displayValue,
+        rowId
       });
     },
-    []
+    [loadTags, tagLabels.length, tagStatus]
   );
+
+  const getSelectedRowIds = useCallback((): number[] => {
+    if (!gridApi || typeof gridApi.getSelectedNodes !== 'function') {
+      return [];
+    }
+
+    const ids = gridApi
+      .getSelectedNodes()
+      .map((node) => node.data?.__rowId)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+
+    return Array.from(new Set(ids));
+  }, [gridApi]);
 
   const handleFilterIn = useCallback(() => {
     if (!contextMenu || !menuMetadata) {
@@ -632,6 +780,41 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     closeMenu();
   }, [applyFilters, closeMenu, contextMenu, filters, menuMetadata]);
 
+  const handleApplyLabel = useCallback(
+    async (labelId: string | null) => {
+      if (!contextMenu || contextMenu.rowId == null || tagMutationPending) {
+        return;
+      }
+
+      const selected = getSelectedRowIds();
+      const combined = selected.includes(contextMenu.rowId)
+        ? selected
+        : [...selected, contextMenu.rowId];
+      const rowIds = Array.from(new Set(combined)).filter(
+        (rowId): rowId is number => typeof rowId === 'number' && Number.isFinite(rowId) && rowId >= 0
+      );
+
+      if (!rowIds.length) {
+        return;
+      }
+
+      try {
+        setTagMutationPending(true);
+        if (labelId === null) {
+          await clearTagFromRows(rowIds);
+        } else {
+          await applyTagToRows({ rowIds, labelId });
+        }
+      } catch (error) {
+        console.error('Failed to update labels', error);
+      } finally {
+        setTagMutationPending(false);
+        closeMenu();
+      }
+    },
+    [applyTagToRows, clearTagFromRows, closeMenu, contextMenu, getSelectedRowIds, tagMutationPending]
+  );
+
   const handleSortChanged = useCallback(
     (event: SortChangedEvent) => {
       const columnState = event.columnApi.getColumnState();
@@ -668,12 +851,19 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       return null;
     }
 
+    const activeRecord =
+      contextMenu.rowId != null ? tagRecords[contextMenu.rowId] : undefined;
+    const activeLabelId = activeRecord?.labelId ?? null;
+    const hasTagOrNote =
+      Boolean(activeRecord?.labelId) || Boolean(activeRecord?.note);
+    const isTagLoading = tagStatus === 'loading' || tagStatus === 'idle';
+
     const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
 
     const menu = (
       <div
         data-grid-context-menu="true"
-        className="fixed z-50 min-w-[12rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
+        className="fixed z-50 min-w-[14rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
         style={{ top: contextMenu.y, left: contextMenu.x }}
         onMouseDown={(event) => event.stopPropagation()}
       >
@@ -700,6 +890,57 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           Filter out
           <span className="truncate text-slate-400">{contextMenu.displayValue}</span>
         </button>
+        <div className="mt-1 border-t border-slate-800 pt-1">
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">
+            Labels
+          </div>
+          {isTagLoading ? (
+            <div className="px-2 py-1 text-[11px] text-slate-400">Loading labels…</div>
+          ) : null}
+          {tagError && tagStatus === 'error' ? (
+            <div className="px-2 py-1 text-[11px] text-red-400">{tagError}</div>
+          ) : null}
+          {!isTagLoading && tagStatus === 'ready' && tagLabels.length === 0 ? (
+            <div className="px-2 py-1 text-[11px] text-slate-400">
+              No labels yet. Use the Labels panel.
+            </div>
+          ) : null}
+          {tagLabels.map((label) => {
+            const isActive = activeLabelId === label.id;
+            return (
+              <button
+                key={label.id}
+                type="button"
+                disabled={tagMutationPending}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-slate-800 ${
+                  isActive ? 'bg-slate-900/60' : ''
+                }`}
+                onClick={() => {
+                  void handleApplyLabel(label.id);
+                }}
+              >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: label.color }}
+                  aria-hidden
+                />
+                <span className="truncate text-slate-200">{label.name}</span>
+              </button>
+            );
+          })}
+          {hasTagOrNote ? (
+            <button
+              type="button"
+              disabled={tagMutationPending}
+              className="mt-1 flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-slate-200 hover:bg-slate-800"
+              onClick={() => {
+                void handleApplyLabel(null);
+              }}
+            >
+              Clear label
+            </button>
+          ) : null}
+        </div>
         <div className="mt-1 border-t border-slate-800 pt-1">
           <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Columns</div>
           <button
