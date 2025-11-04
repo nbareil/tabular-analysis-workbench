@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import type { ColumnInference, ColumnType, GroupingResult, RowBatch } from '@workers/types';
+import { logDebug } from '@utils/debugLog';
 
 export interface GridColumn {
   key: string;
@@ -116,7 +117,7 @@ export const useDataStore = create<DataState>((set) => ({
   setHeader: (header) =>
     set((state) => {
       if (import.meta.env.DEV) {
-        console.debug('[data-store] setHeader', {
+        logDebug('data-store', 'setHeader', {
           headerCount: header.length,
           previousColumnCount: state.columns.length
         });
@@ -134,7 +135,7 @@ export const useDataStore = create<DataState>((set) => ({
   reportProgress: (progress) =>
     set((state) => {
       if (import.meta.env.DEV) {
-        console.debug('[data-store] reportProgress', {
+        logDebug('data-store', 'reportProgress', {
           rowsParsed: progress.rowsParsed,
           bytesParsed: progress.bytesParsed,
           previousTotalRows: state.totalRows
@@ -213,7 +214,7 @@ export const useDataStore = create<DataState>((set) => ({
       };
 
       if (import.meta.env.DEV) {
-        console.debug('[data-store] complete applied', {
+        logDebug('data-store', 'complete applied', {
           status: nextState.status,
           totalRows: nextState.totalRows,
           matchedRows: nextState.matchedRows,

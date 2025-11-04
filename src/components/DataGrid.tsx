@@ -18,6 +18,7 @@ import { useDataStore, type GridColumn, type GridRow, type LoaderStatus } from '
 import type { FilterState, SessionSnapshot } from '@state/sessionStore';
 import { useSessionStore } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
+import { logDebug } from '@utils/debugLog';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
 
@@ -241,7 +242,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       getRows: async (params: IGetRowsParams) => {
         try {
           if (import.meta.env.DEV) {
-            console.debug('[grid] getRows request', {
+            logDebug('grid', 'getRows request', {
               startRow: params.startRow,
               endRow: params.endRow,
               usingSearchRows: Boolean(searchRows)
@@ -252,7 +253,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
             const slice = searchRows.slice(params.startRow, params.endRow);
             params.successCallback(slice, searchRows.length);
             if (import.meta.env.DEV) {
-              console.debug('[grid] Served search rows', {
+              logDebug('grid', 'Served search rows', {
                 served: slice.length,
                 totalMatches: searchRows.length
               });
@@ -268,7 +269,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           });
           params.successCallback(response.rows as GridRow[], response.matchedRows);
           if (import.meta.env.DEV) {
-            console.debug('[grid] Worker fetchRows response', {
+            logDebug('grid', 'Worker fetchRows response', {
               offset: params.startRow,
               limit: requestSize,
               rowsReceived: response.rows.length,
@@ -297,7 +298,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
 
     if (gridApi && typeof gridApi.refreshInfiniteCache === 'function') {
       if (import.meta.env.DEV) {
-        console.debug('[grid] refreshing infinite cache after ready status');
+        logDebug('grid', 'refreshing infinite cache after ready status');
       }
       gridApi.refreshInfiniteCache();
     }

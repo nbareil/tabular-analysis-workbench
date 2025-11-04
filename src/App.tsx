@@ -13,6 +13,7 @@ import LabelsPanel from '@components/LabelsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
+import { logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
 
 const formatBytes = (bytes: number): string => {
@@ -81,7 +82,10 @@ const App = (): JSX.Element => {
     const initWorker = async () => {
       try {
         const worker = getDataWorker();
-        await worker.init({});
+        await worker.init({
+          debugLogging: import.meta.env.DEV,
+          slowBatchThresholdMs: 50
+        });
         const response = await worker.ping();
 
         if (!cancelled && response === 'pong') {
@@ -125,7 +129,7 @@ const App = (): JSX.Element => {
           proxy({
             onStart: async ({ columns }) => {
               if (import.meta.env.DEV) {
-                console.debug('[app] Worker onStart', { columnCount: columns.length, columns });
+                logDebug('app', 'Worker onStart', { columnCount: columns.length, columns });
               }
               if (!cancelled) {
                 setHeader(columns);
@@ -133,7 +137,7 @@ const App = (): JSX.Element => {
             },
             onProgress: async (progress) => {
               if (import.meta.env.DEV) {
-                console.debug('[app] Worker onProgress', progress);
+                logDebug('app', 'Worker onProgress', { ...progress });
               }
               if (!cancelled) {
                 reportProgress(progress);

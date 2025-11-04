@@ -24,7 +24,7 @@ export interface ParserCallbacks {
   onCheckpoint?: (payload: { rowIndex: number; byteOffset: number }) => void | Promise<void>;
 }
 
-const DEFAULT_BATCH_SIZE = 5000;
+const DEFAULT_BATCH_SIZE = 1000;
 
 interface InternalState {
   header: string[] | null;
@@ -385,7 +385,7 @@ export const parseDelimitedStream = async (
     await emitRow();
   };
 
-  const processChar = async (char: string): Promise<void> => {
+  const processChar = (char: string): Promise<void> | void => {
     if (state.inQuotes) {
       if (state.quoteEscapePending) {
         if (char === '"') {
@@ -435,14 +435,12 @@ export const parseDelimitedStream = async (
     }
 
     if (char === '\n') {
-      await handleEndOfRow();
-      return;
+      return handleEndOfRow();
     }
 
     if (char === '\r') {
-      await handleEndOfRow();
       state.skipNextLF = true;
-      return;
+      return handleEndOfRow();
     }
 
     state.fieldBuffer += char;
@@ -476,7 +474,10 @@ export const parseDelimitedStream = async (
         state.skipNextLF = false;
       }
 
-      await processChar(char);
+      const maybePromise = processChar(char);
+      if (maybePromise) {
+        await maybePromise;
+      }
     }
   };
 

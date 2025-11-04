@@ -32,6 +32,7 @@ import type {
 import { evaluateFilterOnRows } from './filterEngine';
 import type { SearchRequest, SearchResult } from './searchEngine';
 import { shouldPreferDuckDb, tryGroupWithDuckDb } from './duckDbPlan';
+import { logDebug } from '../utils/debugLog';
 
 export type {
   GroupingRequest,
@@ -50,6 +51,8 @@ export type {
 export interface WorkerInitOptions {
   enableDuckDb?: boolean;
   chunkSize?: number;
+  debugLogging?: boolean;
+  slowBatchThresholdMs?: number;
 }
 
 export interface LoadFileRequest {
@@ -144,7 +147,12 @@ export interface DataWorkerApi {
 }
 
 const state: {
-  options: Required<WorkerInitOptions>;
+  options: {
+    enableDuckDb: boolean;
+    chunkSize: number;
+    debugLogging: boolean;
+    slowBatchThresholdMs: number;
+  };
   dataset: {
     batchStore: RowBatchStore | null;
     datasetKey: string | null;
@@ -166,7 +174,9 @@ const state: {
 } = {
   options: {
     enableDuckDb: false,
-    chunkSize: 1_048_576
+    chunkSize: 1_048_576,
+    debugLogging: false,
+    slowBatchThresholdMs: 32
   },
   dataset: {
     batchStore: null,
@@ -186,6 +196,16 @@ const state: {
     labels: [],
     tags: {}
   }
+};
+
+const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+const roundMs = (value: number): number => {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.round(value * 100) / 100;
 };
 
 const ensureBatchStore = (): RowBatchStore => {
@@ -236,7 +256,7 @@ const buildRowIdWindow = (offset: number, limit?: number): number[] => {
 const materializeViewWindow = async (offset: number, limit?: number): Promise<MaterializedRow[]> => {
   const rowIds = buildRowIdWindow(offset, limit);
   if (import.meta.env.DEV) {
-    console.debug('[data-worker] materializeViewWindow', {
+    logDebug('data-worker', 'materializeViewWindow', {
       offset,
       limit,
       requested: rowIds.length,
@@ -252,7 +272,7 @@ const materializeViewWindow = async (offset: number, limit?: number): Promise<Ma
   const batchStore = ensureBatchStore();
   const rows = await batchStore.materializeRows(rowIds);
   if (import.meta.env.DEV) {
-    console.debug('[data-worker] materializeViewWindow resolved', {
+    logDebug('data-worker', 'materializeViewWindow resolved', {
       offset,
       limit,
       resolved: rows.length
@@ -361,9 +381,18 @@ const normaliseSearchValue = (value: unknown, caseSensitive: boolean): string =>
 
 const api: DataWorkerApi = {
   async init(options) {
+    const previous = state.options;
+    const threshold = options.slowBatchThresholdMs;
+
     state.options = {
-      enableDuckDb: options.enableDuckDb ?? state.options.enableDuckDb,
-      chunkSize: options.chunkSize ?? state.options.chunkSize
+      enableDuckDb: options.enableDuckDb ?? previous.enableDuckDb,
+      chunkSize: options.chunkSize ?? previous.chunkSize,
+      debugLogging:
+        typeof options.debugLogging === 'boolean' ? options.debugLogging : previous.debugLogging,
+      slowBatchThresholdMs:
+        typeof threshold === 'number' && Number.isFinite(threshold) && threshold >= 0
+          ? threshold
+          : previous.slowBatchThresholdMs
     };
   },
   async ping() {
@@ -374,16 +403,35 @@ const api: DataWorkerApi = {
       throw new Error('A file handle must be provided to loadFile.');
     }
 
+    const debugEnabled = state.options.debugLogging;
+    const slowBatchThreshold = state.options.slowBatchThresholdMs;
+    let datasetKey = 'pending';
+    const debugLog = (event: string, payload?: Record<string, unknown>) => {
+      if (!debugEnabled) {
+        return;
+      }
+
+      logDebug(`data-worker][dataset:${datasetKey}`, event, payload);
+    };
+
     if (state.dataset.batchStore) {
+      const clearStart = now();
       try {
         await state.dataset.batchStore.clear();
+        debugLog('Cleared existing batch store', { durationMs: roundMs(now() - clearStart) });
       } catch (error) {
         console.warn('[data-worker] Failed to clear existing batch store', error);
+        debugLog('Failed clearing existing batch store', {
+          durationMs: roundMs(now() - clearStart),
+          message: error instanceof Error ? error.message : String(error)
+        });
       }
     }
 
-    const datasetKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    datasetKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const batchStoreStart = now();
     const batchStore = await RowBatchStore.create(datasetKey);
+    debugLog('RowBatchStore.create completed', { durationMs: roundMs(now() - batchStoreStart) });
 
     state.dataset.batchStore = batchStore;
     state.dataset.datasetKey = datasetKey;
@@ -398,11 +446,20 @@ const api: DataWorkerApi = {
     state.dataset.bytesParsed = 0;
     state.dataset.fileHandle = handle;
 
+    const fileStart = now();
     const file = await handle.getFile();
+    debugLog('handle.getFile resolved', {
+      durationMs: roundMs(now() - fileStart),
+      name: file.name ?? handle.name ?? 'unknown',
+      size: file.size,
+      type: file.type
+    });
+
     const compression = detectCompression({
       fileName: file.name ?? handle.name,
       mimeType: file.type
     });
+    debugLog('Compression detected', { compression: compression ?? 'none' });
 
     let stream: ReadableStream<Uint8Array> = file.stream();
 
@@ -413,6 +470,7 @@ const api: DataWorkerApi = {
 
       try {
         stream = stream.pipeThrough(new DecompressionStream('gzip'));
+        debugLog('Applied gzip DecompressionStream');
       } catch (error) {
         throw new Error(
           error instanceof Error
@@ -431,24 +489,60 @@ const api: DataWorkerApi = {
       checkpointInterval: targetCheckpointInterval
     };
 
-    const startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const startTime = now();
     let finalRows = 0;
     let finalBytes = 0;
     let storedBatches = 0;
+    let previousRowsParsed = 0;
+    let previousBytesParsed = 0;
+
+    let totalStoreDurationMs = 0;
+    let longestStoreDurationMs = 0;
+    let slowStoreBatchCount = 0;
+
+    let totalProgressCallbackMs = 0;
+    let longestProgressCallbackMs = 0;
+
+    let checkpointCount = 0;
+    let totalCheckpointMs = 0;
+    let longestCheckpointMs = 0;
+
+    let chunkCount = 0;
+    let totalReadMs = 0;
+    let longestReadMs = 0;
+
+    const indexStoreStart = now();
     const indexStore = await RowIndexStore.create(handle, {
       checkpointInterval: targetCheckpointInterval
     });
+    debugLog('RowIndexStore.create completed', { durationMs: roundMs(now() - indexStoreStart) });
 
     const source: AsyncIterable<Uint8Array> = {
       async *[Symbol.asyncIterator]() {
         try {
           while (true) {
+            const readStart = now();
             const { value, done } = await reader.read();
+            const readDuration = now() - readStart;
+
             if (done) {
               return;
             }
 
             if (value) {
+              chunkCount += 1;
+              totalReadMs += readDuration;
+              if (readDuration > longestReadMs) {
+                longestReadMs = readDuration;
+              }
+
+              if (debugEnabled && readDuration >= slowBatchThreshold) {
+                debugLog('Slow chunk read', {
+                  chunkIndex: chunkCount,
+                  readDurationMs: roundMs(readDuration)
+                });
+              }
+
               yield value;
             }
           }
@@ -459,13 +553,34 @@ const api: DataWorkerApi = {
     };
 
     try {
+      debugLog('Starting parseDelimitedStream', {
+        delimiter: delimiter ?? 'auto',
+        batchSize: batchSize ?? 'default',
+        encoding: encoding ?? 'utf-8',
+        checkpointInterval: targetCheckpointInterval
+      });
+      const parseStartTime = now();
+
       await parseDelimitedStream(
         source,
         {
           onHeader: async (header) => {
             state.dataset.header = header;
             if (callbacks.onStart) {
+              const callbackStart = now();
               await callbacks.onStart({ columns: header });
+              const duration = now() - callbackStart;
+              debugLog('onStart callback completed', {
+                durationMs: roundMs(duration),
+                columnCount: header.length
+              });
+              if (duration >= slowBatchThreshold) {
+                debugLog('Slow onStart callback detected', {
+                  durationMs: roundMs(duration)
+                });
+              }
+            } else {
+              debugLog('No onStart callback provided', { columnCount: header.length });
             }
           },
           onBatch: async (batch) => {
@@ -473,7 +588,37 @@ const api: DataWorkerApi = {
             finalBytes = batch.stats.bytesParsed;
             storedBatches += 1;
 
+            const rowsInBatch = Math.max(0, finalRows - previousRowsParsed);
+            const bytesInBatch = Math.max(0, finalBytes - previousBytesParsed);
+            previousRowsParsed = finalRows;
+            previousBytesParsed = finalBytes;
+
+            const storeStart = now();
             await batchStore.storeBatch(batch);
+            const storeDuration = now() - storeStart;
+            totalStoreDurationMs += storeDuration;
+            if (storeDuration > longestStoreDurationMs) {
+              longestStoreDurationMs = storeDuration;
+            }
+
+            const shouldLogBatch =
+              storeDuration >= slowBatchThreshold || storedBatches <= 5 || storedBatches % 50 === 0;
+
+            if (storeDuration >= slowBatchThreshold) {
+              slowStoreBatchCount += 1;
+            }
+
+            if (shouldLogBatch) {
+              debugLog('Stored batch', {
+                batchesStored: storedBatches,
+                rowsInBatch,
+                cumulativeRowsParsed: finalRows,
+                cumulativeBytesParsed: finalBytes,
+                storeDurationMs: roundMs(storeDuration),
+                slowStore: storeDuration >= slowBatchThreshold,
+                bytesInBatch
+              });
+            }
 
             state.dataset.columnTypes = {
               ...state.dataset.columnTypes,
@@ -485,36 +630,117 @@ const api: DataWorkerApi = {
             };
 
             if (callbacks.onProgress) {
-              await callbacks.onProgress({
+              const payload = {
                 rowsParsed: finalRows,
                 bytesParsed: finalBytes,
                 batchesStored: storedBatches
-              });
+              };
+              const progressStart = now();
+              await callbacks.onProgress(payload);
+              const progressDuration = now() - progressStart;
+              totalProgressCallbackMs += progressDuration;
+              if (progressDuration > longestProgressCallbackMs) {
+                longestProgressCallbackMs = progressDuration;
+              }
+
+              if (progressDuration >= slowBatchThreshold) {
+                debugLog('Slow onProgress callback detected', {
+                  durationMs: roundMs(progressDuration),
+                  batchesStored: storedBatches
+                });
+              }
             }
           },
           onCheckpoint: async ({ rowIndex, byteOffset }) => {
+            const checkpointStart = now();
             indexStore.record({ rowIndex, byteOffset });
+            const checkpointDuration = now() - checkpointStart;
+            checkpointCount += 1;
+            totalCheckpointMs += checkpointDuration;
+
+            if (checkpointDuration > longestCheckpointMs) {
+              longestCheckpointMs = checkpointDuration;
+            }
+
+            if (checkpointDuration >= slowBatchThreshold) {
+              debugLog('Slow checkpoint record detected', {
+                rowIndex,
+                byteOffset,
+                checkpointDurationMs: roundMs(checkpointDuration)
+              });
+            }
           }
         },
         options
       );
 
+      debugLog('parseDelimitedStream completed', {
+        durationMs: roundMs(now() - parseStartTime),
+        storedBatches,
+        rowsParsed: finalRows,
+        bytesParsed: finalBytes
+      });
+
       state.dataset.totalRows = finalRows;
       state.dataset.bytesParsed = finalBytes;
 
       if (callbacks.onComplete) {
-        const endTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
-        await callbacks.onComplete({
+        const endTime = now();
+        const summary: LoadCompleteSummary = {
           rowsParsed: finalRows,
           bytesParsed: finalBytes,
           durationMs: endTime - startTime,
           columnTypes: state.dataset.columnTypes,
           columnInference: state.dataset.columnInference
+        };
+        const completeStart = now();
+        await callbacks.onComplete(summary);
+        const completeDuration = now() - completeStart;
+        debugLog('onComplete callback completed', {
+          durationMs: roundMs(completeDuration),
+          rowsParsed: finalRows,
+          bytesParsed: finalBytes
         });
+        if (completeDuration >= slowBatchThreshold) {
+          debugLog('Slow onComplete callback detected', {
+            durationMs: roundMs(completeDuration)
+          });
+        }
       }
 
+      const finalizeStart = now();
       await indexStore.finalize({ rowCount: finalRows, bytesParsed: finalBytes });
+      debugLog('RowIndexStore.finalize completed', {
+        durationMs: roundMs(now() - finalizeStart),
+        rowCount: finalRows,
+        bytesParsed: finalBytes
+      });
+
+      debugLog('Load complete summary', {
+        totalDurationMs: roundMs(now() - startTime),
+        rowsParsed: finalRows,
+        bytesParsed: finalBytes,
+        storedBatches,
+        chunkCount,
+        slowStoreBatchCount,
+        longestStoreBatchMs: roundMs(longestStoreDurationMs),
+        averageStoreBatchMs:
+          storedBatches > 0 ? roundMs(totalStoreDurationMs / storedBatches) : 0,
+        checkpointCount,
+        longestCheckpointMs: roundMs(longestCheckpointMs),
+        averageCheckpointMs:
+          checkpointCount > 0 ? roundMs(totalCheckpointMs / checkpointCount) : 0,
+        longestReadMs: roundMs(longestReadMs),
+        averageReadMs: chunkCount > 0 ? roundMs(totalReadMs / chunkCount) : 0,
+        longestProgressCallbackMs: roundMs(longestProgressCallbackMs),
+        totalProgressCallbackMs: roundMs(totalProgressCallbackMs),
+        averageProgressCallbackMs:
+          storedBatches > 0 ? roundMs(totalProgressCallbackMs / storedBatches) : 0
+      });
     } catch (error) {
+      debugLog('loadFile encountered error', {
+        message: error instanceof Error ? error.message : String(error)
+      });
       await indexStore.abort();
       if (callbacks.onError) {
         const normalised =
@@ -695,7 +921,7 @@ const api: DataWorkerApi = {
   },
   async fetchRows({ offset, limit }: FetchRowsRequest): Promise<FetchRowsResult> {
     if (import.meta.env.DEV) {
-      console.debug('[data-worker] fetchRows request', {
+      logDebug('data-worker', 'fetchRows request', {
         offset,
         limit,
         hasBatchStore: Boolean(state.dataset.batchStore),
@@ -716,7 +942,7 @@ const api: DataWorkerApi = {
 
     const rows = await materializeViewWindow(offset, limit);
     if (import.meta.env.DEV) {
-      console.debug('[data-worker] fetchRows resolved', {
+      logDebug('data-worker', 'fetchRows resolved', {
         offset,
         limit,
         rows: rows.length,
