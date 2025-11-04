@@ -24,7 +24,7 @@ export interface ParserCallbacks {
   onCheckpoint?: (payload: { rowIndex: number; byteOffset: number }) => void | Promise<void>;
 }
 
-const DEFAULT_BATCH_SIZE = 1000;
+const DEFAULT_BATCH_SIZE = 10_000;
 
 interface InternalState {
   header: string[] | null;
