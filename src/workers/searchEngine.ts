@@ -1,6 +1,6 @@
 import type { ColumnType, FilterNode } from './types';
 import type { MaterializedRow } from './utils/materializeRowBatch';
-import { evaluateFilterOnRows } from './filterEngine';
+import { evaluateFilterOnRows, type FilterEvaluationContext } from './filterEngine';
 
 export interface SearchRequest {
   query: string;
@@ -24,7 +24,8 @@ const normalise = (value: unknown, caseSensitive: boolean): string => {
 export const searchRows = (
   rows: MaterializedRow[],
   columnTypes: Record<string, ColumnType>,
-  request: SearchRequest
+  request: SearchRequest,
+  context: FilterEvaluationContext = {}
 ): SearchResult => {
   const { query, columns, filter, limit, caseSensitive } = request;
   const trimmed = query.trim();
@@ -42,7 +43,7 @@ export const searchRows = (
   let workingRows = rows;
 
   if (filter) {
-    const { matches } = evaluateFilterOnRows(rows, columnTypes, filter);
+    const { matches } = evaluateFilterOnRows(rows, columnTypes, filter, context);
     workingRows = rows.filter((_, index) => matches[index] === 1);
   }
 

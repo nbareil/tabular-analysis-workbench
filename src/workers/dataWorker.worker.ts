@@ -1098,7 +1098,9 @@ const api: DataWorkerApi = {
     const matchedRowIds: number[] = [];
 
     for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
-      const { matches } = evaluateFilterOnRows(rows, state.dataset.columnTypes, expression);
+      const { matches } = evaluateFilterOnRows(rows, state.dataset.columnTypes, expression, {
+        tags: state.tagging.tags
+      });
       for (let idx = 0; idx < matches.length; idx += 1) {
         if (matches[idx] === 1) {
           matchedRowIds.push(rowStart + idx);
@@ -1255,7 +1257,9 @@ const api: DataWorkerApi = {
     for await (const { rows } of batchStore.iterateMaterializedBatches()) {
       let filterMatches: Uint8Array | null = null;
       if (request.filter) {
-        filterMatches = evaluateFilterOnRows(rows, state.dataset.columnTypes, request.filter).matches;
+        filterMatches = evaluateFilterOnRows(rows, state.dataset.columnTypes, request.filter, {
+          tags: state.tagging.tags
+        }).matches;
       }
 
       for (let idx = 0; idx < rows.length; idx += 1) {

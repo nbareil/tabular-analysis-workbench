@@ -10,8 +10,10 @@ import type {
   NumberColumnBatch,
   RowBatch,
   StringColumnBatch,
-  FilterNode
+  FilterNode,
+  TagRecord
 } from './types';
+import { TAG_COLUMN_ID } from './types';
 
 const textEncoder = new TextEncoder();
 
@@ -334,5 +336,62 @@ describe('filterEngine', () => {
     });
 
     expect(Array.from(result.matches)).toEqual([1, 0, 1, 0]);
+  });
+
+  it('evaluates label predicates using tag context', () => {
+    const batch = buildRowBatch(
+      {
+        name: stringColumn(['foo', 'bar', 'baz'])
+      },
+      { name: 'string' }
+    );
+
+    const tags: Record<number, TagRecord> = {
+      0: {
+        labelId: 'label-1',
+        updatedAt: 10
+      },
+      2: {
+        labelId: null,
+        note: 'needs review',
+        updatedAt: 20
+      }
+    };
+
+    const labeled = evaluateFilter(
+      batch,
+      {
+        column: TAG_COLUMN_ID,
+        operator: 'eq',
+        value: 'label-1'
+      },
+      { tags }
+    );
+
+    expect(Array.from(labeled.matches)).toEqual([1, 0, 0]);
+
+    const unlabeled = evaluateFilter(
+      batch,
+      {
+        column: TAG_COLUMN_ID,
+        operator: 'eq',
+        value: null
+      },
+      { tags }
+    );
+
+    expect(Array.from(unlabeled.matches)).toEqual([0, 1, 1]);
+
+    const notLabel = evaluateFilter(
+      batch,
+      {
+        column: TAG_COLUMN_ID,
+        operator: 'neq',
+        value: 'label-1'
+      },
+      { tags }
+    );
+
+    expect(Array.from(notLabel.matches)).toEqual([0, 1, 1]);
   });
 });

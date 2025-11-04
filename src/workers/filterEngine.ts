@@ -4,12 +4,18 @@ import type {
   FilterExpression,
   FilterNode,
   FilterPredicate,
-  RowBatch
+  RowBatch,
+  TagRecord
 } from './types';
+import { TAG_COLUMN_ID } from './types';
 
 export interface FilterResult {
   matches: Uint8Array;
   matchedCount: number;
+}
+
+export interface FilterEvaluationContext {
+  tags?: Record<number, TagRecord>;
 }
 
 const isExpression = (node: FilterNode): node is FilterExpression => 'op' in node;
@@ -84,11 +90,58 @@ const createRegex = (pattern: string, caseSensitive?: boolean): RegExp | null =>
 const normaliseString = (value: string, caseSensitive?: boolean): string =>
   caseSensitive ? value : value.toLowerCase();
 
+const evaluateTagPredicate = (
+  rows: Array<Record<string, unknown>>,
+  predicate: FilterPredicate,
+  context: FilterEvaluationContext
+): Uint8Array => {
+  const result = new Uint8Array(rows.length);
+  const operator = predicate.operator;
+
+  if (operator !== 'eq' && operator !== 'neq') {
+    return result;
+  }
+
+  const target =
+    typeof predicate.value === 'string'
+      ? predicate.value
+      : predicate.value === null
+        ? null
+        : String(predicate.value ?? '');
+  const tags = context.tags ?? {};
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const materialized = rows[index] as MaterializedRow | undefined;
+    const rowId = materialized?.__rowId;
+    if (rowId == null || !Number.isFinite(rowId)) {
+      result[index] = operator === 'neq' ? 1 : 0;
+      continue;
+    }
+
+    const record = tags[rowId];
+    const labelId = record?.labelId ?? null;
+    const isMatch = target === null ? labelId == null : labelId === target;
+
+    if (operator === 'eq') {
+      result[index] = isMatch ? 1 : 0;
+    } else {
+      result[index] = isMatch ? 0 : 1;
+    }
+  }
+
+  return result;
+};
+
 const evaluatePredicate = (
   rows: Array<Record<string, unknown>>,
   columnTypes: Record<string, ColumnType>,
-  predicate: FilterPredicate
+  predicate: FilterPredicate,
+  context: FilterEvaluationContext
 ): Uint8Array => {
+  if (predicate.column === TAG_COLUMN_ID) {
+    return evaluateTagPredicate(rows, predicate, context);
+  }
+
   const rowCount = rows.length;
   const result = new Uint8Array(rowCount);
   const columnType = columnTypes[predicate.column] ?? 'string';
@@ -294,30 +347,32 @@ const combineMasks = (
 const evaluateNode = (
   rows: Array<Record<string, unknown>>,
   columnTypes: Record<string, ColumnType>,
-  node: FilterNode
+  node: FilterNode,
+  context: FilterEvaluationContext
 ): Uint8Array => {
   if (isExpression(node)) {
     if (!node.predicates.length) {
       return new Uint8Array(rows.length).fill(1);
     }
 
-    let accumulator = evaluateNode(rows, columnTypes, node.predicates[0]!);
+    let accumulator = evaluateNode(rows, columnTypes, node.predicates[0]!, context);
 
     for (let index = 1; index < node.predicates.length; index += 1) {
-      const next = evaluateNode(rows, columnTypes, node.predicates[index]!);
+      const next = evaluateNode(rows, columnTypes, node.predicates[index]!, context);
       accumulator = combineMasks(accumulator, next, node.op);
     }
 
     return accumulator;
   }
 
-  return evaluatePredicate(rows, columnTypes, node);
+  return evaluatePredicate(rows, columnTypes, node, context);
 };
 
 const evaluateFilterInternal = (
   rows: MaterializedRow[],
   columnTypes: Record<string, ColumnType>,
-  expression: FilterNode | null
+  expression: FilterNode | null,
+  context: FilterEvaluationContext
 ): FilterResult => {
   const rowCount = rows.length;
 
@@ -326,7 +381,7 @@ const evaluateFilterInternal = (
     return { matches, matchedCount: rowCount };
   }
 
-  const mask = evaluateNode(rows, columnTypes, expression);
+  const mask = evaluateNode(rows, columnTypes, expression, context);
   let matchedCount = 0;
   for (let index = 0; index < mask.length; index += 1) {
     if (mask[index] === 1) {
@@ -340,12 +395,17 @@ const evaluateFilterInternal = (
 export const evaluateFilterOnRows = (
   rows: MaterializedRow[],
   columnTypes: Record<string, ColumnType>,
-  expression: FilterNode | null
-): FilterResult => evaluateFilterInternal(rows, columnTypes, expression);
+  expression: FilterNode | null,
+  context: FilterEvaluationContext = {}
+): FilterResult => evaluateFilterInternal(rows, columnTypes, expression, context);
 
-export const evaluateFilterOnBatch = (batch: RowBatch, expression: FilterNode | null): FilterResult => {
+export const evaluateFilterOnBatch = (
+  batch: RowBatch,
+  expression: FilterNode | null,
+  context: FilterEvaluationContext = {}
+): FilterResult => {
   const materialised = materializeRowBatch(batch);
-  return evaluateFilterInternal(materialised.rows, batch.columnTypes, expression);
+  return evaluateFilterInternal(materialised.rows, batch.columnTypes, expression, context);
 };
 
 export const evaluateFilter = evaluateFilterOnBatch;
@@ -353,9 +413,10 @@ export const evaluateFilter = evaluateFilterOnBatch;
 export const collectMatchingRowIdsFromRows = (
   rows: MaterializedRow[],
   columnTypes: Record<string, ColumnType>,
-  expression: FilterNode | null
+  expression: FilterNode | null,
+  context: FilterEvaluationContext = {}
 ): Uint32Array => {
-  const { matches } = evaluateFilterInternal(rows, columnTypes, expression);
+  const { matches } = evaluateFilterInternal(rows, columnTypes, expression, context);
   const selected: number[] = [];
 
   for (let index = 0; index < matches.length; index += 1) {
@@ -369,8 +430,9 @@ export const collectMatchingRowIdsFromRows = (
 
 export const collectMatchingRowIds = (
   batch: RowBatch,
-  expression: FilterNode | null
+  expression: FilterNode | null,
+  context: FilterEvaluationContext = {}
 ): Uint32Array => {
   const materialised = materializeRowBatch(batch);
-  return collectMatchingRowIdsFromRows(materialised.rows, batch.columnTypes, expression);
+  return collectMatchingRowIdsFromRows(materialised.rows, batch.columnTypes, expression, context);
 };

@@ -133,6 +133,9 @@ export interface TaggingSnapshot {
   tags: Record<number, TagRecord>;
 }
 
+export const TAG_COLUMN_ID = '__tag';
+export const TAG_NO_LABEL_FILTER_VALUE = '__tag:none';
+
 export interface TagRowsRequest {
   rowIds: number[];
   labelId: string | null;

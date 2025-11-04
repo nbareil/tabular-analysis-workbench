@@ -25,6 +25,7 @@ import { logDebug } from '@utils/debugLog';
 import { buildTagCellValue, type TagCellValue } from '@utils/tagCells';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
+import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
 
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
@@ -91,6 +92,7 @@ interface FilterContextMenuState {
   y: number;
   columnId: string;
   displayValue: string;
+  filterValue: string | null;
   rowId: number | null;
 }
 
@@ -275,7 +277,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
     }
 
     gridApi.refreshCells({
-      columns: ['__tag'],
+      columns: [TAG_COLUMN_ID],
       force: true,
       suppressFlash: true
     });
@@ -283,7 +285,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
 
   const tagColumnDef = useMemo<ColDef>(
     () => ({
-      colId: '__tag',
+      colId: TAG_COLUMN_ID,
       headerName: 'Label',
       headerTooltip: 'Row label',
       pinned: 'left',
@@ -614,7 +616,8 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       return null;
     }
 
-    return evaluateFilterMenuMetadata(filters, contextMenu.columnId, contextMenu.displayValue);
+    const value = contextMenu.filterValue ?? '';
+    return evaluateFilterMenuMetadata(filters, contextMenu.columnId, String(value));
   }, [contextMenu, filters]);
 
   const closeMenu = useCallback(() => {
@@ -676,20 +679,36 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         return;
       }
 
-      const rawValue = params.value;
-      if (rawValue == null) {
-        return;
-      }
-
-      if (tagStatus === 'idle') {
+      const isTagColumn = columnId === TAG_COLUMN_ID;
+      if (isTagColumn && tagStatus === 'idle') {
         void loadTags();
       }
 
-      const displayValue = typeof rawValue === 'string' ? rawValue : String(rawValue);
+      const rawValue = params.value as TagCellValue | unknown;
+      if (!isTagColumn && rawValue == null) {
+        return;
+      }
+
+      let displayValue: string;
+      let filterValue: string | null;
+
+      if (isTagColumn) {
+        const tagValue = (rawValue as TagCellValue | null) ?? null;
+        const name = tagValue?.labelName;
+        displayValue = name && name.trim().length > 0 ? name : 'No label';
+        filterValue = tagValue?.labelId ?? TAG_NO_LABEL_FILTER_VALUE;
+      } else {
+        const valueString = typeof rawValue === 'string' ? rawValue : String(rawValue);
+        displayValue = valueString;
+        filterValue = valueString;
+      }
+
       const rowId = Number.isFinite(params.data?.__rowId) ? Number(params.data?.__rowId) : null;
 
       const menuWidth = 220;
-      const estimatedHeight = 140 + Math.min(tagLabels.length, 6) * 28;
+      const estimatedHeight = isTagColumn
+        ? 140 + Math.min(tagLabels.length || 1, 6) * 28
+        : 96;
       let x = mouseEvent.clientX;
       let y = mouseEvent.clientY;
 
@@ -706,6 +725,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
         y,
         columnId,
         displayValue,
+        filterValue,
         rowId
       });
     },
@@ -735,23 +755,32 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       return;
     }
 
+    const columnId = contextMenu.columnId;
+    const isTagColumn = columnId === TAG_COLUMN_ID;
+    const baseValue = contextMenu.filterValue ?? '';
+    const predicateValue = isTagColumn
+      ? baseValue || TAG_NO_LABEL_FILTER_VALUE
+      : baseValue;
+
     if (menuMetadata.eqIndex >= 0) {
       const nextFilters = filters.slice();
       nextFilters[menuMetadata.eqIndex] = {
         ...nextFilters[menuMetadata.eqIndex]!,
         operator: 'eq',
-        value: contextMenu.displayValue,
+        value: predicateValue,
         value2: undefined,
-        fuzzy: undefined
+        fuzzy: isTagColumn ? false : nextFilters[menuMetadata.eqIndex]!.fuzzy,
+        caseSensitive: isTagColumn ? false : nextFilters[menuMetadata.eqIndex]!.caseSensitive
       };
       void applyFilters(nextFilters);
     } else {
       const predicate: FilterState = {
         id: crypto.randomUUID(),
-        column: contextMenu.columnId,
+        column: columnId,
         operator: 'eq',
-        value: contextMenu.displayValue,
-        caseSensitive: false
+        value: predicateValue,
+        caseSensitive: false,
+        ...(isTagColumn ? { fuzzy: false } : {})
       };
       void applyFilters([...filters, predicate]);
     }
@@ -769,12 +798,20 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       return;
     }
 
+    const columnId = contextMenu.columnId;
+    const isTagColumn = columnId === TAG_COLUMN_ID;
+    const baseValue = contextMenu.filterValue ?? '';
+    const predicateValue = isTagColumn
+      ? baseValue || TAG_NO_LABEL_FILTER_VALUE
+      : baseValue;
+
     const predicate: FilterState = {
       id: crypto.randomUUID(),
-      column: contextMenu.columnId,
+      column: columnId,
       operator: 'neq',
-      value: contextMenu.displayValue,
-      caseSensitive: false
+      value: predicateValue,
+      caseSensitive: false,
+      ...(isTagColumn ? { fuzzy: false } : {})
     };
     void applyFilters([...filters, predicate]);
     closeMenu();
@@ -851,12 +888,13 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       return null;
     }
 
+    const isLabelColumn = contextMenu.columnId === TAG_COLUMN_ID;
     const activeRecord =
-      contextMenu.rowId != null ? tagRecords[contextMenu.rowId] : undefined;
+      isLabelColumn && contextMenu.rowId != null ? tagRecords[contextMenu.rowId] : undefined;
     const activeLabelId = activeRecord?.labelId ?? null;
     const hasTagOrNote =
       Boolean(activeRecord?.labelId) || Boolean(activeRecord?.note);
-    const isTagLoading = tagStatus === 'loading' || tagStatus === 'idle';
+    const isTagLoading = isLabelColumn && (tagStatus === 'loading' || tagStatus === 'idle');
 
     const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
 
@@ -890,57 +928,59 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
           Filter out
           <span className="truncate text-slate-400">{contextMenu.displayValue}</span>
         </button>
-        <div className="mt-1 border-t border-slate-800 pt-1">
-          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">
-            Labels
-          </div>
-          {isTagLoading ? (
-            <div className="px-2 py-1 text-[11px] text-slate-400">Loading labels…</div>
-          ) : null}
-          {tagError && tagStatus === 'error' ? (
-            <div className="px-2 py-1 text-[11px] text-red-400">{tagError}</div>
-          ) : null}
-          {!isTagLoading && tagStatus === 'ready' && tagLabels.length === 0 ? (
-            <div className="px-2 py-1 text-[11px] text-slate-400">
-              No labels yet. Use the Labels panel.
+        {isLabelColumn ? (
+          <div className="mt-1 border-t border-slate-800 pt-1">
+            <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">
+              Labels
             </div>
-          ) : null}
-          {tagLabels.map((label) => {
-            const isActive = activeLabelId === label.id;
-            return (
+            {isTagLoading ? (
+              <div className="px-2 py-1 text-[11px] text-slate-400">Loading labels…</div>
+            ) : null}
+            {tagError && tagStatus === 'error' ? (
+              <div className="px-2 py-1 text-[11px] text-red-400">{tagError}</div>
+            ) : null}
+            {!isTagLoading && tagStatus === 'ready' && tagLabels.length === 0 ? (
+              <div className="px-2 py-1 text-[11px] text-slate-400">
+                No labels yet. Use the Labels panel.
+              </div>
+            ) : null}
+            {tagLabels.map((label) => {
+              const isActive = activeLabelId === label.id;
+              return (
+                <button
+                  key={label.id}
+                  type="button"
+                  disabled={tagMutationPending}
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-slate-800 ${
+                    isActive ? 'bg-slate-900/60' : ''
+                  }`}
+                  onClick={() => {
+                    void handleApplyLabel(label.id);
+                  }}
+                >
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: label.color }}
+                    aria-hidden
+                  />
+                  <span className="truncate text-slate-200">{label.name}</span>
+                </button>
+              );
+            })}
+            {hasTagOrNote ? (
               <button
-                key={label.id}
                 type="button"
                 disabled={tagMutationPending}
-                className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-slate-800 ${
-                  isActive ? 'bg-slate-900/60' : ''
-                }`}
+                className="mt-1 flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-slate-200 hover:bg-slate-800"
                 onClick={() => {
-                  void handleApplyLabel(label.id);
+                  void handleApplyLabel(null);
                 }}
               >
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: label.color }}
-                  aria-hidden
-                />
-                <span className="truncate text-slate-200">{label.name}</span>
+                Clear label
               </button>
-            );
-          })}
-          {hasTagOrNote ? (
-            <button
-              type="button"
-              disabled={tagMutationPending}
-              className="mt-1 flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-slate-200 hover:bg-slate-800"
-              onClick={() => {
-                void handleApplyLabel(null);
-              }}
-            >
-              Clear label
-            </button>
-          ) : null}
-        </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="mt-1 border-t border-slate-800 pt-1">
           <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Columns</div>
           <button
