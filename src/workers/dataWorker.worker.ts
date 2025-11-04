@@ -628,6 +628,8 @@ const api: DataWorkerApi = {
               ...state.dataset.columnInference,
               ...batch.columnInference
             };
+            state.dataset.totalRows = finalRows;
+            state.dataset.bytesParsed = finalBytes;
 
             if (callbacks.onProgress) {
               const payload = {

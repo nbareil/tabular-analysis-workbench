@@ -115,6 +115,7 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
   const [gridApi, setGridApi] = useState<GridApi | null>(null);
   const [columnApi, setColumnApi] = useState<ColumnApi | null>(null);
   const [autoColumnWidths, setAutoColumnWidths] = useState<Record<string, number>>({});
+  const initialRowsRequestedRef = useRef(false);
   const loadingVersionRef = useRef<number | null>(null);
   const computedVersionRef = useRef<number | null>(null);
 
@@ -309,8 +310,24 @@ const DataGrid = ({ status }: DataGridProps): JSX.Element => {
       loadingVersionRef.current = viewVersion;
       computedVersionRef.current = null;
       setAutoColumnWidths({});
+      initialRowsRequestedRef.current = false;
     }
   }, [status, viewVersion]);
+
+  useEffect(() => {
+    if (
+      status !== 'loading' ||
+      initialRowsRequestedRef.current ||
+      !gridApi ||
+      typeof gridApi.refreshInfiniteCache !== 'function' ||
+      totalRows <= 0
+    ) {
+      return;
+    }
+
+    initialRowsRequestedRef.current = true;
+    gridApi.refreshInfiniteCache();
+  }, [gridApi, status, totalRows]);
 
   useEffect(() => {
     if (status !== 'ready' || !gridApi || !columns.length || totalRows <= 0) {
