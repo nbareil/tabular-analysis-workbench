@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
+import type { FilterState } from '@state/sessionStore';
+import { useFilterSync } from '@/hooks/useFilterSync';
 import { useTagStore } from '@state/tagStore';
+import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
 
 interface LabelsPanelProps {
   open: boolean;
@@ -14,6 +17,7 @@ const randomColor = (): string => {
 
 const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null => {
   const { labels, status, error, load, upsertLabel, deleteLabel } = useTagStore();
+  const { filters, applyFilters } = useFilterSync();
   const [labelName, setLabelName] = useState('');
 
   useEffect(() => {
@@ -36,6 +40,66 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
     () => labels.slice().sort((a, b) => a.name.localeCompare(b.name)),
     [labels]
   );
+
+  const labelFilters = useMemo(
+    () => filters.filter((filter) => filter.column === TAG_COLUMN_ID),
+    [filters]
+  );
+
+  const handleShowOnly = (labelId: string | null) => {
+    const value = labelId ?? TAG_NO_LABEL_FILTER_VALUE;
+    const nonLabelFilters = filters.filter((filter) => filter.column !== TAG_COLUMN_ID);
+    const nextFilter: FilterState = {
+      id: crypto.randomUUID(),
+      column: TAG_COLUMN_ID,
+      operator: 'eq',
+      value
+    };
+
+    void applyFilters([...nonLabelFilters, nextFilter]);
+  };
+
+  const handleExclude = (labelId: string | null) => {
+    const value = labelId ?? TAG_NO_LABEL_FILTER_VALUE;
+    const withoutDuplicate = filters.filter(
+      (filter) =>
+        !(
+          filter.column === TAG_COLUMN_ID &&
+          filter.operator === 'neq' &&
+          String(filter.value ?? '') === value
+        )
+    );
+
+    const nextFilter: FilterState = {
+      id: crypto.randomUUID(),
+      column: TAG_COLUMN_ID,
+      operator: 'neq',
+      value
+    };
+
+    void applyFilters([...withoutDuplicate, nextFilter]);
+  };
+
+  const handleClearLabelFilters = () => {
+    const nonLabelFilters = filters.filter((filter) => filter.column !== TAG_COLUMN_ID);
+    void applyFilters(nonLabelFilters);
+  };
+
+  const isLabelIncluded = (labelId: string | null): boolean => {
+    const value = labelId ?? TAG_NO_LABEL_FILTER_VALUE;
+    return labelFilters.some(
+      (filter) =>
+        filter.operator === 'eq' && String(filter.value ?? '') === value
+    );
+  };
+
+  const isLabelExcluded = (labelId: string | null): boolean => {
+    const value = labelId ?? TAG_NO_LABEL_FILTER_VALUE;
+    return labelFilters.some(
+      (filter) =>
+        filter.operator === 'neq' && String(filter.value ?? '') === value
+    );
+  };
 
   const handleCreateLabel = async () => {
     if (!labelName.trim()) {
@@ -63,6 +127,15 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-100">Labels</h2>
           <div className="flex gap-2 text-xs">
+            {labelFilters.length > 0 ? (
+              <button
+                type="button"
+                className="rounded border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800"
+                onClick={handleClearLabelFilters}
+              >
+                Clear label filters
+              </button>
+            ) : null}
             <button
               type="button"
               className="rounded border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800"
@@ -114,30 +187,76 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
               {sortedLabels.map((label) => (
                 <li
                   key={label.id}
-                  className="flex items-center justify-between gap-3 rounded border border-slate-800 px-3 py-2"
+                  className="flex flex-col gap-2 rounded border border-slate-800 px-3 py-2"
                 >
-                  <div className="flex items-center gap-3">
-                    <span
-                      className="h-4 w-4 rounded-full"
-                      style={{ backgroundColor: label.color }}
-                      aria-hidden
-                    />
-                    <div>
-                      <p className="font-medium text-slate-100">{label.name}</p>
-                      {label.description && (
-                        <p className="text-xs text-slate-400">{label.description}</p>
-                      )}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="h-4 w-4 rounded-full"
+                        style={{ backgroundColor: label.color }}
+                        aria-hidden
+                      />
+                      <div>
+                        <p className="font-medium text-slate-100">{label.name}</p>
+                        {label.description && (
+                          <p className="text-xs text-slate-400">{label.description}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                        onClick={() => handleShowOnly(label.id)}
+                        disabled={isLabelIncluded(label.id)}
+                      >
+                        Show only
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                        onClick={() => handleExclude(label.id)}
+                        disabled={isLabelExcluded(label.id)}
+                      >
+                        Exclude
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded border border-slate-700 px-2 py-1 text-xs text-red-300 hover:bg-red-900/40"
+                        onClick={() => handleDelete(label.id)}
+                      >
+                        Remove
+                      </button>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-red-900/40"
-                    onClick={() => handleDelete(label.id)}
-                  >
-                    Remove
-                  </button>
                 </li>
               ))}
+              <li className="flex flex-col gap-2 rounded border border-dashed border-slate-800 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="font-medium text-slate-100">No label</p>
+                    <p className="text-xs text-slate-400">Rows without labels or notes.</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                      onClick={() => handleShowOnly(null)}
+                      disabled={isLabelIncluded(null)}
+                    >
+                      Show only
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                      onClick={() => handleExclude(null)}
+                      disabled={isLabelExcluded(null)}
+                    >
+                      Exclude
+                    </button>
+                  </div>
+                </div>
+              </li>
             </ul>
           </section>
         </div>

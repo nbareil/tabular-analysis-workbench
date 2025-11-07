@@ -909,12 +909,12 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
 
     const menu = (
-      <div
-        data-grid-context-menu="true"
-        className="fixed z-50 min-w-[14rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
-        style={{ top: contextMenu.y, left: contextMenu.x }}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+    <div
+    data-grid-context-menu="true"
+    className="fixed z-[10000] min-w-[14rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
+    style={{ top: contextMenu.y, left: contextMenu.x }}
+    onMouseDown={(event) => event.stopPropagation()}
+    >
         <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Filters</div>
         <button
           type="button"
@@ -1020,9 +1020,10 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   };
 
   return (
-    <div
-      className={`${themeClass} h-full w-full`}
-      style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
+  <div
+  className={`${themeClass} h-full w-full`}
+  style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
+    onContextMenu={(e) => e.preventDefault()}
     >
       {showPlaceholder ? (
         <div className="flex h-full items-center justify-center text-sm text-slate-500">
