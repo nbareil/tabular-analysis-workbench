@@ -23,6 +23,7 @@ import { useSessionStore } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { logDebug } from '@utils/debugLog';
 import { buildTagCellValue, type TagCellValue } from '@utils/tagCells';
+import { renderMarkdownToSafeHtml } from '@utils/markdown';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
@@ -104,37 +105,58 @@ const MIN_COLUMN_WIDTH = 120;
 const MAX_COLUMN_WIDTH = 520;
 
 const TagCellRenderer = ({
-  value
+value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element => {
+if (!value) {
+return (
+<span className="flex items-center gap-2 text-[11px] text-slate-500">
+<span className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-600" aria-hidden />
+Add label
+</span>
+);
+}
+
+const { color, labelName, note } = value;
+const text = labelName ?? (note ? 'No label' : 'Tagged');
+
+return (
+<span className="flex items-center gap-2 truncate text-xs text-slate-100">
+<span
+className="h-2.5 w-2.5 shrink-0 rounded-full"
+style={
+color
+? { backgroundColor: color }
+: { border: '1px solid rgb(71 85 105)', backgroundColor: 'transparent' }
+}
+aria-hidden
+/>
+<span className="truncate">{text}</span>
+{note ? (
+<span className="text-[10px] uppercase tracking-wide text-slate-400">Note</span>
+) : null}
+</span>
+);
+};
+
+const MarkdownTooltip = ({
+  value
+}: ICellRendererParams<TagCellValue | null>): JSX.Element | null => {
   if (!value) {
-    return (
-      <span className="flex items-center gap-2 text-[11px] text-slate-500">
-        <span className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-600" aria-hidden />
-        Add label
-      </span>
-    );
+    return null;
   }
 
-  const { color, labelName, note } = value;
-  const text = labelName ?? (note ? 'No label' : 'Tagged');
+  const { labelName, note } = value;
 
-  return (
-    <span className="flex items-center gap-2 truncate text-xs text-slate-100">
-      <span
-        className="h-2.5 w-2.5 shrink-0 rounded-full"
-        style={
-          color
-            ? { backgroundColor: color }
-            : { border: '1px solid rgb(71 85 105)', backgroundColor: 'transparent' }
-        }
-        aria-hidden
-      />
-      <span className="truncate">{text}</span>
-      {note ? (
-        <span className="text-[10px] uppercase tracking-wide text-slate-400">Note</span>
-      ) : null}
-    </span>
-  );
+  if (note) {
+    const html = renderMarkdownToSafeHtml(note);
+    return <div dangerouslySetInnerHTML={{ __html: html }} />;
+  }
+
+  if (labelName) {
+    return <div>{labelName}</div>;
+  }
+
+  return null;
 };
 
 interface DataGridProps {
@@ -303,16 +325,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         const { tags, labels } = tagDataRef.current;
         return buildTagCellValue(params.data?.__rowId, tags, labels);
       },
-      tooltipValueGetter: (params) => {
-        const value = params.value as TagCellValue | null;
-        if (!value) {
-          return null;
-        }
-        if (value.note) {
-          return value.note;
-        }
-        return value.labelName ?? null;
-      }
+      tooltipComponent: MarkdownTooltip
     }),
     []
   );
