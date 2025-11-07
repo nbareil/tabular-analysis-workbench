@@ -73,8 +73,20 @@ const App = (): JSX.Element => {
   const [noteSaving, setNoteSaving] = useState(false);
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
+  document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
+
+  useEffect(() => {
+    // Prevent back button navigation to avoid triggering on horizontal scroll/swipe
+    history.pushState(null, '', location.href);
+    const handlePopState = () => {
+      history.pushState(null, '', location.href);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
 
   useEffect(() => {
     const fontStack = getFontStack(interfaceFontFamily);
