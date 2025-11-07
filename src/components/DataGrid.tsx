@@ -138,7 +138,7 @@ aria-hidden
 );
 };
 
-const MarkdownTooltip = ({
+export const MarkdownTooltip = ({
   value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element | null => {
   if (!value) {
