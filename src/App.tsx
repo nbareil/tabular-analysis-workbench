@@ -44,6 +44,7 @@ const App = (): JSX.Element => {
   const dataFontFamily = useSessionStore((state) => state.dataFontFamily);
   const dataFontSize = useSessionStore((state) => state.dataFontSize);
   const setFileHandle = useSessionStore((state) => state.setFileHandle);
+  const initializeColumnLayout = useSessionStore((state) => state.initializeColumnLayout);
   const startLoading = useDataStore((state) => state.startLoading);
   const setHeader = useDataStore((state) => state.setHeader);
   const reportProgress = useDataStore((state) => state.reportProgress);
@@ -56,7 +57,8 @@ const App = (): JSX.Element => {
   const matchedRows = useDataStore((state) => state.matchedRows);
   const totalRows = useDataStore((state) => state.totalRows);
   const stats = useDataStore((state) => state.stats);
-  const columns = useDataStore((state) => state.columns.map((column) => column.key));
+  const columns = useDataStore((state) => state.columns);
+  const columnKeys = useDataStore((state) => state.columns.map((column) => column.key));
   const allColumns = useDataStore((state) => state.columns);
   const tagLabels = useTagStore((state) => state.labels);
   const tagRecords = useTagStore((state) => state.tags);
@@ -175,6 +177,9 @@ const App = (): JSX.Element => {
               }
               if (!cancelled) {
                 complete(summary);
+                // Initialize column layout: hide columns that are entirely null/empty
+                const columnKeys = Object.keys(summary.columnTypes);
+                initializeColumnLayout(columnKeys, summary.columnInference, summary.rowsParsed);
               }
             },
             onError: async (error) => {
@@ -334,7 +339,7 @@ const App = (): JSX.Element => {
         const worker = getDataWorker();
         const response = await worker.globalSearch({
           query: trimmed,
-          columns,
+          columns: columnKeys,
           filter: filterExpression,
           limit: 500,
           caseSensitive: searchCaseSensitive

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import { DATA_DEFAULT_FONT_ID, DEFAULT_FONT_ID, DEFAULT_FONT_SIZE } from '@constants/fonts';
-import type { GroupAggregationDefinition } from '@workers/types';
+import type { ColumnInference, GroupAggregationDefinition } from '@workers/types';
 
 export interface ColumnLayoutState {
   order: string[];
@@ -40,6 +40,7 @@ interface SessionStore extends SessionSnapshot {
   setGroups: (groups: string[]) => void;
   setGroupAggregations: (aggregations: GroupAggregationDefinition[]) => void;
   setColumnLayout: (layout: ColumnLayoutState) => void;
+  initializeColumnLayout: (columns: string[], columnInference: Record<string, ColumnInference>, totalRows: number) => void;
   setSearchCaseSensitive: (value: boolean) => void;
   setInterfaceFontFamily: (value: string) => void;
   setInterfaceFontSize: (value: number) => void;
@@ -83,6 +84,21 @@ export const useSessionStore = create<SessionStore>((set) => ({
   setGroupAggregations: (groupAggregations) =>
     set(() => ({ groupAggregations, updatedAt: Date.now() })),
   setColumnLayout: (columnLayout) => set(() => ({ columnLayout, updatedAt: Date.now() })),
+  initializeColumnLayout: (columns, columnInference, totalRows) => set((state) => {
+    const visibility: Record<string, boolean> = {};
+    for (const columnKey of columns) {
+      const inference = columnInference[columnKey];
+      // Hide columns that are entirely null
+      visibility[columnKey] = inference ? inference.nullCount < totalRows : true;
+    }
+    return {
+      columnLayout: {
+        order: columns,
+        visibility
+      },
+      updatedAt: Date.now()
+    };
+  }),
   setSearchCaseSensitive: (searchCaseSensitive) =>
     set(() => ({ searchCaseSensitive, updatedAt: Date.now() })),
   setInterfaceFontFamily: (interfaceFontFamily) =>
