@@ -3,7 +3,7 @@ import type { ChangeEvent, KeyboardEvent } from 'react';
 import { proxy } from 'comlink';
 
 import { useAppStore } from '@state/appStore';
-import { useDataStore } from '@state/dataStore';
+import { useDataStore, type GridRow } from '@state/dataStore';
 import { useSessionStore } from '@state/sessionStore';
 import { useTagStore } from '@state/tagStore';
 import DataGrid from '@components/DataGrid';
@@ -18,6 +18,7 @@ import { buildFilterExpression } from '@utils/filterExpression';
 import { logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
 import { summariseLabelFilters } from '@utils/labelFilters';
+import { serializeToCsv, generateExportFilename } from '@utils/csvExport';
 
 const formatBytes = (bytes: number): string => {
   if (bytes <= 0) {
@@ -56,6 +57,7 @@ const App = (): JSX.Element => {
   const totalRows = useDataStore((state) => state.totalRows);
   const stats = useDataStore((state) => state.stats);
   const columns = useDataStore((state) => state.columns.map((column) => column.key));
+  const allColumns = useDataStore((state) => state.columns);
   const tagLabels = useTagStore((state) => state.labels);
   const tagRecords = useTagStore((state) => state.tags);
   const applyTagToRows = useTagStore((state) => state.applyTag);
@@ -413,6 +415,52 @@ const App = (): JSX.Element => {
     [clearSearchResult]
   );
 
+  const handleExportCsv = useCallback(async () => {
+    if (!fileHandle || matchedRows === null || matchedRows === 0) {
+      return;
+    }
+
+    try {
+      const worker = getDataWorker();
+      const allRows: GridRow[] = [];
+      let offset = 0;
+      const chunkSize = 10000;
+
+      while (offset < matchedRows) {
+        const limit = Math.min(chunkSize, matchedRows - offset);
+        const result = await worker.fetchRows({ offset, limit });
+        allRows.push(...result.rows);
+        offset += limit;
+      }
+
+      // Prepare CSV data
+      const headers = allColumns.map(col => col.headerName);
+      const csvRows = allRows.map(row =>
+        allColumns.map(col => row[col.key] ?? '')
+      );
+
+      // Serialize to CSV
+      const csvContent = serializeToCsv(headers, csvRows);
+
+      // Generate filename
+      const filename = generateExportFilename(fileHandle.name);
+
+      // Download
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to export CSV', error);
+      setError('Failed to export CSV');
+    }
+  }, [fileHandle, matchedRows, allColumns, setError]);
+
   return (
     <div className="flex h-full flex-col bg-canvas text-slate-100">
       <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
@@ -477,6 +525,14 @@ const App = (): JSX.Element => {
             disabled={!workerReady}
           >
             Labels
+          </button>
+          <button
+            type="button"
+            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+            onClick={handleExportCsv}
+            disabled={!workerReady || !fileHandle || matchedRows === null || matchedRows === 0}
+          >
+            Export CSV
           </button>
           <button
             type="button"
