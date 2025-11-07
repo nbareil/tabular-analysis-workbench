@@ -881,10 +881,14 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       const nextSorts = buildSortStateFromColumnState(columnState);
 
       if (!sortsEqual(nextSorts, sorts)) {
-        void applySorts(nextSorts);
+        // Use progressive sorting for large datasets (>50k rows)
+        const useProgressive = totalRows > 50_000;
+        const visibleRows = 2000; // Sort first 2000 rows immediately
+
+        void applySorts(nextSorts, { progressive: useProgressive, visibleRows });
       }
     },
-    [applySorts, sorts]
+    [applySorts, sorts, totalRows]
   );
 
   const handleToggleColumn = useCallback(

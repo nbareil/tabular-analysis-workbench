@@ -19,11 +19,13 @@ const sortsEqual = (left: SortState[], right: SortState[]): boolean => {
 
 interface ApplyOptions {
   persist?: boolean;
+  progressive?: boolean;
+  visibleRows?: number;
 }
 
 export interface UseSortSyncResult {
   sorts: SortState[];
-  applySorts: (nextSorts: SortState[]) => Promise<void>;
+  applySorts: (nextSorts: SortState[], options?: { progressive?: boolean; visibleRows?: number }) => Promise<void>;
   clearSorts: () => Promise<void>;
 }
 
@@ -37,14 +39,16 @@ export const useSortSync = (): UseSortSyncResult => {
 
   const applySortsInternal = useCallback(
     async (nextSorts: SortState[], options: ApplyOptions = {}): Promise<SortState[]> => {
-      const { persist = true } = options;
+      const { persist = true, progressive = false, visibleRows = 1000 } = options;
 
       try {
         const worker = getDataWorker();
         const response = await worker.applySorts({
           sorts: nextSorts,
           offset: 0,
-          limit: 0
+          limit: 0,
+          progressive,
+          visibleRows
         });
 
         setMatchedRowCount(response.matchedRows ?? null);
@@ -65,8 +69,9 @@ export const useSortSync = (): UseSortSyncResult => {
   );
 
   const applySorts = useCallback(
-    async (nextSorts: SortState[]) => {
-      await applySortsInternal(nextSorts, { persist: true });
+    async (nextSorts: SortState[], options?: { progressive?: boolean; visibleRows?: number }) => {
+      const { progressive = false, visibleRows = 1000 } = options || {};
+      await applySortsInternal(nextSorts, { persist: true, progressive, visibleRows });
     },
     [applySortsInternal]
   );

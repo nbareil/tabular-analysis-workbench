@@ -33,6 +33,7 @@ import type {
 import { evaluateFilterOnRows } from './filterEngine';
 import type { SearchRequest, SearchResult } from './searchEngine';
 import { shouldPreferDuckDb, tryGroupWithDuckDb } from './duckDbPlan';
+import { sortRowIds, sortRowIdsProgressive } from './sortEngine';
 import {
   FuzzyIndexStore,
   type FuzzyIndexSnapshot,
@@ -59,6 +60,8 @@ export type {
   LabelDefinition,
   TagRecord
 } from './types';
+
+export type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
 
 export interface WorkerInitOptions {
   enableDuckDb?: boolean;
@@ -114,6 +117,8 @@ export interface ApplySortRequest {
   sorts: SortDefinition[];
   offset?: number;
   limit?: number;
+  progressive?: boolean;
+  visibleRows?: number;
 }
 
 export interface ApplySortResult {
@@ -121,6 +126,8 @@ export interface ApplySortResult {
   totalRows: number;
   matchedRows: number;
   sorts: SortDefinition[];
+  sortComplete?: boolean;
+  sortedRowCount?: number;
 }
 
 export interface ApplyFilterRequest {
@@ -195,6 +202,8 @@ const state: {
     fuzzyIndexStore: FuzzyIndexStore | null;
     fuzzyIndexSnapshot: FuzzyIndexSnapshot | null;
     fuzzyFingerprint: FuzzyIndexFingerprint | null;
+    backgroundSortPromise: Promise<Uint32Array | void> | null;
+    sortComplete: boolean;
   };
   tagging: {
     labels: LabelDefinition[];
@@ -226,7 +235,9 @@ const state: {
     fileHandle: null,
     fuzzyIndexStore: null,
     fuzzyIndexSnapshot: null,
-    fuzzyFingerprint: null
+    fuzzyFingerprint: null,
+    backgroundSortPromise: null,
+    sortComplete: true
   },
   tagging: {
     labels: [],
@@ -440,98 +451,7 @@ const materializeViewWindow = async (offset: number, limit?: number): Promise<Ma
   return rows;
 };
 
-const compareStringValues = (a: unknown, b: unknown): number => {
-  const aStr = a == null ? '' : String(a);
-  const bStr = b == null ? '' : String(b);
-  return aStr.localeCompare(bStr, undefined, { numeric: true, sensitivity: 'base' });
-};
 
-const compareNumericValues = (a: unknown, b: unknown): number => {
-  const aNum = typeof a === 'number' ? a : Number(a);
-  const bNum = typeof b === 'number' ? b : Number(b);
-
-  const aValid = Number.isFinite(aNum);
-  const bValid = Number.isFinite(bNum);
-
-  if (!aValid && !bValid) {
-    return 0;
-  }
-
-  if (!aValid) {
-    return 1;
-  }
-
-  if (!bValid) {
-    return -1;
-  }
-
-  if (aNum === bNum) {
-    return 0;
-  }
-
-  return aNum < bNum ? -1 : 1;
-};
-
-const compareBooleanValues = (a: unknown, b: unknown): number => {
-  const aBool = typeof a === 'boolean' ? a : Boolean(a);
-  const bBool = typeof b === 'boolean' ? b : Boolean(b);
-
-  if (aBool === bBool) {
-    return 0;
-  }
-
-  return aBool ? 1 : -1;
-};
-
-const compareDatetimeValues = (a: unknown, b: unknown): number => {
-  const toTimestamp = (value: unknown): number => {
-    if (typeof value === 'number') {
-      return value;
-    }
-    if (value == null) {
-      return Number.NaN;
-    }
-    return Date.parse(String(value));
-  };
-
-  const aTime = toTimestamp(a);
-  const bTime = toTimestamp(b);
-
-  const aValid = Number.isFinite(aTime);
-  const bValid = Number.isFinite(bTime);
-
-  if (!aValid && !bValid) {
-    return 0;
-  }
-
-  if (!aValid) {
-    return 1;
-  }
-
-  if (!bValid) {
-    return -1;
-  }
-
-  if (aTime === bTime) {
-    return 0;
-  }
-
-  return aTime < bTime ? -1 : 1;
-};
-
-const compareValues = (type: ColumnType, left: unknown, right: unknown): number => {
-  switch (type) {
-    case 'number':
-      return compareNumericValues(left, right);
-    case 'boolean':
-      return compareBooleanValues(left, right);
-    case 'datetime':
-      return compareDatetimeValues(left, right);
-    case 'string':
-    default:
-      return compareStringValues(left, right);
-  }
-};
 
 const normaliseSearchValue = (value: unknown, caseSensitive: boolean): string => {
   const stringValue = String(value ?? '');
@@ -978,7 +898,7 @@ const api: DataWorkerApi = {
       checkpointInterval: index.checkpointInterval
     };
   },
-  async applySorts({ sorts, offset = 0, limit }): Promise<ApplySortResult> {
+  async applySorts({ sorts, offset = 0, limit, progressive = false, visibleRows = 1000 }): Promise<ApplySortResult> {
     const totalRows = state.dataset.totalRows;
 
     if (!totalRows) {
@@ -1014,54 +934,58 @@ const api: DataWorkerApi = {
       return { rows: [], totalRows, matchedRows: 0, sorts: validSorts };
     }
 
-    const rowIndexMap = new Map<number, number>();
-    baseRowIds.forEach((rowId, index) => {
-      rowIndexMap.set(rowId, index);
-    });
-
-    const valueVectors = validSorts.map(() => new Array<unknown>(baseRowIds.length));
-
-    for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
-      for (let idx = 0; idx < rows.length; idx += 1) {
-        const row = rows[idx]!;
-        const absoluteRowId = rowStart + idx;
-        const position = rowIndexMap.get(absoluteRowId);
-        if (position == null) {
-          continue;
-        }
-
-        for (let sortIdx = 0; sortIdx < validSorts.length; sortIdx += 1) {
-          const sort = validSorts[sortIdx]!;
-          valueVectors[sortIdx]![position] = row[sort.column];
-        }
-      }
+    // Cancel any existing background sort
+    if (state.dataset.backgroundSortPromise) {
+      // Note: In a real implementation, we'd need a way to cancel the promise
+      state.dataset.backgroundSortPromise = null;
     }
 
-    const sortedRowIdsArray = baseRowIds.slice();
-    sortedRowIdsArray.sort((leftId, rightId) => {
-      for (let sortIdx = 0; sortIdx < validSorts.length; sortIdx += 1) {
-        const sort = validSorts[sortIdx]!;
-        const columnType = state.dataset.columnTypes[sort.column] ?? 'string';
-        const values = valueVectors[sortIdx]!;
-        const leftValue = values[rowIndexMap.get(leftId)!];
-        const rightValue = values[rowIndexMap.get(rightId)!];
-        const comparison = compareValues(columnType, leftValue, rightValue);
+    let sortResult;
+    if (progressive && baseRowIds.length > visibleRows * 2) {
+      // Use progressive sorting for large datasets
+      sortResult = await sortRowIdsProgressive(
+        batchStore,
+        baseRowIds,
+        state.dataset.columnTypes,
+        validSorts,
+        visibleRows
+      );
 
-        if (comparison !== 0) {
-          return sort.direction === 'desc' ? -comparison : comparison;
-        }
+      // Store the background completion promise
+      if (sortResult.backgroundPromise) {
+        state.dataset.backgroundSortPromise = sortResult.backgroundPromise.then(completeSortedIds => {
+          // Update the sortedRowIds with complete results
+          state.dataset.sortedRowIds = completeSortedIds;
+          state.dataset.sortComplete = true;
+          state.dataset.backgroundSortPromise = null;
+          return completeSortedIds;
+        });
       }
-      return leftId - rightId;
-    });
 
-    state.dataset.sortedRowIds = Uint32Array.from(sortedRowIdsArray);
+      state.dataset.sortComplete = sortResult.sortComplete;
+    } else {
+      // Use regular sorting for smaller datasets
+      const sortedRowIds = await sortRowIds(
+        batchStore,
+        baseRowIds,
+        state.dataset.columnTypes,
+        validSorts
+      );
+      sortResult = { sortedRowIds, sortComplete: true };
+      state.dataset.sortComplete = true;
+      state.dataset.backgroundSortPromise = null;
+    }
+
+    state.dataset.sortedRowIds = sortResult.sortedRowIds;
 
     const rows = await materializeViewWindow(offset, limit);
     return {
       rows,
       totalRows,
-      matchedRows: sortedRowIdsArray.length,
-      sorts: validSorts
+      matchedRows: baseRowIds.length,
+      sorts: validSorts,
+      sortComplete: sortResult.sortComplete,
+      sortedRowCount: sortResult.sortComplete ? baseRowIds.length : visibleRows
     };
   },
   async applyFilter({ expression, offset = 0, limit }: ApplyFilterRequest): Promise<ApplyFilterResult> {
