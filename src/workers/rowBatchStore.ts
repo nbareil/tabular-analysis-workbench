@@ -130,6 +130,10 @@ export class RowBatchStore {
       });
 
       this.memoryStore.set(batchIndex, batch);
+      if (this.memoryStore.size > MAX_IN_MEMORY_BATCHES) {
+        const oldestIndex = Math.min(...this.memoryStore.keys());
+        this.memoryStore.delete(oldestIndex);
+      }
       if (import.meta.env.DEV) {
         logDebug('row-batch-store', 'Stored batch in memory fallback', {
           batchIndex,
@@ -376,7 +380,7 @@ export class RowBatchStore {
     if (this.useMemoryFallback) {
       const batch = this.memoryStore.get(index);
       if (!batch) {
-        throw new Error(`Batch ${index} not found in memory store`);
+        throw new Error(`Batch ${index} evicted due to memory limit; dataset too large for memory fallback`);
       }
       this.cacheBatch({ index, batch });
       return batch;
