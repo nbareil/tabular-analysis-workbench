@@ -1,8 +1,5 @@
 import type { ColumnType } from './types';
 
-const ISO_DATETIME_REGEX =
-  /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)?(?:Z|[+-]\d{2}:?\d{2})?$/;
-const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 const EPOCH_SECONDS_REGEX = /^-?\d{10}$/;
 const EPOCH_MILLIS_REGEX = /^-?\d{13}$/;
 const BOOLEAN_TRUE = new Set(['true', 't', 'yes', 'y', '1']);
@@ -24,21 +21,6 @@ export const analyzeValue = (raw: string): AnalyzedValue => {
     return { kind: 'null' };
   }
 
-  if (ISO_DATETIME_REGEX.test(trimmed) || ISO_DATE_REGEX.test(trimmed)) {
-    const timestamp = Date.parse(trimmed);
-    if (Number.isFinite(timestamp)) {
-      return { kind: 'datetime', datetimeValue: timestamp };
-    }
-  }
-
-  if (EPOCH_SECONDS_REGEX.test(trimmed) || EPOCH_MILLIS_REGEX.test(trimmed)) {
-    const numeric = Number(trimmed);
-    if (Number.isFinite(numeric)) {
-      const millis = EPOCH_SECONDS_REGEX.test(trimmed) ? numeric * 1_000 : numeric;
-      return { kind: 'datetime', datetimeValue: millis };
-    }
-  }
-
   const lower = trimmed.toLowerCase();
   if (BOOLEAN_TRUE.has(lower)) {
     return { kind: 'boolean', booleanValue: true };
@@ -47,9 +29,24 @@ export const analyzeValue = (raw: string): AnalyzedValue => {
     return { kind: 'boolean', booleanValue: false };
   }
 
+  // Check for epoch timestamps
+  if (EPOCH_SECONDS_REGEX.test(trimmed) || EPOCH_MILLIS_REGEX.test(trimmed)) {
+    const numeric = Number(trimmed);
+    if (Number.isFinite(numeric)) {
+      const millis = EPOCH_SECONDS_REGEX.test(trimmed) ? numeric * 1_000 : numeric;
+      return { kind: 'datetime', datetimeValue: millis };
+    }
+  }
+
   const numericValue = Number(trimmed);
   if (Number.isFinite(numericValue)) {
     return { kind: 'number', numberValue: numericValue };
+  }
+
+  // Try parsing as other datetime formats
+  const timestamp = Date.parse(trimmed);
+  if (Number.isFinite(timestamp)) {
+    return { kind: 'datetime', datetimeValue: timestamp };
   }
 
   return { kind: 'string' };

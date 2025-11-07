@@ -65,6 +65,8 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 - Designed for **long, narrow** datasets.
 - Optional **DuckDB-WASM** backend for SQL-style filtering/grouping.
 - Type inference (string, number, datetime, boolean).
+  - Datetime supports ISO formats, epoch timestamps, and common formats like "Oct 14 2025 01:44:33".
+  - Datetime values displayed in ISO 8601 format without milliseconds.
 
 ### 4.3 Data Operations
 - **Sorting**: multi-column.  

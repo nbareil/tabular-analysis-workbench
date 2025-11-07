@@ -263,7 +263,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       string: 'text',
       number: 'number',
       boolean: 'boolean',
-      datetime: 'dateString'
+      datetime: 'text'
     };
     return (type: GridColumn['type']) => mapping[type] ?? 'text';
   }, []);

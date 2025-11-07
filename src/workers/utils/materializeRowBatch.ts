@@ -55,7 +55,12 @@ const decodeBooleanColumn = (column: BooleanColumnBatch): Array<boolean | null> 
 const decodeDatetimeColumn = (column: DatetimeColumnBatch): Array<string | null> => {
   const values = Array.from(column.data).map((value) => {
     const date = new Date(value);
-    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+    if (!Number.isFinite(date.getTime())) {
+      return null;
+    }
+    const iso = date.toISOString();
+    // Remove milliseconds (.000) to display cleaner ISO format
+    return iso.replace('.000', '');
   });
 
   if (!column.nullMask) {

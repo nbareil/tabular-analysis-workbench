@@ -147,7 +147,8 @@
 - Parser emits RowBatch objects with typed column arrays and a rowIds vector referencing absolute row numbers.
 
 ### 7.2 Type inference
-- Samples first N rows per column, applies heuristics (ISO datetime, epoch numbers, numeric, boolean, fallback string).
+- Samples first N rows per column, applies heuristics (ISO datetime, epoch timestamps, common datetime formats like "Oct 14 2025 01:44:33", numeric, boolean, fallback string).
+- Datetime values displayed in ISO 8601 format without milliseconds (e.g., "2025-10-14T01:44:33Z") for consistency and readability.
 - Inference metadata stored alongside confidence score; UI displays type chips and allows overrides that trigger reparse or conversion pipeline.
 
 ### 7.3 Byte-offset row index
