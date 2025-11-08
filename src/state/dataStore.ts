@@ -21,6 +21,7 @@ export type LoaderStatus = 'idle' | 'loading' | 'ready' | 'error';
 interface DataState {
   fileName: string | null;
   columns: GridColumn[];
+  columnInference: Record<string, ColumnInference>;
   searchRows: GridRow[] | null;
   status: LoaderStatus;
   message: string | null;
@@ -89,6 +90,7 @@ const initialGroupingState = (): DataState['grouping'] => ({
 export const useDataStore = create<DataState>((set) => ({
   fileName: null,
   columns: [],
+  columnInference: {},
   searchRows: null,
   status: 'idle',
   message: null,
@@ -103,6 +105,7 @@ export const useDataStore = create<DataState>((set) => ({
     set((state) => ({
       fileName,
       columns: [],
+      columnInference: {},
       searchRows: null,
       status: 'loading',
       message: null,
@@ -210,7 +213,8 @@ export const useDataStore = create<DataState>((set) => ({
         },
         totalRows: summary.rowsParsed,
         matchedRows,
-        columns: updatedColumns
+        columns: updatedColumns,
+        columnInference: summary.columnInference
       };
 
       if (import.meta.env.DEV) {

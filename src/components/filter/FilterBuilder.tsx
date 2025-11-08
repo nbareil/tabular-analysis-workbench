@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react';
 
 import type { FilterState } from '@state/sessionStore';
 import type { GridColumn } from '@state/dataStore';
+import { useDataStore } from '@state/dataStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useTagStore } from '@state/tagStore';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
@@ -92,6 +93,7 @@ const normaliseFilterForColumn = (
 
 const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
   const { filters, applyFilters } = useFilterSync();
+  const columnInference = useDataStore((state) => state.columnInference);
   const tagLabels = useTagStore((state) => state.labels);
   const tagStatus = useTagStore((state) => state.status);
   const loadTags = useTagStore((state) => state.load);
@@ -130,11 +132,21 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
     const columnType = columnMap[firstColumn]?.type;
     if (columnType === 'datetime' && firstColumn !== TAG_COLUMN_ID) {
       newFilter.operator = 'between';
-      const now = Date.now();
-      newFilter.value = now;
-      newFilter.value2 = now + 86400000;
-      newFilter.rawValue = formatDatetimeForInput(now);
-      newFilter.rawValue2 = formatDatetimeForInput(now + 86400000);
+      const inference = columnInference[firstColumn];
+      const minDatetime = inference?.minDatetime;
+      const maxDatetime = inference?.maxDatetime;
+      if (minDatetime != null && maxDatetime != null) {
+        newFilter.value = minDatetime;
+        newFilter.value2 = maxDatetime;
+        newFilter.rawValue = formatDatetimeForInput(minDatetime);
+        newFilter.rawValue2 = formatDatetimeForInput(maxDatetime);
+      } else {
+        const now = Date.now();
+        newFilter.value = now;
+        newFilter.value2 = now + 86400000;
+        newFilter.rawValue = formatDatetimeForInput(now);
+        newFilter.rawValue2 = formatDatetimeForInput(now + 86400000);
+      }
     }
     const next = [...filters, newFilter];
     void applyFilters(next);
@@ -170,11 +182,21 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
       if (updates.column && columnMap[updates.column]?.type === 'datetime' && updates.column !== TAG_COLUMN_ID) {
         updated.operator = 'between';
         if (!updated.value) {
-          const now = Date.now();
-          updated.value = now;
-          updated.value2 = now + 86400000;
-          updated.rawValue = formatDatetimeForInput(now);
-          updated.rawValue2 = formatDatetimeForInput(now + 86400000);
+          const inference = columnInference[updates.column];
+          const minDatetime = inference?.minDatetime;
+          const maxDatetime = inference?.maxDatetime;
+          if (minDatetime != null && maxDatetime != null) {
+            updated.value = minDatetime;
+            updated.value2 = maxDatetime;
+            updated.rawValue = formatDatetimeForInput(minDatetime);
+            updated.rawValue2 = formatDatetimeForInput(maxDatetime);
+          } else {
+            const now = Date.now();
+            updated.value = now;
+            updated.value2 = now + 86400000;
+            updated.rawValue = formatDatetimeForInput(now);
+            updated.rawValue2 = formatDatetimeForInput(now + 86400000);
+          }
         }
       }
 

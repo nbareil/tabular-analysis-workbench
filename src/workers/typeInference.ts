@@ -63,6 +63,8 @@ export interface ColumnInferenceState {
   nullCount: number;
   typeCounts: Record<ColumnType, number>;
   examples: string[];
+  minDatetime?: number;
+  maxDatetime?: number;
 }
 
 export interface ColumnInferenceResult {
@@ -71,6 +73,8 @@ export interface ColumnInferenceResult {
   samples: number;
   nullCount: number;
   examples: string[];
+  minDatetime?: number;
+  maxDatetime?: number;
 }
 
 const MAX_EXAMPLES = 5;
@@ -132,6 +136,16 @@ export class TypeInferencer {
     } else {
       stats.typeCounts[analysis.kind] += 1;
     }
+
+    // Track min/max for datetime values
+    if (analysis.kind === 'datetime' && analysis.datetimeValue != null) {
+      if (stats.minDatetime == null || analysis.datetimeValue < stats.minDatetime) {
+        stats.minDatetime = analysis.datetimeValue;
+      }
+      if (stats.maxDatetime == null || analysis.datetimeValue > stats.maxDatetime) {
+        stats.maxDatetime = analysis.datetimeValue;
+      }
+    }
   }
 
   getState(): Record<string, ColumnInferenceState> {
@@ -157,7 +171,9 @@ export class TypeInferencer {
         confidence: 1,
         samples: stats.samples,
         nullCount: stats.nullCount,
-        examples: stats.examples.slice()
+        examples: stats.examples.slice(),
+        minDatetime: stats.minDatetime,
+        maxDatetime: stats.maxDatetime
       };
     }
 
@@ -177,7 +193,9 @@ export class TypeInferencer {
           confidence: Math.min(1, candidate.ratio),
           samples: stats.samples,
           nullCount: stats.nullCount,
-          examples: stats.examples.slice()
+          examples: stats.examples.slice(),
+          minDatetime: stats.minDatetime,
+          maxDatetime: stats.maxDatetime
         };
       }
     }
@@ -190,7 +208,9 @@ export class TypeInferencer {
       confidence: Number.isFinite(confidence) ? confidence : 1,
       samples: stats.samples,
       nullCount: stats.nullCount,
-      examples: stats.examples.slice()
+      examples: stats.examples.slice(),
+      minDatetime: stats.minDatetime,
+      maxDatetime: stats.maxDatetime
     };
   }
 }

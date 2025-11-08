@@ -42,6 +42,8 @@ export interface ColumnInference {
   samples: number;
   nullCount: number;
   examples: string[];
+  minDatetime?: number;
+  maxDatetime?: number;
 }
 
 export type FilterOperator =

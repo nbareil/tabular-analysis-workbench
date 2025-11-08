@@ -73,4 +73,16 @@ describe('TypeInferencer', () => {
     const result = inferencer.resolve('mixed');
     expect(result.type).toBe('string');
   });
+
+  it('tracks min/max datetime values', () => {
+    const inferencer = new TypeInferencer(['timestamp']);
+    inferencer.updateRow(['2023-10-14T12:00:00Z']); // Date.parse('2023-10-14T12:00:00Z')
+    inferencer.updateRow(['2023-10-15T12:00:00Z']);
+    inferencer.updateRow(['2023-10-13T12:00:00Z']);
+
+    const result = inferencer.resolve('timestamp');
+    expect(result.type).toBe('datetime');
+    expect(result.minDatetime).toBe(Date.parse('2023-10-13T12:00:00Z'));
+    expect(result.maxDatetime).toBe(Date.parse('2023-10-15T12:00:00Z'));
+  });
 });
