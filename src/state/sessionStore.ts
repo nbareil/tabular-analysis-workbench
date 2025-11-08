@@ -14,6 +14,8 @@ export interface FilterState {
   operator: string;
   value: unknown;
   value2?: unknown;
+  rawValue?: string;
+  rawValue2?: string;
   fuzzy?: boolean;
   caseSensitive?: boolean;
 }

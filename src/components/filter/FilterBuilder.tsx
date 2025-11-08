@@ -11,20 +11,46 @@ interface FilterBuilderProps {
 }
 
 const formatDatetimeForInput = (value: unknown): string => {
-  const date = typeof value === 'number' && Number.isFinite(value) ? new Date(value) : new Date();
-  // Format as UTC ISO string for datetime-local input
-  return date.toISOString().slice(0, 16);
-};
-
-const parseDatetimeFromInput = (value: string): number | string => {
-  if (value) {
-    // Treat the input as UTC by appending 'Z'
-    const timestamp = Date.parse(value + 'Z');
-    if (Number.isFinite(timestamp)) {
-      return timestamp;
-    }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return new Date(value).toISOString().slice(0, 16);
   }
   return '';
+};
+
+const smartParseDatetime = (value: string, isEnd: boolean = false): number | string => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  // Split into parts
+  const parts = trimmed.split(/[-T:]/);
+  let year = parts[0] || new Date().getFullYear().toString();
+  let month = parts[1] || (isEnd ? '12' : '01');
+  let day = parts[2] || (isEnd ? '31' : '01'); // Will adjust for month
+  let hour = parts[3] || (isEnd ? '23' : '00');
+  let minute = parts[4] || (isEnd ? '59' : '00');
+
+  // Adjust day for month if necessary
+  if (!parts[2]) {
+    const date = new Date(parseInt(year), parseInt(month) - 1 + (isEnd ? 1 : 0), 0);
+    if (isEnd) {
+      day = date.getDate().toString().padStart(2, '0');
+    }
+  }
+
+  // For year only, adjust month and day
+  if (!parts[1]) {
+    if (isEnd) {
+      month = '12';
+      day = '31';
+    } else {
+      month = '01';
+      day = '01';
+    }
+  }
+
+  const iso = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}T${hour.padStart(2, '0')}:${minute.padStart(2, '0')}Z`;
+  const timestamp = Date.parse(iso);
+  return Number.isFinite(timestamp) ? timestamp : '';
 };
 
 const defaultFilter = (column: string, labels: any): FilterState => {
@@ -104,8 +130,11 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
     const columnType = columnMap[firstColumn]?.type;
     if (columnType === 'datetime' && firstColumn !== TAG_COLUMN_ID) {
       newFilter.operator = 'between';
-      newFilter.value = Date.now();
-      newFilter.value2 = Date.now();
+      const now = Date.now();
+      newFilter.value = now;
+      newFilter.value2 = now + 86400000;
+      newFilter.rawValue = formatDatetimeForInput(now);
+      newFilter.rawValue2 = formatDatetimeForInput(now + 86400000);
     }
     const next = [...filters, newFilter];
     void applyFilters(next);
@@ -140,6 +169,13 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
 
       if (updates.column && columnMap[updates.column]?.type === 'datetime' && updates.column !== TAG_COLUMN_ID) {
         updated.operator = 'between';
+        if (!updated.value) {
+          const now = Date.now();
+          updated.value = now;
+          updated.value2 = now + 86400000;
+          updated.rawValue = formatDatetimeForInput(now);
+          updated.rawValue2 = formatDatetimeForInput(now + 86400000);
+        }
       }
 
       if (updates.column === TAG_COLUMN_ID || updated.column === TAG_COLUMN_ID) {
@@ -149,6 +185,27 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
       return updated;
     });
     void applyFilters(next);
+  };
+
+  const onDatetimeChange = (filter: FilterState, field: 'value' | 'value2') => (event: React.ChangeEvent<HTMLInputElement>) => {
+    const updates: Partial<FilterState> = { [`raw${field.charAt(0).toUpperCase() + field.slice(1)}`]: event.target.value };
+    handleChange(filter.id, updates);
+  };
+
+  const onDatetimeBlur = (filter: FilterState, field: 'value' | 'value2') => (event: React.FocusEvent<HTMLInputElement>) => {
+    const raw = event.target.value;
+    const isEnd = field === 'value2';
+    const parsed = smartParseDatetime(raw, isEnd);
+    const updates: Partial<FilterState> = {
+      [field]: parsed,
+      [`raw${field.charAt(0).toUpperCase() + field.slice(1)}`]: typeof parsed === 'number' ? formatDatetimeForInput(parsed) : ''
+    };
+    if (field === 'value' && filter.operator === 'between' && typeof parsed === 'number') {
+      const endParsed = smartParseDatetime(raw, true);
+      updates.value2 = endParsed;
+      updates.rawValue2 = typeof endParsed === 'number' ? formatDatetimeForInput(endParsed) : '';
+    }
+    handleChange(filter.id, updates);
   };
 
   if (columns.length === 0) {
@@ -240,31 +297,33 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
               ) : (
               <>
               {columnMap[filter.column]?.type === 'datetime' && filter.operator === 'between' ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400 w-12">Start</span>
-                  <input
-                    type="datetime-local"
-                    className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
-                    value={formatDatetimeForInput(filter.value)}
-                  onChange={(event) => handleChange(filter.id, { value: parseDatetimeFromInput(event.target.value) })}
-                placeholder="Date/Time"
-                />
-                </div>
+              <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 w-12">Start</span>
+              <input
+              type="text"
+              className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+              value={filter.rawValue ?? formatDatetimeForInput(filter.value)}
+              onChange={onDatetimeChange(filter, 'value')}
+              onBlur={onDatetimeBlur(filter, 'value')}
+              placeholder="YYYY-MM-DDTHH:MM"
+              />
+              </div>
               ) : columnMap[filter.column]?.type === 'datetime' ? (
-                <input
-                  type="datetime-local"
-                className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
-              value={formatDatetimeForInput(filter.value)}
-              onChange={(event) => handleChange(filter.id, { value: parseDatetimeFromInput(event.target.value) })}
-              placeholder="Date/Time"
+              <input
+              type="text"
+              className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+              value={filter.rawValue ?? formatDatetimeForInput(filter.value)}
+              onChange={onDatetimeChange(filter, 'value')}
+              onBlur={onDatetimeBlur(filter, 'value')}
+              placeholder="YYYY-MM-DDTHH:MM"
               />
               ) : (
-                <input
-                  className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
-                  value={String(filter.value ?? '')}
-                  onChange={(event) => handleChange(filter.id, { value: event.target.value })}
-                  placeholder="Value"
-                />
+              <input
+              className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+              value={String(filter.value ?? '')}
+              onChange={(event) => handleChange(filter.id, { value: event.target.value })}
+              placeholder="Value"
+              />
               )}
               </>
               )}
@@ -272,31 +331,33 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
               filter.column !== TAG_COLUMN_ID && (
               <>
               {columnMap[filter.column]?.type === 'datetime' && filter.operator === 'between' ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-slate-400 w-12">End</span>
-                  <input
-                  type="datetime-local"
+              <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 w-12">End</span>
+              <input
+              type="text"
               className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
-              value={formatDatetimeForInput(filter.value2)}
-              onChange={(event) => handleChange(filter.id, { value2: parseDatetimeFromInput(event.target.value) })}
-              placeholder="End Date/Time"
+              value={filter.rawValue2 ?? formatDatetimeForInput(filter.value2)}
+              onChange={onDatetimeChange(filter, 'value2')}
+              onBlur={onDatetimeBlur(filter, 'value2')}
+              placeholder="YYYY-MM-DDTHH:MM"
               />
               </div>
               ) : columnMap[filter.column]?.type === 'datetime' ? (
               <input
-                  type="datetime-local"
-                  className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
-                  value={formatDatetimeForInput(filter.value2)}
-                  onChange={(event) => handleChange(filter.id, { value2: parseDatetimeFromInput(event.target.value) })}
-                  placeholder="End Date/Time"
-                />
+              type="text"
+              className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+              value={filter.rawValue2 ?? formatDatetimeForInput(filter.value2)}
+              onChange={onDatetimeChange(filter, 'value2')}
+              onBlur={onDatetimeBlur(filter, 'value2')}
+              placeholder="YYYY-MM-DDTHH:MM"
+              />
               ) : (
-                <input
-                  className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
-                  value={String(filter.value2 ?? '')}
-                  onChange={(event) => handleChange(filter.id, { value2: event.target.value })}
-                  placeholder="Value 2"
-                />
+              <input
+              className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+              value={String(filter.value2 ?? '')}
+              onChange={(event) => handleChange(filter.id, { value2: event.target.value })}
+              placeholder="Value 2"
+              />
               )}
               </>
               )}
