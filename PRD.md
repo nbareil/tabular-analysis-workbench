@@ -71,11 +71,12 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 ### 4.3 Data Operations
 - **Sorting**: multi-column.  
 - **Filtering**:  
-  - “TLE-style” textual predicates (equals, contains, begins, regex, range).  
-  - Advanced regex operators: **matches** / **not matches** leverage browser RegExp evaluation for include/exclude patterns.
-  - Case-insensitive by default with per-filter **Case sensitive** toggle for forensic precision.
-  - Boolean AND/OR logic per column.  
-  - Grid-level context actions: right-click on any cell provides **Filter in** / **Filter out** shortcuts that append the cell value as an equality or inequality predicate.
+- “TLE-style” textual predicates (equals, contains, begins, regex, range).  
+- Advanced regex operators: **matches** / **not matches** leverage browser RegExp evaluation for include/exclude patterns.
+- For datetime columns, the operator defaults to 'between' with text inputs for manual ISO date/time entry. Smart parsing interprets partial inputs: start times default to beginning of period (e.g., "2024-02" → 2024-02-01T00:00), end times to end of period (e.g., "2024-02" → 2024-02-29T23:59 for leap years). Entering start time in 'between' filters auto-fills end time with the end of the same period. All datetime values are processed in UTC for consistency.
+- Case-insensitive by default with per-filter **Case sensitive** toggle for forensic precision.
+- Boolean AND/OR logic per column.  
+- Grid-level context actions: right-click on any cell provides **Filter in** / **Filter out** shortcuts that append the cell value as an equality or inequality predicate.
 - **Grouping / Pivoting**:  
   - Group by one + columns.  
   - Aggregations: count, sum, min, max, avg.  
