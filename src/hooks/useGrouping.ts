@@ -89,6 +89,10 @@ export interface UseGroupingResult {
   refresh: () => Promise<void>;
 }
 
+/**
+ * Hook for managing grouping state and operations.
+ * Integrates with session store for persistence and data store for results.
+ */
 export const useGrouping = (): UseGroupingResult => {
   const groups = useSessionStore((state) => state.groups);
   const setGroups = useSessionStore((state) => state.setGroups);

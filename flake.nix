@@ -36,6 +36,7 @@
               nodePackages.pnpm
               watchman
               git
+              amp-cli
             ]) ++ [ bd codexCli pkgs.caddy serveWithCaddy ];
 
           shellHook = ''

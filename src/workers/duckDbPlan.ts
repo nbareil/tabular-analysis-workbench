@@ -49,6 +49,10 @@ const toModuleUrl = (path?: string | null): URL | undefined => {
   }
 };
 
+/**
+ * Determines if DuckDB should be used for grouping instead of built-in engine.
+ * Prefers DuckDB for multi-column groups, large datasets (>50k rows), or complex aggregates.
+ */
 export const shouldPreferDuckDb = (
   request: GroupingRequest,
   columnTypes: Record<string, ColumnType>,
@@ -77,6 +81,11 @@ export const shouldPreferDuckDb = (
   });
 };
 
+/**
+ * Attempts to perform grouping using DuckDB-WASM.
+ * Falls back to null if DuckDB fails to load or execute.
+ * Creates a temporary table, inserts rows, and runs SQL GROUP BY.
+ */
 export const tryGroupWithDuckDb = async (
   rows: MaterializedRow[],
   columnTypes: Record<string, ColumnType>,
