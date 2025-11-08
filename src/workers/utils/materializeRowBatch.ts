@@ -58,8 +58,8 @@ const decodeDatetimeColumn = (column: DatetimeColumnBatch): Array<string | null>
     if (!Number.isFinite(date.getTime())) {
       return null;
     }
+    // Display in UTC ISO format without milliseconds
     const iso = date.toISOString();
-    // Remove milliseconds (.000) to display cleaner ISO format
     return iso.replace('.000', '');
   });
 
