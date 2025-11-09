@@ -357,8 +357,9 @@ const App = (): JSX.Element => {
           limit: 500,
           caseSensitive: searchCaseSensitive
         });
+        const fetchedRows = await worker.fetchRowsByIds(response.rows);
         setSearchResult({
-          rows: response.rows,
+          rows: fetchedRows,
           totalRows: response.totalRows,
           matchedRows: response.matchedRows
         });
@@ -454,7 +455,7 @@ const App = (): JSX.Element => {
       // Prepare CSV data
       const headers = allColumns.map(col => col.headerName);
       const csvRows = allRows.map(row =>
-        allColumns.map(col => row[col.key] ?? '')
+        allColumns.map(col => (row[col.key] as string) ?? '')
       );
 
       // Serialize to CSV

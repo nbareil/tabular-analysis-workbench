@@ -86,6 +86,12 @@ export interface LoadCompleteSummary {
   columnInference: Record<string, ColumnInference>;
 }
 
+export interface GlobalSearchResult {
+  rows: number[];
+  totalRows: number;
+  matchedRows: number;
+}
+
 export interface LoadFileCallbacks {
   onStart?: (payload: { columns: string[] }) => void | Promise<void>;
   onProgress?: (progress: { rowsParsed: number; bytesParsed: number; batchesStored: number }) => void | Promise<void>;
@@ -164,7 +170,8 @@ export interface DataWorkerApi {
   applyFilter: (request: ApplyFilterRequest) => Promise<ApplyFilterResult>;
   fetchRows: (request: FetchRowsRequest) => Promise<FetchRowsResult>;
   groupBy: (request: GroupingRequest) => Promise<GroupingResult>;
-  globalSearch: (request: SearchRequest) => Promise<SearchResult>;
+  globalSearch: (request: SearchRequest) => Promise<GlobalSearchResult>;
+  fetchRowsByIds: (rowIds: number[]) => Promise<MaterializedRow[]>;
   loadTags: () => Promise<TaggingSnapshot>;
   tagRows: (request: TagRowsRequest) => Promise<TagRowsResponse>;
   clearTag: (rowIds: number[]) => Promise<TagRowsResponse>;
@@ -458,6 +465,29 @@ const normaliseSearchValue = (value: unknown, caseSensitive: boolean): string =>
   return caseSensitive ? stringValue : stringValue.toLowerCase();
 };
 
+const levenshtein = (a: string, b: string): number => {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = Array.from({ length: b.length + 1 }, () => Array(a.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) {
+    matrix[0][i] = i;
+  }
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i][0] = i;
+  }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      const cost = a[j - 1] === b[i - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return matrix[b.length][a.length];
+};
+
 const api: DataWorkerApi = {
   async init(options) {
     const previous = state.options;
@@ -584,7 +614,7 @@ const api: DataWorkerApi = {
       }
 
       try {
-        stream = stream.pipeThrough(new DecompressionStream('gzip'));
+        stream = stream.pipeThrough(new DecompressionStream('gzip') as any);
         debugLog('Applied gzip DecompressionStream');
       } catch (error) {
         throw new Error(
@@ -1139,7 +1169,7 @@ const api: DataWorkerApi = {
 
     return groupMaterializedRows(collectedRows, state.dataset.columnTypes, normalisedRequest);
   },
-  async globalSearch(request: SearchRequest): Promise<SearchResult> {
+  async globalSearch(request: SearchRequest): Promise<GlobalSearchResult> {
     const batchStore = state.dataset.batchStore;
     if (!batchStore) {
       return {
@@ -1169,16 +1199,16 @@ const api: DataWorkerApi = {
     if (!trimmed) {
       const rows = await materializeViewWindow(0, limit);
       return {
-        rows,
+        rows: rows.map(row => row.__rowId),
         totalRows,
         matchedRows: rows.length
       };
     }
 
     const needle = caseSensitive ? trimmed : trimmed.toLowerCase();
-    const matched: MaterializedRow[] = [];
+    const matched: number[] = [];
 
-    for await (const { rows } of batchStore.iterateMaterializedBatches()) {
+    for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
       let filterMatches: Uint8Array | null = null;
       if (request.filter) {
         filterMatches = evaluateFilterOnRows(rows, state.dataset.columnTypes, request.filter, {
@@ -1192,12 +1222,22 @@ const api: DataWorkerApi = {
         }
 
         const row = rows[idx]!;
-        const found = columns.some((column) =>
-          normaliseSearchValue(row[column], caseSensitive).includes(needle)
-        );
+        const found = columns.some((column) => {
+          const value = normaliseSearchValue(row[column], caseSensitive);
+          if (value.includes(needle)) {
+            return true;
+          }
+          if (needle.length <= 10) {
+            const distance = levenshtein(value, needle);
+            if (distance <= 2) {
+              return true;
+            }
+          }
+          return false;
+        });
 
         if (found) {
-          matched.push(row);
+          matched.push(rowStart + idx);
           if (matched.length >= limit) {
             return {
               rows: matched,
@@ -1214,6 +1254,18 @@ const api: DataWorkerApi = {
       totalRows,
       matchedRows: matched.length
     };
+  },
+  async fetchRowsByIds(rowIds: number[]): Promise<MaterializedRow[]> {
+    if (!state.dataset.batchStore) {
+      return [];
+    }
+    const uniqueIds = Array.from(new Set(rowIds)).sort((a, b) => a - b);
+    const rows = await state.dataset.batchStore.materializeRows(uniqueIds);
+    const idToRow = new Map<number, MaterializedRow>();
+    uniqueIds.forEach((id, index) => {
+      idToRow.set(id, rows[index]!);
+    });
+    return rowIds.map(id => idToRow.get(id)).filter((row): row is MaterializedRow => row != null);
   },
   async loadTags(): Promise<TaggingSnapshot> {
     return {

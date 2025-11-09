@@ -119,8 +119,14 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
   };
 
   const handleImport = async () => {
+    if (!('showOpenFilePicker' in window)) {
+      alert('File System Access API is not supported in this browser.');
+      return;
+    }
+
     try {
-      const [handle] = await window.showOpenFilePicker({
+      const openFilePicker = window.showOpenFilePicker!;
+      const [handle] = await openFilePicker({
         types: [
           {
             description: 'JSON files',

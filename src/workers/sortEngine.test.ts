@@ -180,7 +180,7 @@ describe('sortRowIdsProgressive', () => {
     // First 100 rows should be sorted
     const first100Ids = Array.from(result.sortedRowIds.slice(0, 100));
     const first100Scores = first100Ids.map(id => largeRows[id].score);
-    expect(first100Scores).toEqual([...first100Scores].sort((a, b) => a - b));
+    expect(first100Scores).toEqual([...first100Scores].sort((a, b) => (a as number) - (b as number)));
 
     // Wait for background completion
     if (result.backgroundPromise) {
@@ -297,7 +297,7 @@ describe('sort performance tests', () => {
 
     // Verify sorting is correct (first 10 should be lowest scores)
     const first10Scores = Array.from(result.slice(0, 10)).map(id => largeRows[id].score);
-    expect([...first10Scores].sort((a, b) => a - b)).toEqual(first10Scores);
+    expect([...first10Scores].sort((a, b) => (a as number) - (b as number))).toEqual(first10Scores);
   });
 
   it('memory usage is reasonable for large datasets', async () => {

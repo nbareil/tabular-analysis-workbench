@@ -8,7 +8,7 @@ vi.mock('@workers/dataWorkerProxy', () => ({
   getDataWorker: vi.fn()
 }));
 
-const mockedGetDataWorker = getDataWorker as vi.MockedFunction<typeof getDataWorker>;
+const mockedGetDataWorker = vi.mocked(getDataWorker);
 
 describe('useTagStore', () => {
   beforeEach(() => {

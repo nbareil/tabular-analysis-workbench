@@ -25,7 +25,8 @@ import type {
   LabelDefinition,
   LoadCompleteSummary,
   PersistFuzzyIndexRequest,
-  FuzzyIndexSnapshot
+  FuzzyIndexSnapshot,
+  GlobalSearchResult
 } from './dataWorker.worker';
 
 let workerInstance: Remote<DataWorkerApi> | null = null;
@@ -67,5 +68,6 @@ export type {
   LabelDefinition,
   LoadCompleteSummary,
   PersistFuzzyIndexRequest,
-  FuzzyIndexSnapshot
+  FuzzyIndexSnapshot,
+  GlobalSearchResult
 };

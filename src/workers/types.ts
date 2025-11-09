@@ -41,7 +41,7 @@ export interface ColumnInference {
   confidence: number;
   samples: number;
   nullCount: number;
-  examples: string[];
+  examples: readonly string[];
   minDatetime?: number;
   maxDatetime?: number;
 }

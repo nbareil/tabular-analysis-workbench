@@ -8,7 +8,7 @@ export interface GridColumn {
   headerName: string;
   type: ColumnType;
   confidence: number;
-  examples: string[];
+  examples: readonly string[];
 }
 
 export interface GridRow {
