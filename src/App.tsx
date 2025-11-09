@@ -120,6 +120,17 @@ const App = (): JSX.Element => {
 
         if (!cancelled && response === 'pong') {
           setWorkerReady(true);
+
+          // Persist tags on page unload
+          const handleBeforeUnload = async () => {
+            try {
+              await worker.persistTags();
+            } catch (error) {
+              console.warn('Failed to persist tags on unload', error);
+            }
+          };
+
+          window.addEventListener('beforeunload', handleBeforeUnload);
         }
       } catch (error) {
         console.error('Failed to initialize data worker', error);

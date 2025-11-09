@@ -188,6 +188,7 @@ export interface DataWorkerApi {
     request: PersistFuzzyIndexRequest
   ) => Promise<FuzzyIndexSnapshot | null>;
   clearFuzzyIndexSnapshot: () => Promise<void>;
+  persistTags: () => Promise<void>;
 }
 
 const state: {
@@ -222,7 +223,6 @@ const state: {
     store: TaggingStore | null;
     dirty: boolean;
     persistTimer: number | null;
-    fingerprint: FuzzyIndexFingerprint | null;
   };
 } = {
   options: {
@@ -255,8 +255,7 @@ const state: {
     tags: {},
     store: null,
     dirty: false,
-    persistTimer: null,
-    fingerprint: null
+    persistTimer: null
   }
 };
 
@@ -270,7 +269,7 @@ const roundMs = (value: number): number => {
   return Math.round(value * 100) / 100;
 };
 
-const TAG_PERSIST_DEBOUNCE_MS = 5_000;
+const TAG_PERSIST_DEBOUNCE_MS = 30_000;
 const DEFAULT_LABEL_COLOR = '#8899ff';
 
 const generateRandomId = (): string =>
@@ -318,19 +317,14 @@ const resetTaggingState = (): void => {
   state.tagging.tags = {};
   state.tagging.store = null;
   state.tagging.dirty = false;
-  state.tagging.fingerprint = null;
 };
 
-const hydrateTaggingStore = async (
-  handle: FileSystemFileHandle,
-  fingerprint: FuzzyIndexFingerprint
-): Promise<void> => {
+const hydrateTaggingStore = async (): Promise<void> => {
   clearTaggingPersistTimer();
 
   try {
-    const store = await TaggingStore.create(handle, fingerprint);
+    const store = await TaggingStore.create();
     state.tagging.store = store;
-    state.tagging.fingerprint = fingerprint;
 
     const snapshot = await store.load();
     if (snapshot) {
@@ -345,7 +339,6 @@ const hydrateTaggingStore = async (
   } catch (error) {
     console.warn('[data-worker][tagging] Failed to hydrate tagging store', error);
     state.tagging.store = null;
-    state.tagging.fingerprint = null;
     state.tagging.labels = [];
     state.tagging.tags = {};
     state.tagging.dirty = false;
@@ -586,7 +579,7 @@ const api: DataWorkerApi = {
       debugLog('Created new FuzzyIndexBuilder for parsing');
     }
 
-    await hydrateTaggingStore(handle, fuzzyFingerprint);
+    await hydrateTaggingStore();
 
     const compression = detectCompression({
       fileName: file.name ?? handle.name,
@@ -1609,6 +1602,9 @@ const api: DataWorkerApi = {
     if (state.dataset.fuzzyIndexStore) {
       await state.dataset.fuzzyIndexStore.clear();
     }
+  },
+  async persistTags(): Promise<void> {
+    await persistTaggingNow();
   }
 };
 

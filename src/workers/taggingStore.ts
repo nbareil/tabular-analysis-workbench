@@ -3,7 +3,8 @@ import type { FuzzyIndexFingerprint } from './fuzzyIndexStore';
 import type { TaggingSnapshot } from './types';
 
 const TAG_DIRECTORY = 'annotations';
-const TAG_FILE_PREFIX = 'tags';
+const TAG_FILE_NAME = 'tags.json';
+const TAG_TEMP_FILE_NAME = 'tags.tmp.json';
 const TAG_STORE_VERSION = 1;
 
 const textEncoder = new TextEncoder();
@@ -22,57 +23,39 @@ const supportsOpfs = (): boolean => {
   );
 };
 
-const sanitizePathComponent = (value: string): string => {
-  return value.replace(/[^a-zA-Z0-9._-]/g, '_') || 'dataset';
-};
-
-const buildFileName = (fingerprint: FuzzyIndexFingerprint): string => {
-  const safeName = sanitizePathComponent(fingerprint.fileName);
-  const safeSize = Number.isFinite(fingerprint.fileSize) ? Math.max(0, Math.floor(fingerprint.fileSize)) : 0;
-  const safeTimestamp = Number.isFinite(fingerprint.lastModified) ? Math.max(0, Math.floor(fingerprint.lastModified)) : 0;
-  return `${TAG_FILE_PREFIX}-${safeName}-${safeSize}-${safeTimestamp}.json`;
-};
-
 export class TaggingStore {
   private readonly directory: FileSystemDirectoryHandle | null;
   private readonly handle: FileSystemFileHandle | null;
-  private readonly fileName: string | null;
 
   private constructor(
     directory: FileSystemDirectoryHandle | null,
-    handle: FileSystemFileHandle | null,
-    fileName: string | null
+    handle: FileSystemFileHandle | null
   ) {
     this.directory = directory;
     this.handle = handle;
-    this.fileName = fileName;
   }
 
-  static async create(
-    source: FileSystemFileHandle,
-    fingerprint: FuzzyIndexFingerprint
-  ): Promise<TaggingStore> {
+  static async create(): Promise<TaggingStore> {
     if (!supportsOpfs()) {
-      return new TaggingStore(null, null, null);
+      return new TaggingStore(null, null);
     }
 
     try {
       const root = await navigator.storage.getDirectory();
       const directory = await root.getDirectoryHandle(TAG_DIRECTORY, { create: true });
-      const fileName = buildFileName(fingerprint);
-      const handle = await directory.getFileHandle(fileName, { create: true });
+      const handle = await directory.getFileHandle(TAG_FILE_NAME, { create: true });
 
       if (import.meta.env?.DEV) {
         logDebug('tagging-store', 'created tagging store', {
-          fileName,
+          fileName: TAG_FILE_NAME,
           directory: TAG_DIRECTORY
         });
       }
 
-      return new TaggingStore(directory, handle, fileName);
+      return new TaggingStore(directory, handle);
     } catch (error) {
       console.warn('[tagging-store] Failed to initialise OPFS handles', error);
-      return new TaggingStore(null, null, null);
+      return new TaggingStore(null, null);
     }
   }
 
@@ -102,7 +85,7 @@ export class TaggingStore {
   }
 
   async save(snapshot: TaggingSnapshot): Promise<void> {
-    if (!this.handle) {
+    if (!this.directory || !this.handle) {
       return;
     }
 
@@ -112,11 +95,16 @@ export class TaggingStore {
       payload: snapshot
     };
 
-    const writable = await this.handle.createWritable({ keepExistingData: false });
+    // Atomic write: write to temp file, then move
+    const tempHandle = await this.directory.getFileHandle(TAG_TEMP_FILE_NAME, { create: true });
+    const writable = await tempHandle.createWritable({ keepExistingData: false });
     try {
       const data = textEncoder.encode(JSON.stringify(envelope));
       await writable.write(data);
       await writable.close();
+
+      // Move temp to final (atomic replace)
+      await (this.directory as any).move(TAG_TEMP_FILE_NAME, TAG_FILE_NAME);
     } catch (error) {
       await writable.abort();
       console.warn('[tagging-store] Failed to persist snapshot', error);
@@ -125,12 +113,12 @@ export class TaggingStore {
   }
 
   async clear(): Promise<void> {
-    if (!this.directory || !this.fileName) {
+    if (!this.directory) {
       return;
     }
 
     try {
-      await this.directory.removeEntry(this.fileName);
+      await this.directory.removeEntry(TAG_FILE_NAME);
     } catch (error) {
       console.warn('[tagging-store] Failed to clear snapshot', error);
     }
