@@ -173,9 +173,9 @@ const evaluatePredicate = (
           result[index] = predicate.operator === 'eq' ? (exactMatch ? 1 : 0) : exactMatch ? 0 : 1;
         }
 
-        // If fuzzy is enabled and no exact matches, try fuzzy search
+        // If fuzzy is enabled, try fuzzy search in addition to exact
         let fuzzyInfo: FuzzyMatchInfo | undefined;
-        if (predicate.fuzzy && !hasExactMatches && context.fuzzyIndex) {
+        if (predicate.fuzzy && context.fuzzyIndex) {
           const columnSnapshot = context.fuzzyIndex.columns.find(col => col.key === predicate.column);
           if (columnSnapshot) {
             const builder = new FuzzyIndexBuilder();
@@ -192,7 +192,7 @@ const evaluatePredicate = (
               maxDistance: 2
             };
 
-            // For each fuzzy match, find rows containing that token
+            // For each fuzzy match, find rows containing that token and OR with exact
             for (const fuzzyMatch of fuzzyMatches) {
               const matchedToken = fuzzyMatch.token;
               for (let index = 0; index < rowCount; index += 1) {

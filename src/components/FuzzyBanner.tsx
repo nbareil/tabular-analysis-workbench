@@ -30,7 +30,7 @@ export const FuzzyBanner = () => {
         </div>
         <div className="ml-3">
           <p className="text-sm">
-            No exact matches for '{fuzzyUsed.query}'. Showing fuzzy matches (≤ {fuzzyUsed.maxDistance} edits).
+          Fuzzy matching enabled for '{fuzzyUsed.query}'. Showing matches (≤ {fuzzyUsed.maxDistance} edits).
           </p>
           {fuzzyUsed.suggestions.length > 0 && (
             <p className="text-sm mt-1">
