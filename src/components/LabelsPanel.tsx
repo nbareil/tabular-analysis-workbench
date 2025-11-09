@@ -16,9 +16,10 @@ const randomColor = (): string => {
 };
 
 const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null => {
-  const { labels, status, error, load, upsertLabel, deleteLabel } = useTagStore();
+  const { labels, status, error, load, upsertLabel, deleteLabel, importTags } = useTagStore();
   const { filters, applyFilters } = useFilterSync();
   const [labelName, setLabelName] = useState('');
+  const [mergeStrategy, setMergeStrategy] = useState<'merge' | 'replace'>('merge');
 
   useEffect(() => {
     if (!open) {
@@ -117,6 +118,25 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
     void deleteLabel(id);
   };
 
+  const handleImport = async () => {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [
+          {
+            description: 'JSON files',
+            accept: { 'application/json': ['.json'] }
+          }
+        ]
+      });
+      const file = await handle.getFile();
+      const text = await file.text();
+      const snapshot = JSON.parse(text);
+      await importTags(snapshot, mergeStrategy);
+    } catch (error) {
+      console.error('Failed to import tags', error);
+    }
+  };
+
   if (!open) {
     return null;
   }
@@ -165,6 +185,26 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
                 disabled={!labelName.trim()}
               >
                 Add label
+              </button>
+            </div>
+            <div className="space-y-2">
+              <label className="flex flex-col gap-1 text-xs uppercase tracking-wide text-slate-400">
+                Import tags
+                <select
+                  value={mergeStrategy}
+                  onChange={(e) => setMergeStrategy(e.target.value as 'merge' | 'replace')}
+                  className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+                >
+                  <option value="merge">Merge with existing</option>
+                  <option value="replace">Replace all</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
+                onClick={handleImport}
+              >
+                Import Tags
               </button>
             </div>
             <div className="rounded border border-dashed border-slate-700 p-3 text-xs text-slate-400">

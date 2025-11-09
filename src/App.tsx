@@ -63,6 +63,7 @@ const App = (): JSX.Element => {
   const tagLabels = useTagStore((state) => state.labels);
   const tagRecords = useTagStore((state) => state.tags);
   const applyTagToRows = useTagStore((state) => state.applyTag);
+  const exportTags = useTagStore((state) => state.exportTags);
   const [searchTerm, setSearchTerm] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -180,6 +181,8 @@ const App = (): JSX.Element => {
                 // Initialize column layout: hide columns that are entirely null/empty
                 const columnKeys = Object.keys(summary.columnTypes);
                 initializeColumnLayout(columnKeys, summary.columnInference, summary.rowsParsed);
+                // Load tags to populate DataGrid tag column
+                void useTagStore.getState().load();
               }
             },
             onError: async (error) => {
@@ -279,15 +282,25 @@ const App = (): JSX.Element => {
   );
 
   const handleSaveNote = useCallback(
-    (noteValue: string) => {
-      void submitNote(noteValue);
+    (note: string, labelId: string | null) => {
+      if (noteEditor) {
+        void applyTagToRows({ rowIds: [noteEditor.rowId], labelId, note });
+      }
+      setNoteEditor(null);
+      setNoteSaving(false);
     },
-    [submitNote]
+    [applyTagToRows, noteEditor]
   );
 
-  const handleClearNote = useCallback(() => {
-    void submitNote('');
-  }, [submitNote]);
+  const handleClearNote = useCallback(
+    (labelId: string | null) => {
+      if (noteEditor) {
+        void applyTagToRows({ rowIds: [noteEditor.rowId], labelId, note: '' });
+      }
+      setNoteEditor(null);
+    },
+    [applyTagToRows, noteEditor]
+  );
 
   const noteEditorLabel = useMemo(() => {
     if (!noteEditor) {
@@ -466,6 +479,27 @@ const App = (): JSX.Element => {
     }
   }, [fileHandle, matchedRows, allColumns, setError]);
 
+  const handleExportTags = useCallback(async () => {
+    try {
+      const response = await exportTags();
+      if (response) {
+        const json = JSON.stringify(response, null, 2);
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `tags-${fileHandle?.name ?? 'export'}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      console.error('Failed to export tags', error);
+      setError('Failed to export tags');
+    }
+  }, [exportTags, fileHandle, setError]);
+
   return (
     <div className="flex h-full flex-col bg-canvas text-slate-100">
       <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
@@ -542,6 +576,14 @@ const App = (): JSX.Element => {
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+            onClick={handleExportTags}
+            disabled={!workerReady || !fileHandle}
+          >
+            Export Tags
+          </button>
+          <button
+            type="button"
+            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setShowPivot((value) => !value)}
             disabled={!workerReady || loaderStatus === 'loading'}
           >
@@ -602,9 +644,8 @@ const App = (): JSX.Element => {
       <ColumnsPanel open={columnsOpen} onClose={() => setColumnsOpen(false)} />
       <TagNoteDialog
         open={noteEditor != null}
+        initialLabelId={noteEditor?.labelId ?? null}
         initialNote={noteEditor?.note ?? ''}
-        labelName={noteEditorLabel?.name}
-        labelColor={noteEditorLabel?.color}
         onSave={handleSaveNote}
         onClear={handleClearNote}
         onClose={() => {

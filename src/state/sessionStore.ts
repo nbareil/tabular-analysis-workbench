@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import { DATA_DEFAULT_FONT_ID, DEFAULT_FONT_ID, DEFAULT_FONT_SIZE } from '@constants/fonts';
-import type { ColumnInference, GroupAggregationDefinition } from '@workers/types';
+import type { ColumnInference, GroupAggregationDefinition, LabelDefinition, TagRecord } from '@workers/types';
 
 export interface ColumnLayoutState {
   order: string[];
@@ -32,6 +32,8 @@ export interface SessionSnapshot {
   interfaceFontSize: number;
   dataFontFamily: string;
   dataFontSize: number;
+  labels: LabelDefinition[];
+  tags: Record<number, TagRecord>;
   updatedAt: number;
 }
 
@@ -48,6 +50,8 @@ interface SessionStore extends SessionSnapshot {
   setInterfaceFontSize: (value: number) => void;
   setDataFontFamily: (value: string) => void;
   setDataFontSize: (value: number) => void;
+  setLabels: (labels: LabelDefinition[]) => void;
+  setTags: (tags: Record<number, TagRecord>) => void;
   touch: () => void;
   clear: () => void;
 }
@@ -74,6 +78,8 @@ const initialState: SessionSnapshot = {
   interfaceFontSize: DEFAULT_FONT_SIZE,
   dataFontFamily: DATA_DEFAULT_FONT_ID,
   dataFontSize: DEFAULT_FONT_SIZE,
+  labels: [],
+  tags: {},
   updatedAt: Date.now()
 };
 
@@ -110,6 +116,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
   setDataFontFamily: (dataFontFamily) =>
     set(() => ({ dataFontFamily, updatedAt: Date.now() })),
   setDataFontSize: (dataFontSize) => set(() => ({ dataFontSize, updatedAt: Date.now() })),
+  setLabels: (labels) => set(() => ({ labels, updatedAt: Date.now() })),
+  setTags: (tags) => set(() => ({ tags, updatedAt: Date.now() })),
   touch: () => set(() => ({ updatedAt: Date.now() })),
   clear: () => set(() => ({ ...initialState, updatedAt: Date.now() }))
 }));

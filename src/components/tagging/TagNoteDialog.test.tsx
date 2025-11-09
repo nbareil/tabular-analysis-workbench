@@ -12,6 +12,7 @@ describe('TagNoteDialog', () => {
     render(
       <TagNoteDialog
         open
+        initialLabelId={null}
         initialNote="existing"
         onSave={handleSave}
         onClear={handleClear}
@@ -24,7 +25,7 @@ describe('TagNoteDialog', () => {
 
     fireEvent.click(screen.getByText('Save note'));
 
-    expect(handleSave).toHaveBeenCalledWith('updated note');
+    expect(handleSave).toHaveBeenCalledWith('updated note', null);
   });
 
   it('invokes clear handler', () => {
@@ -35,6 +36,7 @@ describe('TagNoteDialog', () => {
     render(
       <TagNoteDialog
         open
+        initialLabelId={null}
         initialNote="example"
         onSave={handleSave}
         onClear={handleClear}
@@ -43,6 +45,6 @@ describe('TagNoteDialog', () => {
     );
 
     fireEvent.click(screen.getByText('Clear note'));
-    expect(handleClear).toHaveBeenCalled();
+    expect(handleClear).toHaveBeenCalledWith(null);
   });
 });
