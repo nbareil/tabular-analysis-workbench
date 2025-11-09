@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildFilterExpression } from './filterExpression';
-import type { FilterExpression } from '@workers/types';
+import type { FilterExpression, FilterPredicate } from '@workers/types';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
 
 describe('buildFilterExpression', () => {
@@ -23,7 +23,7 @@ describe('buildFilterExpression', () => {
     if (!expression) {
       throw new Error('expression should not be null');
     }
-    expect((expression as FilterExpression).predicates[0]?.value).toBeNull();
+    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).value).toBeNull();
   });
 
   it('retains label id values for tag column filters', () => {
@@ -40,7 +40,7 @@ describe('buildFilterExpression', () => {
     if (!expression) {
       throw new Error('expression should not be null');
     }
-    expect((expression as FilterExpression).predicates[0]?.value).toBe('label-1');
+    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).value).toBe('label-1');
   });
 
   it('combines multiple filters with AND logic', () => {
@@ -66,21 +66,21 @@ describe('buildFilterExpression', () => {
     expect((expression as FilterExpression).op).toBe('and');
     expect((expression as FilterExpression).predicates).toHaveLength(2);
     expect((expression as FilterExpression).predicates[0]).toEqual({
-      column: 'name',
-      operator: 'eq',
-      value: 'Alice',
-      value2: undefined,
-      caseSensitive: false,
-      fuzzy: undefined
-    });
+    column: 'name',
+    operator: 'eq',
+    value: 'Alice',
+    value2: undefined,
+    caseSensitive: false,
+    fuzzy: undefined
+    } as FilterPredicate);
     expect((expression as FilterExpression).predicates[1]).toEqual({
-      column: 'age',
-      operator: 'gt',
-      value: 25,
-      value2: undefined,
-      caseSensitive: false,
-      fuzzy: undefined
-    });
+    column: 'age',
+    operator: 'gt',
+    value: 25,
+    value2: undefined,
+    caseSensitive: false,
+    fuzzy: undefined
+    } as FilterPredicate);
   });
 
   it('handles range operator with value2', () => {
@@ -99,13 +99,13 @@ describe('buildFilterExpression', () => {
       throw new Error('expression should not be null');
     }
     expect((expression as FilterExpression).predicates[0]).toEqual({
-      column: 'age',
-      operator: 'between',
-      value: 20,
-      value2: 30,
-      caseSensitive: false,
-      fuzzy: undefined
-    });
+    column: 'age',
+    operator: 'between',
+    value: 20,
+    value2: 30,
+    caseSensitive: false,
+    fuzzy: undefined
+    } as FilterPredicate);
   });
 
   it('preserves fuzzy and caseSensitive flags', () => {
@@ -125,13 +125,13 @@ describe('buildFilterExpression', () => {
       throw new Error('expression should not be null');
     }
     expect((expression as FilterExpression).predicates[0]).toEqual({
-      column: 'name',
-      operator: 'contains',
-      value: 'test',
-      value2: undefined,
-      caseSensitive: true,
-      fuzzy: true
-    });
+    column: 'name',
+    operator: 'contains',
+    value: 'test',
+    value2: undefined,
+    caseSensitive: true,
+    fuzzy: true
+    } as FilterPredicate);
   });
 
   it('handles different operators like gt and lt', () => {
@@ -156,10 +156,10 @@ describe('buildFilterExpression', () => {
     }
     expect((expression as FilterExpression).op).toBe('and');
     expect((expression as FilterExpression).predicates).toHaveLength(2);
-    expect((expression as FilterExpression).predicates[0].operator).toBe('gt');
-    expect((expression as FilterExpression).predicates[0].value).toBe(80);
-    expect((expression as FilterExpression).predicates[1].operator).toBe('lt');
-    expect((expression as FilterExpression).predicates[1].value).toBe('2023-01-01');
+    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).operator).toBe('gt');
+    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).value).toBe(80);
+    expect(((expression as FilterExpression).predicates[1] as FilterPredicate).operator).toBe('lt');
+    expect(((expression as FilterExpression).predicates[1] as FilterPredicate).value).toBe('2023-01-01');
   });
 
   it('handles malformed filter without required fields', () => {
@@ -175,8 +175,8 @@ describe('buildFilterExpression', () => {
     if (!expression) {
       throw new Error('expression should not be null');
     }
-    expect((expression as FilterExpression).predicates[0].column).toBeUndefined();
-    expect((expression as FilterExpression).predicates[0].operator).toBe('eq');
-    expect((expression as FilterExpression).predicates[0].value).toBe('test');
+    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).column).toBeUndefined();
+    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).operator).toBe('eq');
+    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).value).toBe('test');
   });
 });

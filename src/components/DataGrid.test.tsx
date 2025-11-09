@@ -100,7 +100,8 @@ describe('buildSortStateFromColumnState', () => {
 describe('MarkdownTooltip', () => {
   const createMockParams = (value: TagCellValue | null): ICellRendererParams<TagCellValue | null> => ({
     value,
-    data: null,
+    valueFormatted: null as any,
+    data: null as any,
     node: null as any,
     colDef: null as any,
     column: null as any,
@@ -114,8 +115,8 @@ describe('MarkdownTooltip', () => {
     setValue: () => {},
     refreshCell: () => {},
     formatValue: () => '',
-    addRenderedRowListener: () => {},
-    isRendered: () => true
+    registerRowDragger: () => {},
+    setTooltip: () => {}
   });
 
   it('renders markdown note as HTML', () => {
@@ -127,7 +128,7 @@ describe('MarkdownTooltip', () => {
     };
 
     const mockParams = createMockParams(mockValue);
-    const { container } = render(<MarkdownTooltip value={mockValue} data={null} node={null} colDef={null} column={null} rowIndex={0} api={null} columnApi={null} context={null} eGridCell={null} eParentOfValue={null} getValue={() => mockValue} setValue={() => {}} refreshCell={() => {}} formatValue={() => ''} addRenderedRowListener={() => {}} isRendered={() => true} />);
+    const { container } = render(<MarkdownTooltip {...mockParams} />);
 
     const div = container.firstChild as HTMLElement;
     expect(div).toBeInTheDocument();
@@ -144,7 +145,7 @@ describe('MarkdownTooltip', () => {
     };
 
     const mockParams = createMockParams(mockValue);
-    const { container } = render(<MarkdownTooltip value={mockValue} data={null} node={null} colDef={null} column={null} rowIndex={0} api={null} columnApi={null} context={null} eGridCell={null} eParentOfValue={null} getValue={() => mockValue} setValue={() => {}} refreshCell={() => {}} formatValue={() => ''} addRenderedRowListener={() => {}} isRendered={() => true} />);
+    const { container } = render(<MarkdownTooltip {...mockParams} />);
 
     const div = container.firstChild as HTMLElement;
     expect(div).toBeInTheDocument();
@@ -163,7 +164,7 @@ describe('MarkdownTooltip', () => {
     };
 
     const mockParams = createMockParams(mockValue);
-    const { container } = render(<MarkdownTooltip value={mockValue} data={null} node={null} colDef={null} column={null} rowIndex={0} api={null} columnApi={null} context={null} eGridCell={null} eParentOfValue={null} getValue={() => mockValue} setValue={() => {}} refreshCell={() => {}} formatValue={() => ''} addRenderedRowListener={() => {}} isRendered={() => true} />);
+    const { container } = render(<MarkdownTooltip {...mockParams} />);
 
     const div = container.firstChild as HTMLElement;
     expect(div).toBeInTheDocument();
@@ -172,7 +173,7 @@ describe('MarkdownTooltip', () => {
 
   it('returns null when value is null', () => {
     const mockParams = createMockParams(null);
-    const { container } = render(<MarkdownTooltip value={null} data={null} node={null} colDef={null} column={null} rowIndex={0} api={null} columnApi={null} context={null} eGridCell={null} eParentOfValue={null} getValue={() => null} setValue={() => {}} refreshCell={() => {}} formatValue={() => ''} addRenderedRowListener={() => {}} isRendered={() => true} />);
+    const { container } = render(<MarkdownTooltip {...mockParams} />);
 
     expect(container.firstChild).toBeNull();
   });
@@ -185,7 +186,7 @@ describe('MarkdownTooltip', () => {
     };
 
     const mockParams = createMockParams(mockValue);
-    const { container } = render(<MarkdownTooltip value={mockValue} data={null} node={null} colDef={null} column={null} rowIndex={0} api={null} columnApi={null} context={null} eGridCell={null} eParentOfValue={null} getValue={() => mockValue} setValue={() => {}} refreshCell={() => {}} formatValue={() => ''} addRenderedRowListener={() => {}} isRendered={() => true} />);
+    const { container } = render(<MarkdownTooltip {...mockParams} />);
 
     expect(container.firstChild).toBeNull();
   });
