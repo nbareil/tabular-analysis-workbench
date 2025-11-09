@@ -10,6 +10,7 @@ import type {
 import { TAG_COLUMN_ID } from './types';
 import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
 import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
+import { normalizeString } from './utils/stringUtils';
 
 export interface FuzzyMatchInfo {
   query: string;
@@ -97,8 +98,7 @@ const createRegex = (pattern: string, caseSensitive?: boolean): RegExp | null =>
   }
 };
 
-const normaliseString = (value: string, caseSensitive?: boolean): string =>
-  caseSensitive ? value : value.toLowerCase();
+
 
 const evaluateTagPredicate = (
   rows: Array<Record<string, unknown>>,
@@ -160,9 +160,9 @@ const evaluatePredicate = (
   switch (columnType) {
     case 'string': {
       const targetValue = typeof predicate.value === 'string' ? predicate.value : String(predicate.value ?? '');
-      const targetNormalised = normaliseString(targetValue, predicate.caseSensitive);
+      const targetNormalised = normalizeString(targetValue, predicate.caseSensitive ?? false);
       const valuesNormalised = values.map((value) =>
-        normaliseString(String(value ?? ''), predicate.caseSensitive)
+        normalizeString(String(value ?? ''), predicate.caseSensitive ?? false)
       );
 
       if (predicate.operator === 'eq' || predicate.operator === 'neq') {

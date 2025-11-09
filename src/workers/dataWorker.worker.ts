@@ -2,6 +2,8 @@ import { expose } from 'comlink';
 
 import { parseDelimitedStream, type ParserOptions } from './csvParser';
 import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
+import { damerauLevenshtein } from './utils/levenshtein';
+import { normalizeValue } from './utils/stringUtils';
 import type { MaterializedRow } from './utils/materializeRowBatch';
 import { detectCompression } from './utils/detectCompression';
 import {
@@ -462,33 +464,9 @@ const materializeViewWindow = async (offset: number, limit?: number): Promise<Ma
 
 
 
-const normaliseSearchValue = (value: unknown, caseSensitive: boolean): string => {
-  const stringValue = String(value ?? '');
-  return caseSensitive ? stringValue : stringValue.toLowerCase();
-};
 
-const levenshtein = (a: string, b: string): number => {
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  const matrix = Array.from({ length: b.length + 1 }, () => Array(a.length + 1).fill(0));
-  for (let i = 0; i <= a.length; i++) {
-    matrix[0][i] = i;
-  }
-  for (let i = 0; i <= b.length; i++) {
-    matrix[i][0] = i;
-  }
-  for (let i = 1; i <= b.length; i++) {
-    for (let j = 1; j <= a.length; j++) {
-      const cost = a[j - 1] === b[i - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost
-      );
-    }
-  }
-  return matrix[b.length][a.length];
-};
+
+
 
 const api: DataWorkerApi = {
   async init(options) {
@@ -1270,12 +1248,12 @@ const api: DataWorkerApi = {
 
         const row = rows[idx]!;
         const found = columns.some((column) => {
-          const value = normaliseSearchValue(row[column], caseSensitive);
+          const value = normalizeValue(row[column], caseSensitive);
           if (value.includes(needle)) {
             return true;
           }
           if (needle.length <= 10) {
-            const distance = levenshtein(value, needle);
+            const distance = damerauLevenshtein(value, needle);
             if (distance <= 2) {
               return true;
             }

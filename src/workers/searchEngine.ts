@@ -1,6 +1,7 @@
 import type { ColumnType, FilterNode } from './types';
 import type { MaterializedRow } from './utils/materializeRowBatch';
 import { evaluateFilterOnRows, type FilterEvaluationContext } from './filterEngine';
+import { normalizeValue } from './utils/stringUtils';
 
 export interface SearchRequest {
   query: string;
@@ -16,10 +17,7 @@ export interface SearchResult {
   matchedRows: number;
 }
 
-const normalise = (value: unknown, caseSensitive: boolean): string => {
-  const stringValue = String(value ?? '');
-  return caseSensitive ? stringValue : stringValue.toLowerCase();
-};
+
 
 export const searchRows = (
   rows: MaterializedRow[],
@@ -48,12 +46,12 @@ export const searchRows = (
   }
 
   const enforceCaseSensitive = Boolean(caseSensitive);
-  const needle = normalise(trimmed, enforceCaseSensitive);
+  const needle = normalizeValue(trimmed, enforceCaseSensitive);
   const matched: MaterializedRow[] = [];
 
   for (const row of workingRows) {
     const found = searchableColumns.some((column) =>
-      normalise(row[column], enforceCaseSensitive).includes(needle)
+      normalizeValue(row[column], enforceCaseSensitive).includes(needle)
     );
     if (found) {
       matched.push(row);
