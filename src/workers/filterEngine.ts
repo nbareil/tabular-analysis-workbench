@@ -8,14 +8,24 @@ import type {
   TagRecord
 } from './types';
 import { TAG_COLUMN_ID } from './types';
+import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
+import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
+
+export interface FuzzyMatchInfo {
+  query: string;
+  suggestions: string[];
+  maxDistance: number;
+}
 
 export interface FilterResult {
   matches: Uint8Array;
   matchedCount: number;
+  fuzzyUsed?: FuzzyMatchInfo;
 }
 
 export interface FilterEvaluationContext {
   tags?: Record<number, TagRecord>;
+  fuzzyIndex?: FuzzyIndexSnapshot | null;
 }
 
 const isExpression = (node: FilterNode): node is FilterExpression => 'op' in node;
@@ -94,12 +104,12 @@ const evaluateTagPredicate = (
   rows: Array<Record<string, unknown>>,
   predicate: FilterPredicate,
   context: FilterEvaluationContext
-): Uint8Array => {
+): { matches: Uint8Array; fuzzyInfo?: FuzzyMatchInfo } => {
   const result = new Uint8Array(rows.length);
   const operator = predicate.operator;
 
   if (operator !== 'eq' && operator !== 'neq') {
-    return result;
+  return { matches: result };
   }
 
   const target =
@@ -127,9 +137,9 @@ const evaluateTagPredicate = (
     } else {
       result[index] = isMatch ? 0 : 1;
     }
-  }
+    }
 
-  return result;
+    return { matches: result };
 };
 
 const evaluatePredicate = (
@@ -137,7 +147,7 @@ const evaluatePredicate = (
   columnTypes: Record<string, ColumnType>,
   predicate: FilterPredicate,
   context: FilterEvaluationContext
-): Uint8Array => {
+): { matches: Uint8Array; fuzzyInfo?: FuzzyMatchInfo } => {
   if (predicate.column === TAG_COLUMN_ID) {
     return evaluateTagPredicate(rows, predicate, context);
   }
@@ -156,10 +166,45 @@ const evaluatePredicate = (
       );
 
       if (predicate.operator === 'eq' || predicate.operator === 'neq') {
+        let hasExactMatches = false;
         for (let index = 0; index < rowCount; index += 1) {
-          const matches = valuesNormalised[index] === targetNormalised;
-          result[index] = predicate.operator === 'eq' ? (matches ? 1 : 0) : matches ? 0 : 1;
+          const exactMatch = valuesNormalised[index] === targetNormalised;
+          if (exactMatch) hasExactMatches = true;
+          result[index] = predicate.operator === 'eq' ? (exactMatch ? 1 : 0) : exactMatch ? 0 : 1;
         }
+
+        // If fuzzy is enabled and no exact matches, try fuzzy search
+        let fuzzyInfo: FuzzyMatchInfo | undefined;
+        if (predicate.fuzzy && !hasExactMatches && context.fuzzyIndex) {
+          const columnSnapshot = context.fuzzyIndex.columns.find(col => col.key === predicate.column);
+          if (columnSnapshot) {
+            const builder = new FuzzyIndexBuilder();
+            const fuzzyMatches = builder.searchColumn(
+              columnSnapshot,
+              targetValue,
+              2, // maxDistance from PRD
+              5 // top 5 suggestions
+            );
+
+            fuzzyInfo = {
+              query: targetValue,
+              suggestions: fuzzyMatches.map(m => m.token),
+              maxDistance: 2
+            };
+
+            // For each fuzzy match, find rows containing that token
+            for (const fuzzyMatch of fuzzyMatches) {
+              const matchedToken = fuzzyMatch.token;
+              for (let index = 0; index < rowCount; index += 1) {
+                if (valuesNormalised[index].includes(matchedToken)) {
+                  result[index] = predicate.operator === 'eq' ? 1 : 0;
+                }
+              }
+            }
+          }
+        }
+
+        return { matches: result, fuzzyInfo };
         break;
       }
 
@@ -168,7 +213,7 @@ const evaluatePredicate = (
           const valueString = valuesNormalised[index];
           result[index] = valueString.includes(targetNormalised) ? 1 : 0;
         }
-        break;
+        return { matches: result };
       }
 
       if (predicate.operator === 'startsWith') {
@@ -176,7 +221,7 @@ const evaluatePredicate = (
           const valueString = valuesNormalised[index];
           result[index] = valueString.startsWith(targetNormalised) ? 1 : 0;
         }
-        break;
+        return { matches: result };
       }
 
       if (
@@ -187,7 +232,7 @@ const evaluatePredicate = (
       ) {
         const regex = createRegex(predicate.value, predicate.caseSensitive);
         if (!regex) {
-          return result;
+          return { matches: result };
         }
 
         for (let index = 0; index < rowCount; index += 1) {
@@ -198,11 +243,11 @@ const evaluatePredicate = (
             result[index] = matches ? 1 : 0;
           }
         }
-        break;
+        return { matches: result };
       }
 
       // Fallback: unsupported operator for string yields zeros.
-      break;
+      return { matches: result };
     }
     case 'number': {
       const numericValue = parseNumericValue(predicate.value);
@@ -242,9 +287,9 @@ const evaluatePredicate = (
           default:
             result[index] = 0;
         }
-      }
-      break;
-    }
+        }
+        return { matches: result };
+        }
     case 'datetime': {
       const baseValue = parseDateValue(predicate.value);
       const baseValue2 = parseDateValue(predicate.value2);
@@ -290,13 +335,13 @@ const evaluatePredicate = (
           default:
             result[index] = 0;
         }
-      }
-      break;
-    }
+        }
+        return { matches: result };
+        }
     case 'boolean': {
       const target = parseBooleanValue(predicate.value);
       if (target == null) {
-        return result;
+        return { matches: result };
       }
 
       for (let index = 0; index < rowCount; index += 1) {
@@ -314,13 +359,11 @@ const evaluatePredicate = (
           result[index] = 0;
         }
       }
-      break;
+      return { matches: result };
     }
     default:
-      break;
+      return { matches: result };
   }
-
-  return result;
 };
 
 const combineMasks = (
@@ -349,17 +392,20 @@ const evaluateNode = (
   columnTypes: Record<string, ColumnType>,
   node: FilterNode,
   context: FilterEvaluationContext
-): Uint8Array => {
+): { matches: Uint8Array; fuzzyInfo?: FuzzyMatchInfo } => {
   if (isExpression(node)) {
     if (!node.predicates.length) {
-      return new Uint8Array(rows.length).fill(1);
+      return { matches: new Uint8Array(rows.length).fill(1) };
     }
 
     let accumulator = evaluateNode(rows, columnTypes, node.predicates[0]!, context);
 
     for (let index = 1; index < node.predicates.length; index += 1) {
       const next = evaluateNode(rows, columnTypes, node.predicates[index]!, context);
-      accumulator = combineMasks(accumulator, next, node.op);
+      accumulator = {
+        matches: combineMasks(accumulator.matches, next.matches, node.op),
+        fuzzyInfo: accumulator.fuzzyInfo || next.fuzzyInfo // take first fuzzyInfo
+      };
     }
 
     return accumulator;
@@ -381,15 +427,15 @@ const evaluateFilterInternal = (
     return { matches, matchedCount: rowCount };
   }
 
-  const mask = evaluateNode(rows, columnTypes, expression, context);
+  const result = evaluateNode(rows, columnTypes, expression, context);
   let matchedCount = 0;
-  for (let index = 0; index < mask.length; index += 1) {
-    if (mask[index] === 1) {
+  for (let index = 0; index < result.matches.length; index += 1) {
+    if (result.matches[index] === 1) {
       matchedCount += 1;
     }
   }
 
-  return { matches: mask, matchedCount };
+  return { matches: result.matches, matchedCount, fuzzyUsed: result.fuzzyInfo };
 };
 
 export const evaluateFilterOnRows = (

@@ -8,6 +8,7 @@ import { useSessionStore } from '@state/sessionStore';
 import { useTagStore } from '@state/tagStore';
 import DataGrid from '@components/DataGrid';
 import FilterBuilder from '@components/filter/FilterBuilder';
+import { FuzzyBanner } from '@components/FuzzyBanner';
 import PivotView from '@components/PivotView';
 import ColumnsPanel from '@components/ColumnsPanel';
 import LabelsPanel from '@components/LabelsPanel';
@@ -627,12 +628,13 @@ const App = (): JSX.Element => {
         </aside>
         <section className="flex flex-1 flex-col">
           <div className="flex-1 overflow-auto p-4">
-            <div className="h-full rounded border border-slate-800">
-              {showPivot ? (
-                <PivotView />
-              ) : (
-                <DataGrid status={loaderStatus} onEditTagNote={openNoteEditor} />
-              )}
+          <FuzzyBanner />
+          <div className="h-full rounded border border-slate-800">
+          {showPivot ? (
+            <PivotView />
+          ) : (
+            <DataGrid status={loaderStatus} onEditTagNote={openNoteEditor} />
+            )}
             </div>
           </div>
           <footer className="border-t border-slate-800 px-4 py-2 text-xs text-slate-500">

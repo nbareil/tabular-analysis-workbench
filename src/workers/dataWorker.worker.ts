@@ -1,6 +1,7 @@
 import { expose } from 'comlink';
 
 import { parseDelimitedStream, type ParserOptions } from './csvParser';
+import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import type { MaterializedRow } from './utils/materializeRowBatch';
 import { detectCompression } from './utils/detectCompression';
 import {
@@ -147,6 +148,7 @@ export interface ApplyFilterResult {
   totalRows: number;
   matchedRows: number;
   expression: FilterNode | null;
+  fuzzyUsed?: import('./filterEngine').FuzzyMatchInfo;
 }
 
 export interface FetchRowsRequest {
@@ -580,6 +582,8 @@ const api: DataWorkerApi = {
     state.dataset.fuzzyFingerprint = fuzzyFingerprint;
 
     const cachedFuzzyIndex = await fuzzyIndexStore.load();
+    let fuzzyIndexBuilder: FuzzyIndexBuilder | undefined;
+
     if (
       cachedFuzzyIndex &&
       fuzzySnapshotMatchesFingerprint(cachedFuzzyIndex, fuzzyFingerprint)
@@ -590,12 +594,18 @@ const api: DataWorkerApi = {
         columnCount: cachedFuzzyIndex.columns.length,
         tokenLimit: cachedFuzzyIndex.tokenLimit
       });
-    } else if (cachedFuzzyIndex) {
-      debugLog('Discarded stale fuzzy index snapshot', {
-        cachedFingerprint: cachedFuzzyIndex.fingerprint,
-        expectedFingerprint: fuzzyFingerprint
-      });
-      await fuzzyIndexStore.clear();
+    } else {
+      if (cachedFuzzyIndex) {
+        debugLog('Discarded stale fuzzy index snapshot', {
+          cachedFingerprint: cachedFuzzyIndex.fingerprint,
+          expectedFingerprint: fuzzyFingerprint
+        });
+        await fuzzyIndexStore.clear();
+      }
+
+      // Create builder to build fuzzy index from scratch
+      fuzzyIndexBuilder = new FuzzyIndexBuilder();
+      debugLog('Created new FuzzyIndexBuilder for parsing');
     }
 
     await hydrateTaggingStore(handle, fuzzyFingerprint);
@@ -631,7 +641,8 @@ const api: DataWorkerApi = {
       delimiter,
       batchSize,
       encoding,
-      checkpointInterval: targetCheckpointInterval
+      checkpointInterval: targetCheckpointInterval,
+      fuzzyIndexBuilder
     };
 
     const startTime = now();
@@ -830,6 +841,35 @@ const api: DataWorkerApi = {
 
       state.dataset.totalRows = finalRows;
       state.dataset.bytesParsed = finalBytes;
+
+      // Build and persist fuzzy index if builder was used
+      if (fuzzyIndexBuilder) {
+        const buildStart = now();
+        const columnSnapshots = fuzzyIndexBuilder.buildSnapshots();
+        debugLog('FuzzyIndexBuilder.buildSnapshots completed', {
+          durationMs: roundMs(now() - buildStart),
+          columnCount: columnSnapshots.length
+        });
+
+        const fuzzySnapshot = {
+          version: FUZZY_INDEX_STORE_VERSION,
+          createdAt: Date.now(),
+          rowCount: finalRows,
+          bytesParsed: finalBytes,
+          tokenLimit: 50_000, // from FuzzyIndexBuilder
+          trigramSize: 3,
+          fingerprint: fuzzyFingerprint,
+          columns: columnSnapshots
+        };
+
+        const persistStart = now();
+        await fuzzyIndexStore.save(fuzzySnapshot);
+        debugLog('FuzzyIndexStore.save completed', {
+          durationMs: roundMs(now() - persistStart)
+        });
+
+        state.dataset.fuzzyIndexSnapshot = fuzzySnapshot;
+      }
 
       if (callbacks.onComplete) {
         const endTime = now();
@@ -1050,15 +1090,20 @@ const api: DataWorkerApi = {
     }
 
     const matchedRowIds: number[] = [];
+    let fuzzyUsed: import('./filterEngine').FuzzyMatchInfo | undefined;
 
     for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
-      const { matches } = evaluateFilterOnRows(rows, state.dataset.columnTypes, expression, {
-        tags: state.tagging.tags
+      const result = evaluateFilterOnRows(rows, state.dataset.columnTypes, expression, {
+        tags: state.tagging.tags,
+        fuzzyIndex: state.dataset.fuzzyIndexSnapshot
       });
-      for (let idx = 0; idx < matches.length; idx += 1) {
-        if (matches[idx] === 1) {
+      for (let idx = 0; idx < result.matches.length; idx += 1) {
+        if (result.matches[idx] === 1) {
           matchedRowIds.push(rowStart + idx);
         }
+      }
+      if (result.fuzzyUsed && !fuzzyUsed) {
+        fuzzyUsed = result.fuzzyUsed;
       }
     }
 
@@ -1069,7 +1114,8 @@ const api: DataWorkerApi = {
       rows,
       totalRows,
       matchedRows: matchedRowIds.length,
-      expression
+      expression,
+      fuzzyUsed
     };
   },
   async fetchRows({ offset, limit }: FetchRowsRequest): Promise<FetchRowsResult> {
@@ -1212,7 +1258,8 @@ const api: DataWorkerApi = {
       let filterMatches: Uint8Array | null = null;
       if (request.filter) {
         filterMatches = evaluateFilterOnRows(rows, state.dataset.columnTypes, request.filter, {
-          tags: state.tagging.tags
+          tags: state.tagging.tags,
+          fuzzyIndex: state.dataset.fuzzyIndexSnapshot
         }).matches;
       }
 

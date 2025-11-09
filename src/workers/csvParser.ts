@@ -10,12 +10,14 @@ import type {
   StringColumnBatch
 } from './types';
 import { TypeInferencer, analyzeValue } from './typeInference';
+import type { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 
 export interface ParserOptions {
   delimiter?: Delimiter;
   batchSize?: number;
   encoding?: string;
   checkpointInterval?: number;
+  fuzzyIndexBuilder?: FuzzyIndexBuilder;
 }
 
 export interface ParserCallbacks {
@@ -363,6 +365,7 @@ export const parseDelimitedStream = async (
 
     const normalized = normalizeRow(rowCells, state.header.length);
     state.inferencer?.updateRow(normalized);
+    options.fuzzyIndexBuilder?.addRow(state.header, normalized);
     state.batchRows.push(normalized);
 
     const rowIndex = state.totalRows + state.batchRows.length - 1;
