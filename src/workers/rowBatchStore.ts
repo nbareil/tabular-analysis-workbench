@@ -130,10 +130,6 @@ export class RowBatchStore {
       });
 
       this.memoryStore.set(batchIndex, batch);
-      if (this.memoryStore.size > MAX_IN_MEMORY_BATCHES) {
-        const oldestIndex = Math.min(...this.memoryStore.keys());
-        this.memoryStore.delete(oldestIndex);
-      }
       if (import.meta.env.DEV) {
         logDebug('row-batch-store', 'Stored batch in memory fallback', {
           batchIndex,

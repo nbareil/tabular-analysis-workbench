@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { FilterState } from '@state/sessionStore';
 import type { GridColumn } from '@state/dataStore';
@@ -62,7 +62,8 @@ const defaultFilter = (column: string, labels: any): FilterState => {
     operator: isTagColumn ? 'eq' : 'contains',
     value: isTagColumn ? (labels[0]?.id ?? TAG_NO_LABEL_FILTER_VALUE) : '',
     caseSensitive: false,
-    fuzzy: false
+    fuzzy: false,
+    fuzzyExplicit: isTagColumn
   };
 };
 
@@ -87,6 +88,7 @@ const normaliseFilterForColumn = (
     value,
     value2: undefined,
     fuzzy: false,
+    fuzzyExplicit: true,
     caseSensitive: false
   };
 };
@@ -97,12 +99,21 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
   const tagLabels = useTagStore((state) => state.labels);
   const tagStatus = useTagStore((state) => state.status);
   const loadTags = useTagStore((state) => state.load);
+  const [fuzzyWarning, setFuzzyWarning] = useState<string | null>(null);
 
   useEffect(() => {
     if (tagStatus === 'idle') {
       void loadTags();
     }
   }, [loadTags, tagStatus]);
+
+  useEffect(() => {
+    if (!fuzzyWarning) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => setFuzzyWarning(null), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [fuzzyWarning]);
 
   const columnMap = useMemo(() => Object.fromEntries(columns.map(c => [c.key, c])), [columns]);
 
@@ -175,6 +186,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
           value: '',
           value2: undefined,
           fuzzy: false,
+          fuzzyExplicit: false,
           caseSensitive: false
         };
       }
@@ -256,6 +268,11 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
+          {fuzzyWarning && (
+            <div className="rounded border border-yellow-600 bg-yellow-900/30 px-2 py-1 text-xs text-yellow-200">
+              {fuzzyWarning}
+            </div>
+          )}
           {filters.map((filter) => (
             <div
             key={filter.id}
@@ -391,7 +408,18 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                       <input
                         type="checkbox"
                         checked={Boolean(filter.fuzzy)}
-                        onChange={(event) => handleChange(filter.id, { fuzzy: event.target.checked })}
+                        onChange={(event) => {
+                          const nextValue = event.target.checked;
+                          const operatorSupportsFuzzy = filter.operator === 'eq';
+                          if (nextValue && !operatorSupportsFuzzy) {
+                            setFuzzyWarning('Fuzzy search only works with Equals predicates. Switch this filter to "equals" before enabling fuzzy matching.');
+                            return;
+                          }
+                          handleChange(filter.id, {
+                            fuzzy: nextValue,
+                            fuzzyExplicit: true
+                          });
+                        }}
                       />
                       Fuzzy
                     </label>

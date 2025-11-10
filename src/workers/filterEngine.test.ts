@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { evaluateFilter, collectMatchingRowIds } from './filterEngine';
+import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
+import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
+import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import type {
   BooleanColumnBatch,
   ColumnBatch,
@@ -156,6 +159,28 @@ const buildRowBatch = (
     columnTypes,
     columnInference,
     stats: { rowsParsed: rowCount, bytesParsed: 0, eof: true }
+  };
+};
+
+const buildFuzzyIndexSnapshot = (columnKey: string, values: string[]): FuzzyIndexSnapshot => {
+  const builder = new FuzzyIndexBuilder();
+  for (const value of values) {
+    builder.addRow([columnKey], [value]);
+  }
+
+  return {
+    version: 1,
+    createdAt: Date.now(),
+    rowCount: values.length,
+    bytesParsed: 0,
+    tokenLimit: 50_000,
+    trigramSize: 3,
+    fingerprint: {
+      fileName: 'test.csv',
+      fileSize: 0,
+      lastModified: 0
+    },
+    columns: builder.buildSnapshots()
   };
 };
 
@@ -393,5 +418,54 @@ describe('filterEngine', () => {
     );
 
     expect(Array.from(notLabel.matches)).toEqual([0, 1, 1]);
+  });
+
+  it('applies fuzzy fallback when equality has no matches and fuzzy is not explicitly disabled', () => {
+    const batch = buildRowBatch(
+      {
+        message: stringColumn(['login success', 'payment complete'])
+      },
+      { message: 'string' }
+    );
+    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['login success', 'payment complete']);
+
+    const result = evaluateFilter(
+      batch,
+      {
+        column: 'message',
+        operator: 'eq',
+        value: 'login sucess'
+      },
+      { fuzzyIndex }
+    );
+
+    expect(Array.from(result.matches)).toEqual([1, 0]);
+    expect(result.fuzzyUsed).toBeDefined();
+    expect(result.fuzzyUsed?.column).toBe('message');
+    expect(result.fuzzyUsed?.query).toBe('login sucess');
+  });
+
+  it('skips fuzzy fallback when predicate explicitly opts out', () => {
+    const batch = buildRowBatch(
+      {
+        message: stringColumn(['login success'])
+      },
+      { message: 'string' }
+    );
+    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['login success']);
+
+    const result = evaluateFilter(
+      batch,
+      {
+        column: 'message',
+        operator: 'eq',
+        value: 'login sucess',
+        fuzzy: false
+      },
+      { fuzzyIndex }
+    );
+
+    expect(Array.from(result.matches)).toEqual([0]);
+    expect(result.fuzzyUsed).toBeUndefined();
   });
 });

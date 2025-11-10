@@ -2,23 +2,45 @@ import { useDataStore } from '@state/dataStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import type { FilterState } from '@/state/sessionStore';
 
+const normaliseValue = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  return String(value ?? '');
+};
+
 export const FuzzyBanner = () => {
   const fuzzyUsed = useDataStore((state) => state.fuzzyUsed);
-  const { applyFilters } = useFilterSync();
-  const filters = useFilterSync().filters;
+  const columns = useDataStore((state) => state.columns);
+  const { filters, applyFilters } = useFilterSync();
 
   if (!fuzzyUsed) return null;
 
   const handleBackToExact = () => {
-    // Find the fuzzy filter and set fuzzy to false
+    let changed = false;
     const updatedFilters = filters.map((filter: FilterState) => {
-      if (filter.fuzzy) {
-        return { ...filter, fuzzy: false };
+      const matchesFilter =
+        filter.column === fuzzyUsed.column &&
+        filter.operator === fuzzyUsed.operator &&
+        normaliseValue(filter.value) === fuzzyUsed.query;
+
+      if (!matchesFilter || filter.fuzzy === false) {
+        return filter;
       }
-      return filter;
+
+      changed = true;
+      return { ...filter, fuzzy: false, fuzzyExplicit: true };
     });
-    applyFilters(updatedFilters);
+
+    if (!changed) {
+      return;
+    }
+
+    void applyFilters(updatedFilters);
   };
+
+  const columnLabel =
+    columns.find((column) => column.key === fuzzyUsed.column)?.headerName ?? fuzzyUsed.column;
 
   return (
     <div className="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-4">
@@ -30,7 +52,7 @@ export const FuzzyBanner = () => {
         </div>
         <div className="ml-3">
           <p className="text-sm">
-          Fuzzy matching enabled for '{fuzzyUsed.query}'. Showing matches (≤ {fuzzyUsed.maxDistance} edits).
+            No exact matches for '{fuzzyUsed.query}' in <strong>{columnLabel}</strong>. Showing fuzzy matches (≤ {fuzzyUsed.maxDistance} edits).
           </p>
           {fuzzyUsed.suggestions.length > 0 && (
             <p className="text-sm mt-1">

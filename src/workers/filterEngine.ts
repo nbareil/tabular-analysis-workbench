@@ -13,6 +13,8 @@ import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import { normalizeString } from './utils/stringUtils';
 
 export interface FuzzyMatchInfo {
+  column: string;
+  operator: FilterPredicate['operator'];
   query: string;
   suggestions: string[];
   maxDistance: number;
@@ -30,6 +32,31 @@ export interface FilterEvaluationContext {
 }
 
 const isExpression = (node: FilterNode): node is FilterExpression => 'op' in node;
+
+const determineMaxDistance = (value: string): number => {
+  const trimmed = value.trim();
+  if (trimmed.length >= 5) {
+    return 2;
+  }
+  if (trimmed.length >= 3) {
+    return 1;
+  }
+  return 0;
+};
+
+const tokenizeFuzzyQuery = (value: string): string[] => {
+  const normalized = value.toLowerCase().normalize('NFC');
+  const tokens = normalized
+    .split(/[\s\p{P}]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2);
+
+  if (tokens.length > 0) {
+    return tokens;
+  }
+
+  return normalized ? [normalized] : [];
+};
 
 const parseBooleanValue = (value: unknown): boolean | null => {
   if (typeof value === 'boolean') {
@@ -173,26 +200,72 @@ const evaluatePredicate = (
           result[index] = predicate.operator === 'eq' ? (exactMatch ? 1 : 0) : exactMatch ? 0 : 1;
         }
 
-        // If fuzzy is enabled, try fuzzy search in addition to exact
+        // Determine whether fuzzy fallback should run.
+        const trimmedQuery = targetValue.trim();
+        const queryTokens = tokenizeFuzzyQuery(trimmedQuery);
+        const tokenConfigs = queryTokens.map((token) => ({
+          token,
+          distance: determineMaxDistance(token)
+        }));
+        const maxTokenDistance = tokenConfigs.reduce(
+          (acc, config) => Math.max(acc, config.distance),
+          0
+        );
+        const forceFuzzy = predicate.fuzzy === true;
+        const allowAutoFuzzy =
+          predicate.fuzzy !== false && !hasExactMatches && maxTokenDistance > 0;
+        const infoMaxDistance = forceFuzzy ? Math.max(maxTokenDistance, 1) : maxTokenDistance;
+        const fuzzyIndex = context.fuzzyIndex;
         let fuzzyInfo: FuzzyMatchInfo | undefined;
-        if (predicate.fuzzy && context.fuzzyIndex) {
-          const columnSnapshot = context.fuzzyIndex.columns.find(col => col.key === predicate.column);
+
+        if (fuzzyIndex && (allowAutoFuzzy || (forceFuzzy && tokenConfigs.length > 0))) {
+          const columnSnapshot = fuzzyIndex.columns.find((col) => col.key === predicate.column);
           if (columnSnapshot) {
             const builder = new FuzzyIndexBuilder();
-            const fuzzyMatches = builder.searchColumn(
-              columnSnapshot,
-              targetValue,
-              2, // maxDistance from PRD
-              5 // top 5 suggestions
-            );
+            const matchesByToken = new Map<
+              string,
+              { token: string; distance: number; frequency: number }
+            >();
 
-            fuzzyInfo = {
-              query: targetValue,
-              suggestions: fuzzyMatches.map(m => m.token),
-              maxDistance: 2
-            };
+            for (const config of tokenConfigs) {
+              const effectiveDistance =
+                forceFuzzy && config.distance === 0 ? 1 : config.distance;
+              if (effectiveDistance <= 0) {
+                continue;
+              }
 
-            // For each fuzzy match, find rows containing that token and OR with exact
+              const tokenMatches = builder.searchColumn(
+                columnSnapshot,
+                config.token,
+                effectiveDistance,
+                5
+              );
+
+              for (const match of tokenMatches) {
+                const existing = matchesByToken.get(match.token);
+                if (!existing || match.distance < existing.distance) {
+                  matchesByToken.set(match.token, match);
+                }
+              }
+            }
+
+            const fuzzyMatches = Array.from(matchesByToken.values()).sort((a, b) => {
+              if (a.distance !== b.distance) {
+                return a.distance - b.distance;
+              }
+              return b.frequency - a.frequency;
+            });
+
+            if (allowAutoFuzzy) {
+              fuzzyInfo = {
+                column: predicate.column,
+                operator: predicate.operator,
+                query: trimmedQuery,
+                suggestions: fuzzyMatches.slice(0, 5).map((match) => match.token),
+                maxDistance: infoMaxDistance
+              };
+            }
+
             for (const fuzzyMatch of fuzzyMatches) {
               const matchedToken = fuzzyMatch.token;
               for (let index = 0; index < rowCount; index += 1) {
@@ -205,7 +278,6 @@ const evaluatePredicate = (
         }
 
         return { matches: result, fuzzyInfo };
-        break;
       }
 
       if (predicate.operator === 'contains') {

@@ -14,6 +14,11 @@ export const buildFilterExpression = (filters: FilterState[]): FilterNode | null
   const predicates: FilterPredicate[] = filters.map((predicate) => {
     const operator = predicate.operator as FilterPredicate['operator'];
     let value = predicate.value;
+    let fuzzy = predicate.fuzzy;
+
+    if (fuzzy === false && predicate.fuzzyExplicit !== true) {
+      fuzzy = undefined;
+    }
 
     if (predicate.column === TAG_COLUMN_ID) {
       if (value === TAG_NO_LABEL_FILTER_VALUE) {
@@ -27,7 +32,7 @@ export const buildFilterExpression = (filters: FilterState[]): FilterNode | null
       value,
       value2: predicate.value2,
       caseSensitive: Boolean(predicate.caseSensitive),
-      fuzzy: predicate.fuzzy
+      fuzzy
     };
   });
 

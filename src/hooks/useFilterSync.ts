@@ -4,11 +4,53 @@ import { useDataStore } from '@state/dataStore';
 import { useSessionStore, type FilterState } from '@state/sessionStore';
 import { getDataWorker, type ApplyFilterRequest } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
+import type { FuzzyMatchInfo } from '@workers/filterEngine';
 
 export interface UseFilterSyncResult {
   filters: FilterState[];
   applyFilters: (nextFilters: FilterState[]) => Promise<void>;
 }
+
+const normaliseFilterValue = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  return String(value ?? '');
+};
+
+const applyAutoFuzzyFlag = (
+  filters: FilterState[],
+  fuzzyUsed: FuzzyMatchInfo | null | undefined
+): { filters: FilterState[]; changed: boolean } => {
+  if (!fuzzyUsed) {
+    return { filters, changed: false };
+  }
+
+  let changed = false;
+  const updated = filters.map((filter) => {
+    const matchesFilter =
+      filter.column === fuzzyUsed.column &&
+      filter.operator === fuzzyUsed.operator &&
+      normaliseFilterValue(filter.value) === fuzzyUsed.query;
+
+    if (
+      !matchesFilter ||
+      filter.fuzzy === true ||
+      (filter.fuzzy === false && filter.fuzzyExplicit === true)
+    ) {
+      return filter;
+    }
+
+    changed = true;
+    return {
+      ...filter,
+      fuzzy: true,
+      fuzzyExplicit: filter.fuzzyExplicit ?? false
+    };
+  });
+
+  return changed ? { filters: updated, changed: true } : { filters, changed: false };
+};
 
 export const useFilterSync = (): UseFilterSyncResult => {
   const filters = useSessionStore((state) => state.filters);
@@ -22,12 +64,13 @@ export const useFilterSync = (): UseFilterSyncResult => {
 
   const applyFilters = useCallback(
     async (nextFilters: FilterState[]) => {
-      setFilters(nextFilters);
+      let filtersToApply = nextFilters;
+      setFilters(filtersToApply);
 
       try {
         const worker = getDataWorker();
 
-        if (nextFilters.length === 0) {
+        if (filtersToApply.length === 0) {
           const response = await worker.applyFilter({
           expression: null,
           offset: 0,
@@ -41,7 +84,7 @@ export const useFilterSync = (): UseFilterSyncResult => {
           return;
         }
 
-        const expression = buildFilterExpression(nextFilters);
+        const expression = buildFilterExpression(filtersToApply);
 
         if (!expression) {
           const response = await worker.applyFilter({
@@ -64,6 +107,16 @@ export const useFilterSync = (): UseFilterSyncResult => {
         };
 
         const response = await worker.applyFilter(request);
+
+        const { filters: maybeUpdated, changed } = applyAutoFuzzyFlag(
+          filtersToApply,
+          response.fuzzyUsed
+        );
+        if (changed) {
+          filtersToApply = maybeUpdated;
+          setFilters(maybeUpdated);
+        }
+
         setFilterSummary({
         matchedRows: response.matchedRows,
         totalRows: response.totalRows,

@@ -3,7 +3,7 @@
  * Converts the value to string and optionally lowercases it.
  */
 export const normalizeValue = (value: unknown, caseSensitive: boolean): string => {
-  const stringValue = String(value ?? '');
+  const stringValue = String(value ?? '').trim().normalize('NFC');
   return caseSensitive ? stringValue : stringValue.toLowerCase();
 };
 
@@ -12,5 +12,6 @@ export const normalizeValue = (value: unknown, caseSensitive: boolean): string =
  * Optionally lowercases the string.
  */
 export const normalizeString = (value: string, caseSensitive: boolean): string => {
-  return caseSensitive ? value : value.toLowerCase();
+  const normalized = value.trim().normalize('NFC');
+  return caseSensitive ? normalized : normalized.toLowerCase();
 };
