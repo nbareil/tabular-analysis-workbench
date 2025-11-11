@@ -13,7 +13,7 @@ import PivotView from '@components/PivotView';
 import ColumnsPanel from '@components/ColumnsPanel';
 import LabelsPanel from '@components/LabelsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
-import TagNoteDialog from '@components/tagging/TagNoteDialog';
+import TagNotePanel from '@components/tagging/TagNotePanel';
 import CapabilityGate from '@components/CapabilityGate';
 import CapabilityWarningBanner from '@components/CapabilityWarningBanner';
 import { getDataWorker } from '@workers/dataWorkerProxy';
@@ -342,22 +342,17 @@ const App = (): JSX.Element => {
     [tagRecords]
   );
 
-  const submitNote = useCallback(
-    async (noteValue: string) => {
+  const handleSaveNote = useCallback(
+    async (note: string, labelId: string | null) => {
       if (!noteEditor) {
         return;
       }
-
       setNoteSaving(true);
       try {
-        await applyTagToRows({
-          rowIds: [noteEditor.rowId],
-          labelId: noteEditor.labelId,
-          note: noteValue
-        });
+        await applyTagToRows({ rowIds: [noteEditor.rowId], labelId, note });
         setNoteEditor(null);
       } catch (error) {
-        console.error('Failed to update note', error);
+        console.error('Failed to save note', error);
       } finally {
         setNoteSaving(false);
       }
@@ -365,52 +360,23 @@ const App = (): JSX.Element => {
     [applyTagToRows, noteEditor]
   );
 
-  const handleSaveNote = useCallback(
-    (note: string, labelId: string | null) => {
-      if (noteEditor) {
-        void applyTagToRows({ rowIds: [noteEditor.rowId], labelId, note });
-      }
-      setNoteEditor(null);
-      setNoteSaving(false);
-    },
-    [applyTagToRows, noteEditor]
-  );
-
   const handleClearNote = useCallback(
-    (labelId: string | null) => {
-      if (noteEditor) {
-        void applyTagToRows({ rowIds: [noteEditor.rowId], labelId, note: '' });
+    async (labelId: string | null) => {
+      if (!noteEditor) {
+        return;
       }
-      setNoteEditor(null);
+      setNoteSaving(true);
+      try {
+        await applyTagToRows({ rowIds: [noteEditor.rowId], labelId, note: '' });
+        setNoteEditor(null);
+      } catch (error) {
+        console.error('Failed to clear note', error);
+      } finally {
+        setNoteSaving(false);
+      }
     },
     [applyTagToRows, noteEditor]
   );
-
-  const noteEditorLabel = useMemo(() => {
-    if (!noteEditor) {
-      return undefined;
-    }
-
-    if (noteEditor.labelId == null) {
-      return {
-        name: 'No label',
-        color: undefined
-      };
-    }
-
-    const match = tagLabels.find((label) => label.id === noteEditor.labelId);
-    if (!match) {
-      return {
-        name: `Unknown label (${noteEditor.labelId})`,
-        color: undefined
-      };
-    }
-
-    return {
-      name: match.name,
-      color: match.color
-    };
-  }, [noteEditor, tagLabels]);
 
   useEffect(() => {
     if (!workerReady) {
@@ -782,8 +748,9 @@ const App = (): JSX.Element => {
       <OptionsPanel open={optionsOpen} onClose={() => setOptionsOpen(false)} />
       <LabelsPanel open={labelsOpen} onClose={() => setLabelsOpen(false)} />
       <ColumnsPanel open={columnsOpen} onClose={() => setColumnsOpen(false)} />
-      <TagNoteDialog
+      <TagNotePanel
         open={noteEditor != null}
+        rowId={noteEditor?.rowId ?? null}
         initialLabelId={noteEditor?.labelId ?? null}
         initialNote={noteEditor?.note ?? ''}
         onSave={handleSaveNote}
