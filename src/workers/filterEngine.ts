@@ -235,7 +235,13 @@ const evaluatePredicate = (
         if (fuzzyIndex && (allowAutoFuzzy || (forceFuzzy && tokenConfigs.length > 0))) {
           const columnSnapshot = fuzzyIndex.columns.find((col) => col.key === predicate.column);
           if (columnSnapshot) {
-            const builder = new FuzzyIndexBuilder();
+            const builder = new FuzzyIndexBuilder({
+              trigramSize:
+                typeof fuzzyIndex.trigramSize === 'number' &&
+                Number.isFinite(fuzzyIndex.trigramSize)
+                  ? fuzzyIndex.trigramSize
+                  : 3
+            });
             const matchesByToken = new Map<
               string,
               { token: string; distance: number; frequency: number }

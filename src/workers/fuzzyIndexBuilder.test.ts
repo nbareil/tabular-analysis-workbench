@@ -62,4 +62,33 @@ describe('FuzzyIndexBuilder', () => {
       expect.objectContaining({ token: 'xyz' })
     );
   });
+
+  it('caps tokens per column and marks snapshots as truncated', () => {
+    const builder = new FuzzyIndexBuilder({ maxTokensPerColumn: 2 });
+    builder.addRow(['col1'], ['one two three']);
+    builder.addRow(['col1'], ['four five six']);
+
+    const snapshots = builder.buildSnapshots();
+    const column = snapshots[0];
+
+    expect(column.tokens).toHaveLength(2);
+    expect(column.truncated).toBe(true);
+  });
+
+  it('enforces memory limits by keeping the most frequent tokens', () => {
+    const builder = new FuzzyIndexBuilder({
+      maxTokensPerColumn: 10,
+      maxMemoryMB: 0.00001
+    });
+    builder.addRow(['col1'], ['alpha beta gamma']);
+    builder.addRow(['col1'], ['alpha alpha']);
+    builder.addRow(['col1'], ['beta']);
+
+    const column = builder.buildSnapshots()[0];
+
+    expect(column.truncated).toBe(true);
+    expect(column.tokens.map(token => token.token)).toContain('alpha');
+    expect(column.tokens.map(token => token.token)).toContain('beta');
+    expect(column.tokens.some(token => token.token === 'gamma')).toBe(false);
+  });
 });

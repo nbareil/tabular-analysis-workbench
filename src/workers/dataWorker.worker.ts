@@ -828,8 +828,8 @@ const api: DataWorkerApi = {
           createdAt: Date.now(),
           rowCount: finalRows,
           bytesParsed: finalBytes,
-          tokenLimit: 50_000, // from FuzzyIndexBuilder
-          trigramSize: 3,
+          tokenLimit: fuzzyIndexBuilder.getTokenLimit(),
+          trigramSize: fuzzyIndexBuilder.getTrigramSize(),
           fingerprint: fuzzyFingerprint,
           columns: columnSnapshots
         };

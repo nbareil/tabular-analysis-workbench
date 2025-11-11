@@ -167,19 +167,21 @@ const buildFuzzyIndexSnapshot = (columnKey: string, values: string[]): FuzzyInde
     builder.addRow([columnKey], [value]);
   }
 
+  const columns = builder.buildSnapshots();
+
   return {
     version: 1,
     createdAt: Date.now(),
     rowCount: values.length,
     bytesParsed: 0,
-    tokenLimit: 50_000,
-    trigramSize: 3,
+    tokenLimit: builder.getTokenLimit(),
+    trigramSize: builder.getTrigramSize(),
     fingerprint: {
       fileName: 'test.csv',
       fileSize: 0,
       lastModified: 0
     },
-    columns: builder.buildSnapshots()
+    columns
   };
 };
 

@@ -1,24 +1,62 @@
 import type { FuzzyColumnSnapshot, FuzzyTokenEntry } from './fuzzyIndexStore';
 import { damerauLevenshtein } from './utils/levenshtein';
 
-const MAX_TOKENS_PER_COLUMN = 50_000;
-const MAX_MEMORY_MB = 32;
+const DEFAULT_MAX_TOKENS_PER_COLUMN = 50_000;
+const DEFAULT_MAX_MEMORY_MB = 32;
 const BYTES_PER_MB = 1024 * 1024;
+const textEncoder = new TextEncoder();
 
-interface TokenInfo {
-  id: number;
-  token: string;
+interface TokenStats {
   frequency: number;
-  trigrams: string[];
+  byteSize: number;
+}
+
+interface ColumnState {
+  tokens: Map<string, TokenStats>;
+  memoryBytes: number;
+  truncated: boolean;
+}
+
+export interface FuzzyIndexBuilderOptions {
+  trigramSize?: number;
+  maxTokensPerColumn?: number;
+  maxMemoryMB?: number;
 }
 
 export class FuzzyIndexBuilder {
-  private readonly columns = new Map<string, Map<string, number>>(); // column -> token -> frequency
+  private readonly columns = new Map<string, ColumnState>();
   private readonly trigramSize: number;
-  private totalMemoryBytes = 0;
+  private readonly maxTokensPerColumn: number;
+  private readonly maxMemoryBytes: number;
 
-  constructor(trigramSize = 3) {
-    this.trigramSize = trigramSize;
+  constructor(options?: number | FuzzyIndexBuilderOptions) {
+    const resolvedOptions: FuzzyIndexBuilderOptions =
+      typeof options === 'number' ? { trigramSize: options } : options ?? {};
+
+    this.trigramSize =
+      typeof resolvedOptions.trigramSize === 'number' &&
+      Number.isFinite(resolvedOptions.trigramSize)
+        ? Math.max(1, Math.floor(resolvedOptions.trigramSize))
+        : 3;
+    this.maxTokensPerColumn =
+      typeof resolvedOptions.maxTokensPerColumn === 'number' &&
+      Number.isFinite(resolvedOptions.maxTokensPerColumn)
+        ? Math.max(1, Math.floor(resolvedOptions.maxTokensPerColumn))
+        : DEFAULT_MAX_TOKENS_PER_COLUMN;
+    const memoryLimitMb =
+      typeof resolvedOptions.maxMemoryMB === 'number' &&
+      Number.isFinite(resolvedOptions.maxMemoryMB)
+        ? resolvedOptions.maxMemoryMB
+        : DEFAULT_MAX_MEMORY_MB;
+    this.maxMemoryBytes = Math.max(1, Math.floor(memoryLimitMb * BYTES_PER_MB));
+  }
+
+  getTrigramSize(): number {
+    return this.trigramSize;
+  }
+
+  getTokenLimit(): number {
+    return this.maxTokensPerColumn;
   }
 
   /**
@@ -51,35 +89,67 @@ export class FuzzyIndexBuilder {
   }
 
   private addTokensToColumn(columnName: string, tokens: string[]): void {
-    let columnMap = this.columns.get(columnName);
-    if (!columnMap) {
-      columnMap = new Map<string, number>();
-      this.columns.set(columnName, columnMap);
+    let columnState = this.columns.get(columnName);
+    if (!columnState) {
+      columnState = {
+        tokens: new Map<string, TokenStats>(),
+        memoryBytes: 0,
+        truncated: false
+      };
+      this.columns.set(columnName, columnState);
     }
 
     for (const token of tokens) {
-      const current = columnMap.get(token) ?? 0;
-      columnMap.set(token, current + 1);
+      const existing = columnState.tokens.get(token);
+      if (existing) {
+        existing.frequency += 1;
+      } else {
+        const byteSize = textEncoder.encode(token).byteLength;
+        columnState.tokens.set(token, { frequency: 1, byteSize });
+        columnState.memoryBytes += byteSize;
+      }
 
-      // Check memory limit
-      if (this.totalMemoryBytes > MAX_MEMORY_MB * BYTES_PER_MB) {
-        // Remove least frequent tokens if over limit
-        this.trimColumn(columnMap);
+      if (
+        columnState.tokens.size > this.maxTokensPerColumn ||
+        columnState.memoryBytes > this.maxMemoryBytes
+      ) {
+        this.trimColumn(columnState);
       }
     }
   }
 
-  private trimColumn(columnMap: Map<string, number>): void {
-    if (columnMap.size <= MAX_TOKENS_PER_COLUMN) return;
+  private trimColumn(columnState: ColumnState): void {
+    const sorted = Array.from(columnState.tokens.entries()).sort((a, b) => {
+      const freqDelta = b[1].frequency - a[1].frequency;
+      if (freqDelta !== 0) {
+        return freqDelta;
+      }
+      return a[0].localeCompare(b[0]);
+    });
 
-    // Sort by frequency descending, keep top N
-    const sorted = Array.from(columnMap.entries()).sort((a, b) => b[1] - a[1]);
-    const toKeep = sorted.slice(0, MAX_TOKENS_PER_COLUMN);
+    const nextTokens = new Map<string, TokenStats>();
+    let nextMemoryBytes = 0;
+    let truncated = false;
 
-    columnMap.clear();
-    for (const [token, freq] of toKeep) {
-      columnMap.set(token, freq);
+    for (const [token, stats] of sorted) {
+      if (nextTokens.size >= this.maxTokensPerColumn) {
+        truncated = true;
+        break;
+      }
+
+      const wouldExceedMemory = nextMemoryBytes + stats.byteSize > this.maxMemoryBytes;
+      if (nextTokens.size > 0 && wouldExceedMemory) {
+        truncated = true;
+        continue;
+      }
+
+      nextTokens.set(token, stats);
+      nextMemoryBytes += stats.byteSize;
     }
+
+    columnState.tokens = nextTokens;
+    columnState.memoryBytes = nextMemoryBytes;
+    columnState.truncated = columnState.truncated || truncated || nextTokens.size < sorted.length;
   }
 
   /**
@@ -88,37 +158,38 @@ export class FuzzyIndexBuilder {
   buildSnapshots(): FuzzyColumnSnapshot[] {
     const snapshots: FuzzyColumnSnapshot[] = [];
 
-    for (const [columnName, tokenMap] of this.columns) {
+    for (const [columnName, columnState] of this.columns) {
       const tokens: FuzzyTokenEntry[] = [];
       const trigramIndex = new Map<string, number[]>(); // trigram -> tokenIds
 
-      // Sort tokens by frequency descending
-      const sortedTokens = Array.from(tokenMap.entries())
-        .map(([token, frequency], index) => ({
-          id: index,
+      const sortedTokens = Array.from(columnState.tokens.entries())
+        .map(([token, stats]) => ({
           token,
-          frequency,
+          frequency: stats.frequency,
           trigrams: this.generateTrigrams(token)
         }))
-        .sort((a, b) => b.frequency - a.frequency);
+        .sort((a, b) => {
+          if (a.frequency !== b.frequency) {
+            return b.frequency - a.frequency;
+          }
+          return a.token.localeCompare(b.token);
+        });
 
-      // Take only top tokens
-      const topTokens = sortedTokens.slice(0, MAX_TOKENS_PER_COLUMN);
+      const topTokens = sortedTokens.slice(0, this.maxTokensPerColumn);
 
-      for (const tokenInfo of topTokens) {
+      topTokens.forEach((tokenInfo, index) => {
         tokens.push({
-          id: tokenInfo.id,
+          id: index,
           token: tokenInfo.token,
           frequency: tokenInfo.frequency
         });
 
-        // Build trigram index
         for (const trigram of tokenInfo.trigrams) {
           const list = trigramIndex.get(trigram) ?? [];
-          list.push(tokenInfo.id);
+          list.push(index);
           trigramIndex.set(trigram, list);
         }
-      }
+      });
 
       // Convert trigram index to Uint32Array format
       const trigramIndexArrays: Record<string, Uint32Array> = {};
@@ -128,7 +199,7 @@ export class FuzzyIndexBuilder {
 
       snapshots.push({
         key: columnName,
-        truncated: sortedTokens.length > MAX_TOKENS_PER_COLUMN,
+        truncated: columnState.truncated,
         tokens,
         trigramIndex: trigramIndexArrays
       });
