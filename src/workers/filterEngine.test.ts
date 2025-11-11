@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { evaluateFilter, collectMatchingRowIds } from './filterEngine';
 import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
-import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import type {
   BooleanColumnBatch,
   ColumnBatch,

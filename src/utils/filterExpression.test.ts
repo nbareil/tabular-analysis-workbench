@@ -66,20 +66,22 @@ describe('buildFilterExpression', () => {
     expect((expression as FilterExpression).op).toBe('and');
     expect((expression as FilterExpression).predicates).toHaveLength(2);
     expect((expression as FilterExpression).predicates[0]).toEqual({
-    column: 'name',
-    operator: 'eq',
-    value: 'Alice',
-    value2: undefined,
-    caseSensitive: false,
-    fuzzy: undefined
+      id: '1',
+      column: 'name',
+      operator: 'eq',
+      value: 'Alice',
+      value2: undefined,
+      caseSensitive: false,
+      fuzzy: undefined
     } as FilterPredicate);
     expect((expression as FilterExpression).predicates[1]).toEqual({
-    column: 'age',
-    operator: 'gt',
-    value: 25,
-    value2: undefined,
-    caseSensitive: false,
-    fuzzy: undefined
+      id: '2',
+      column: 'age',
+      operator: 'gt',
+      value: 25,
+      value2: undefined,
+      caseSensitive: false,
+      fuzzy: undefined
     } as FilterPredicate);
   });
 
@@ -99,12 +101,13 @@ describe('buildFilterExpression', () => {
       throw new Error('expression should not be null');
     }
     expect((expression as FilterExpression).predicates[0]).toEqual({
-    column: 'age',
-    operator: 'between',
-    value: 20,
-    value2: 30,
-    caseSensitive: false,
-    fuzzy: undefined
+      id: '1',
+      column: 'age',
+      operator: 'between',
+      value: 20,
+      value2: 30,
+      caseSensitive: false,
+      fuzzy: undefined
     } as FilterPredicate);
   });
 
@@ -125,12 +128,13 @@ describe('buildFilterExpression', () => {
       throw new Error('expression should not be null');
     }
     expect((expression as FilterExpression).predicates[0]).toEqual({
-    column: 'name',
-    operator: 'contains',
-    value: 'test',
-    value2: undefined,
-    caseSensitive: true,
-    fuzzy: true
+      id: '1',
+      column: 'name',
+      operator: 'contains',
+      value: 'test',
+      value2: undefined,
+      caseSensitive: true,
+      fuzzy: true
     } as FilterPredicate);
   });
 

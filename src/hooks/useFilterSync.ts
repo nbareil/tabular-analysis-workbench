@@ -110,7 +110,7 @@ export const useFilterSync = (): UseFilterSyncResult => {
           matchedRows: response.matchedRows,
           totalRows: response.totalRows,
           fuzzyUsed: response.fuzzyUsed,
-          filterMatchCounts: response.predicateMatchCounts ?? null
+          filterMatchCounts: response.predicateMatchCounts ?? undefined
         });
         clearSearchResult();
         setMatchedRowCount(response.matchedRows);
