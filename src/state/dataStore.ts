@@ -30,6 +30,7 @@ interface DataState {
   totalRows: number;
   matchedRows: number | null;
   filterMatchedRows: number | null;
+  filterPredicateMatchCounts: Record<string, number> | null;
   searchMatchedRows: number | null;
   fuzzyUsed: FuzzyMatchInfo | null;
   viewVersion: number;
@@ -52,7 +53,12 @@ interface DataState {
     columnInference: Record<string, ColumnInference>;
   }) => void;
   setError: (message: string) => void;
-  setFilterSummary: (payload: { matchedRows: number; totalRows: number; fuzzyUsed?: FuzzyMatchInfo }) => void;
+  setFilterSummary: (payload: {
+    matchedRows: number;
+    totalRows: number;
+    fuzzyUsed?: FuzzyMatchInfo;
+    filterMatchCounts?: Record<string, number>;
+  }) => void;
   clearFilterSummary: () => void;
   setMatchedRowCount: (value: number | null) => void;
   setFuzzyUsed: (fuzzyUsed: FuzzyMatchInfo | null) => void;
@@ -101,6 +107,7 @@ export const useDataStore = create<DataState>((set) => ({
   totalRows: 0,
   matchedRows: null,
   filterMatchedRows: null,
+  filterPredicateMatchCounts: null,
   searchMatchedRows: null,
   fuzzyUsed: null,
   viewVersion: 0,
@@ -117,6 +124,7 @@ export const useDataStore = create<DataState>((set) => ({
       totalRows: 0,
       matchedRows: null,
       filterMatchedRows: null,
+      filterPredicateMatchCounts: null,
       searchMatchedRows: null,
       fuzzyUsed: null,
       viewVersion: state.viewVersion + 1,
@@ -243,18 +251,20 @@ export const useDataStore = create<DataState>((set) => ({
         message
       };
     }),
-  setFilterSummary: ({ matchedRows, totalRows, fuzzyUsed }) =>
+  setFilterSummary: ({ matchedRows, totalRows, fuzzyUsed, filterMatchCounts }) =>
     set(() => ({
       filterMatchedRows: matchedRows,
       matchedRows,
       totalRows,
-    fuzzyUsed: fuzzyUsed ?? null
+      fuzzyUsed: fuzzyUsed ?? null,
+      filterPredicateMatchCounts: filterMatchCounts ?? null
   })),
   clearFilterSummary: () =>
     set((state) => ({
       filterMatchedRows: null,
       fuzzyUsed: null,
-    matchedRows: state.searchMatchedRows ?? state.totalRows
+      matchedRows: state.searchMatchedRows ?? state.totalRows,
+      filterPredicateMatchCounts: null
   })),
   setMatchedRowCount: (value) =>
     set(() => ({
@@ -334,6 +344,7 @@ export const useDataStore = create<DataState>((set) => ({
       filterMatchedRows: null,
       searchMatchedRows: null,
       fuzzyUsed: null,
+      filterPredicateMatchCounts: null,
       viewVersion: state.viewVersion + 1,
       grouping: initialGroupingState()
     }))

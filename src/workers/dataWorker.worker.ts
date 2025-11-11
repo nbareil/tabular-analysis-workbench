@@ -151,6 +151,7 @@ export interface ApplyFilterResult {
   matchedRows: number;
   expression: FilterNode | null;
   fuzzyUsed?: import('./filterEngine').FuzzyMatchInfo;
+  predicateMatchCounts?: Record<string, number>;
 }
 
 export interface FetchRowsRequest {
@@ -1062,11 +1063,17 @@ const api: DataWorkerApi = {
 
     const matchedRowIds: number[] = [];
     let fuzzyUsed: import('./filterEngine').FuzzyMatchInfo | undefined;
+    const predicateMatchCounts: Record<string, number> = {};
 
     for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
       const result = evaluateFilterOnRows(rows, state.dataset.columnTypes, expression, {
         tags: state.tagging.tags,
         fuzzyIndex: state.dataset.fuzzyIndexSnapshot
+      }, {
+        collectPredicateMatch: (predicateId, count) => {
+          const current = predicateMatchCounts[predicateId] ?? 0;
+          predicateMatchCounts[predicateId] = current + count;
+        }
       });
       for (let idx = 0; idx < result.matches.length; idx += 1) {
         if (result.matches[idx] === 1) {
@@ -1086,7 +1093,8 @@ const api: DataWorkerApi = {
       totalRows,
       matchedRows: matchedRowIds.length,
       expression,
-      fuzzyUsed
+      fuzzyUsed,
+      predicateMatchCounts
     };
   },
   async fetchRows({ offset, limit }: FetchRowsRequest): Promise<FetchRowsResult> {

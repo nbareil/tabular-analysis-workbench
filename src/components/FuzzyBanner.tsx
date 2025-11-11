@@ -19,6 +19,9 @@ export const FuzzyBanner = () => {
   const handleBackToExact = () => {
     let changed = false;
     const updatedFilters = filters.map((filter: FilterState) => {
+      if (filter.enabled === false) {
+        return filter;
+      }
       const matchesFilter =
         filter.column === fuzzyUsed.column &&
         filter.operator === fuzzyUsed.operator &&

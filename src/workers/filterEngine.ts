@@ -33,6 +33,20 @@ export interface FilterEvaluationContext {
 
 const isExpression = (node: FilterNode): node is FilterExpression => 'op' in node;
 
+interface FilterEvaluationOptions {
+  collectPredicateMatch?: (predicateId: string, count: number) => void;
+}
+
+const countMatches = (mask: Uint8Array): number => {
+  let count = 0;
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index] === 1) {
+      count += 1;
+    }
+  }
+  return count;
+};
+
 const determineMaxDistance = (value: string): number => {
   const trimmed = value.trim();
   if (trimmed.length >= 5) {
@@ -463,17 +477,18 @@ const evaluateNode = (
   rows: Array<Record<string, unknown>>,
   columnTypes: Record<string, ColumnType>,
   node: FilterNode,
-  context: FilterEvaluationContext
+  context: FilterEvaluationContext,
+  options?: FilterEvaluationOptions
 ): { matches: Uint8Array; fuzzyInfo?: FuzzyMatchInfo } => {
   if (isExpression(node)) {
     if (!node.predicates.length) {
       return { matches: new Uint8Array(rows.length).fill(1) };
     }
 
-    let accumulator = evaluateNode(rows, columnTypes, node.predicates[0]!, context);
+    let accumulator = evaluateNode(rows, columnTypes, node.predicates[0]!, context, options);
 
     for (let index = 1; index < node.predicates.length; index += 1) {
-      const next = evaluateNode(rows, columnTypes, node.predicates[index]!, context);
+      const next = evaluateNode(rows, columnTypes, node.predicates[index]!, context, options);
       accumulator = {
         matches: combineMasks(accumulator.matches, next.matches, node.op),
         fuzzyInfo: accumulator.fuzzyInfo || next.fuzzyInfo // take first fuzzyInfo
@@ -483,14 +498,19 @@ const evaluateNode = (
     return accumulator;
   }
 
-  return evaluatePredicate(rows, columnTypes, node, context);
+  const predicateResult = evaluatePredicate(rows, columnTypes, node, context);
+  if (options?.collectPredicateMatch && node.id) {
+    options.collectPredicateMatch(node.id, countMatches(predicateResult.matches));
+  }
+  return predicateResult;
 };
 
 const evaluateFilterInternal = (
   rows: MaterializedRow[],
   columnTypes: Record<string, ColumnType>,
   expression: FilterNode | null,
-  context: FilterEvaluationContext
+  context: FilterEvaluationContext,
+  options?: FilterEvaluationOptions
 ): FilterResult => {
   const rowCount = rows.length;
 
@@ -499,13 +519,8 @@ const evaluateFilterInternal = (
     return { matches, matchedCount: rowCount };
   }
 
-  const result = evaluateNode(rows, columnTypes, expression, context);
-  let matchedCount = 0;
-  for (let index = 0; index < result.matches.length; index += 1) {
-    if (result.matches[index] === 1) {
-      matchedCount += 1;
-    }
-  }
+  const result = evaluateNode(rows, columnTypes, expression, context, options);
+  const matchedCount = countMatches(result.matches);
 
   return { matches: result.matches, matchedCount, fuzzyUsed: result.fuzzyInfo };
 };
@@ -514,16 +529,18 @@ export const evaluateFilterOnRows = (
   rows: MaterializedRow[],
   columnTypes: Record<string, ColumnType>,
   expression: FilterNode | null,
-  context: FilterEvaluationContext = {}
-): FilterResult => evaluateFilterInternal(rows, columnTypes, expression, context);
+  context: FilterEvaluationContext = {},
+  options?: FilterEvaluationOptions
+): FilterResult => evaluateFilterInternal(rows, columnTypes, expression, context, options);
 
 export const evaluateFilterOnBatch = (
   batch: RowBatch,
   expression: FilterNode | null,
-  context: FilterEvaluationContext = {}
+  context: FilterEvaluationContext = {},
+  options?: FilterEvaluationOptions
 ): FilterResult => {
   const materialised = materializeRowBatch(batch);
-  return evaluateFilterInternal(materialised.rows, batch.columnTypes, expression, context);
+  return evaluateFilterInternal(materialised.rows, batch.columnTypes, expression, context, options);
 };
 
 export const evaluateFilter = evaluateFilterOnBatch;

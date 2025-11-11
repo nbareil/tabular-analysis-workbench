@@ -43,7 +43,7 @@ export const evaluateFilterMenuMetadata = (
   valueAsString: string
 ): FilterMenuMetadata => {
   const eqIndex = filters.findIndex(
-    (filter) => filter.column === columnId && filter.operator === 'eq'
+    (filter) => filter.enabled !== false && filter.column === columnId && filter.operator === 'eq'
   );
 
   const eqMatchesValue =
@@ -53,6 +53,7 @@ export const evaluateFilterMenuMetadata = (
 
   const neqExists = filters.some(
     (filter) =>
+      filter.enabled !== false &&
       filter.column === columnId &&
       filter.operator === 'neq' &&
       String(filter.value ?? '') === valueAsString
@@ -787,7 +788,8 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         fuzzyExplicit: isTagColumn
           ? true
           : nextFilters[menuMetadata.eqIndex]!.fuzzyExplicit ?? false,
-        caseSensitive: isTagColumn ? false : nextFilters[menuMetadata.eqIndex]!.caseSensitive
+        caseSensitive: isTagColumn ? false : nextFilters[menuMetadata.eqIndex]!.caseSensitive,
+        enabled: true
       };
       void applyFilters(nextFilters);
     } else {
@@ -797,6 +799,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         operator: 'eq',
         value: predicateValue,
         caseSensitive: false,
+        enabled: true,
         ...(isTagColumn
           ? { fuzzy: false, fuzzyExplicit: true }
           : { fuzzy: false, fuzzyExplicit: false })
@@ -830,6 +833,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       operator: 'neq',
       value: predicateValue,
       caseSensitive: false,
+      enabled: true,
       ...(isTagColumn
         ? { fuzzy: false, fuzzyExplicit: true }
         : { fuzzy: false, fuzzyExplicit: false })

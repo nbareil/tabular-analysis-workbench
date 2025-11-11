@@ -7,11 +7,12 @@ import {
 import type { FilterState } from '@state/sessionStore';
 
 export const buildFilterExpression = (filters: FilterState[]): FilterNode | null => {
-  if (!filters.length) {
+  const activeFilters = filters.filter((filter) => filter.enabled !== false);
+  if (!activeFilters.length) {
     return null;
   }
 
-  const predicates: FilterPredicate[] = filters.map((predicate) => {
+  const predicates: FilterPredicate[] = activeFilters.map((predicate) => {
     const operator = predicate.operator as FilterPredicate['operator'];
     let value = predicate.value;
     let fuzzy = predicate.fuzzy;
@@ -27,6 +28,7 @@ export const buildFilterExpression = (filters: FilterState[]): FilterNode | null
     }
 
     return {
+      id: predicate.id,
       column: predicate.column,
       operator,
       value,

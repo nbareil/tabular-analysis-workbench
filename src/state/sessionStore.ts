@@ -19,6 +19,7 @@ export interface FilterState {
   fuzzy?: boolean;
   fuzzyExplicit?: boolean;
   caseSensitive?: boolean;
+  enabled?: boolean;
 }
 
 export interface SessionSnapshot {

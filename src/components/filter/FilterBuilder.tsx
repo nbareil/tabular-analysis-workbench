@@ -63,7 +63,8 @@ const defaultFilter = (column: string, labels: any): FilterState => {
     value: isTagColumn ? (labels[0]?.id ?? TAG_NO_LABEL_FILTER_VALUE) : '',
     caseSensitive: false,
     fuzzy: false,
-    fuzzyExplicit: isTagColumn
+    fuzzyExplicit: isTagColumn,
+    enabled: true
   };
 };
 
@@ -89,13 +90,15 @@ const normaliseFilterForColumn = (
     value2: undefined,
     fuzzy: false,
     fuzzyExplicit: true,
-    caseSensitive: false
+    caseSensitive: false,
+    enabled: filter.enabled ?? true
   };
 };
 
 const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
   const { filters, applyFilters } = useFilterSync();
   const columnInference = useDataStore((state) => state.columnInference);
+  const filterMatchCounts = useDataStore((state) => state.filterPredicateMatchCounts);
   const tagLabels = useTagStore((state) => state.labels);
   const tagStatus = useTagStore((state) => state.status);
   const loadTags = useTagStore((state) => state.load);
@@ -273,12 +276,33 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
               {fuzzyWarning}
             </div>
           )}
-          {filters.map((filter) => (
-            <div
-            key={filter.id}
-            className="flex flex-col gap-2 rounded border border-slate-700 p-2 text-xs text-slate-300"
-            >
-              <div className="flex flex-col gap-2">
+          {filters.map((filter) => {
+            const matchCount = filterMatchCounts?.[filter.id];
+            const isEnabled = filter.enabled !== false;
+            const innerSectionClasses = isEnabled ? 'flex flex-col gap-2' : 'flex flex-col gap-2 opacity-60';
+            return (
+              <div
+                key={filter.id}
+                className="flex flex-col gap-2 rounded border border-slate-700 p-2 text-xs text-slate-300"
+              >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-slate-500">
+                <label className="flex items-center gap-1 text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={isEnabled}
+                    onChange={(event) => handleChange(filter.id, { enabled: event.target.checked })}
+                  />
+                  Enabled
+                </label>
+                <span className="text-slate-500">
+                  {isEnabled
+                    ? matchCount != null
+                      ? `Matches ${matchCount.toLocaleString()} rows`
+                      : 'Awaiting results'
+                    : 'Filter disabled'}
+                </span>
+              </div>
+              <div className={innerSectionClasses}>
                 <select
                   className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
                   value={filter.column}
@@ -315,7 +339,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                   )}
                 </select>
               </div>
-              <div className={columnMap[filter.column]?.type === 'datetime' && filter.operator === 'between' ? 'flex flex-col gap-1' : 'flex gap-2'}>
+              <div className={`${columnMap[filter.column]?.type === 'datetime' && filter.operator === 'between' ? 'flex flex-col gap-1' : 'flex gap-2'} ${isEnabled ? '' : 'opacity-60'}`}>
               {filter.column === TAG_COLUMN_ID ? (
               <select
               className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
@@ -448,7 +472,8 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

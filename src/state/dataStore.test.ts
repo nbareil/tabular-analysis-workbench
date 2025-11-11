@@ -43,4 +43,21 @@ describe('useDataStore matched row fallbacks', () => {
 
     expect(useDataStore.getState().matchedRows).toBe(summaryPayload.rowsParsed);
   });
+
+  it('stores and clears per-filter match counts with the summary lifecycle', () => {
+    const filterMatchCounts = { alpha: 10, beta: 0 };
+    useDataStore
+      .getState()
+      .setFilterSummary({
+        matchedRows: 25,
+        totalRows: summaryPayload.rowsParsed,
+        filterMatchCounts
+      });
+
+    expect(useDataStore.getState().filterPredicateMatchCounts).toEqual(filterMatchCounts);
+
+    useDataStore.getState().clearFilterSummary();
+
+    expect(useDataStore.getState().filterPredicateMatchCounts).toBeNull();
+  });
 });

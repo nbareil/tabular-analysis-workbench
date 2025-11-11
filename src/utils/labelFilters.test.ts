@@ -64,4 +64,15 @@ describe('summariseLabelFilters', () => {
     expect(summary?.exclude).toEqual(['Beta']);
     expect(summary?.summary).toBe('Labels: Alpha • Excluding: Beta');
   });
+
+  it('ignores disabled label filters', () => {
+    const filters: FilterState[] = [
+      { id: '1', column: TAG_COLUMN_ID, operator: 'eq', value: 'alpha', enabled: false },
+      { id: '2', column: TAG_COLUMN_ID, operator: 'eq', value: 'beta' }
+    ];
+
+    const summary = summariseLabelFilters(filters, labels);
+    expect(summary?.include).toEqual(['Beta']);
+    expect(summary?.summary).toBe('Labels: Beta');
+  });
 });

@@ -43,7 +43,7 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
   );
 
   const labelFilters = useMemo(
-    () => filters.filter((filter) => filter.column === TAG_COLUMN_ID),
+    () => filters.filter((filter) => filter.column === TAG_COLUMN_ID && filter.enabled !== false),
     [filters]
   );
 
@@ -54,7 +54,8 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
       id: crypto.randomUUID(),
       column: TAG_COLUMN_ID,
       operator: 'eq',
-      value
+      value,
+      enabled: true
     };
 
     void applyFilters([...nonLabelFilters, nextFilter]);
@@ -75,7 +76,8 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
       id: crypto.randomUUID(),
       column: TAG_COLUMN_ID,
       operator: 'neq',
-      value
+      value,
+      enabled: true
     };
 
     void applyFilters([...withoutDuplicate, nextFilter]);
@@ -90,7 +92,7 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
     const value = labelId ?? TAG_NO_LABEL_FILTER_VALUE;
     return labelFilters.some(
       (filter) =>
-        filter.operator === 'eq' && String(filter.value ?? '') === value
+        filter.enabled !== false && filter.operator === 'eq' && String(filter.value ?? '') === value
     );
   };
 
@@ -98,7 +100,7 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
     const value = labelId ?? TAG_NO_LABEL_FILTER_VALUE;
     return labelFilters.some(
       (filter) =>
-        filter.operator === 'neq' && String(filter.value ?? '') === value
+        filter.enabled !== false && filter.operator === 'neq' && String(filter.value ?? '') === value
     );
   };
 

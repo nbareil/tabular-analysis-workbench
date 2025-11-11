@@ -60,6 +60,7 @@ export type FilterOperator =
   | 'between';
 
 export interface FilterPredicate {
+  id?: string;
   column: string;
   operator: FilterOperator;
   value: unknown;

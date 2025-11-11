@@ -28,6 +28,9 @@ const applyAutoFuzzyFlag = (
 
   let changed = false;
   const updated = filters.map((filter) => {
+    if (filter.enabled === false) {
+      return filter;
+    }
     const matchesFilter =
       filter.column === fuzzyUsed.column &&
       filter.operator === fuzzyUsed.operator &&
@@ -70,27 +73,13 @@ export const useFilterSync = (): UseFilterSyncResult => {
       try {
         const worker = getDataWorker();
 
-        if (filtersToApply.length === 0) {
-          const response = await worker.applyFilter({
-          expression: null,
-          offset: 0,
-          limit: 0
-          });
-          clearFilterSummary();
-          clearSearchResult();
-          setMatchedRowCount(response.totalRows);
-          setFuzzyUsed(null);
-          bumpViewVersion();
-          return;
-        }
-
         const expression = buildFilterExpression(filtersToApply);
 
         if (!expression) {
           const response = await worker.applyFilter({
-          expression: null,
-          offset: 0,
-          limit: 0
+            expression: null,
+            offset: 0,
+            limit: 0
           });
           clearFilterSummary();
           clearSearchResult();
@@ -118,9 +107,10 @@ export const useFilterSync = (): UseFilterSyncResult => {
         }
 
         setFilterSummary({
-        matchedRows: response.matchedRows,
-        totalRows: response.totalRows,
-          fuzzyUsed: response.fuzzyUsed
+          matchedRows: response.matchedRows,
+          totalRows: response.totalRows,
+          fuzzyUsed: response.fuzzyUsed,
+          filterMatchCounts: response.predicateMatchCounts ?? null
         });
         clearSearchResult();
         setMatchedRowCount(response.matchedRows);

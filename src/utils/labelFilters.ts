@@ -28,7 +28,9 @@ export const summariseLabelFilters = (
   filters: FilterState[],
   labels: LabelDefinition[]
 ): LabelFilterSummary | null => {
-  const labelFilters = filters.filter((filter) => filter.column === TAG_COLUMN_ID);
+  const labelFilters = filters.filter(
+    (filter) => filter.column === TAG_COLUMN_ID && filter.enabled !== false
+  );
   if (labelFilters.length === 0) {
     return null;
   }
