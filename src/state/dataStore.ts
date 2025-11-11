@@ -26,6 +26,12 @@ interface DataState {
   searchRows: GridRow[] | null;
   status: LoaderStatus;
   message: string | null;
+  errorDetails: {
+    message: string;
+    stack?: string;
+    payload?: unknown;
+    timestamp: number;
+  } | null;
   stats: RowBatch['stats'] | null;
   totalRows: number;
   matchedRows: number | null;
@@ -52,7 +58,8 @@ interface DataState {
     columnTypes: Record<string, ColumnType>;
     columnInference: Record<string, ColumnInference>;
   }) => void;
-  setError: (message: string) => void;
+  setError: (message: string, details?: unknown) => void;
+  clearError: () => void;
   setFilterSummary: (payload: {
     matchedRows: number;
     totalRows: number;
@@ -87,6 +94,33 @@ const confidenceLabel = (inference: ColumnInference): number => {
   return Math.round(Math.min(1, Math.max(0, inference.confidence)) * 100);
 };
 
+const buildErrorDetails = (message: string, details?: unknown) => {
+  if (!details) {
+    return {
+      message,
+      timestamp: Date.now()
+    };
+  }
+
+  if (details instanceof Error) {
+    return {
+      message,
+      stack: details.stack,
+      payload: {
+        name: details.name,
+        originalMessage: details.message
+      },
+      timestamp: Date.now()
+    };
+  }
+
+  return {
+    message,
+    payload: details,
+    timestamp: Date.now()
+  };
+};
+
 const initialGroupingState = (): DataState['grouping'] => ({
   status: 'idle',
   rows: [],
@@ -103,6 +137,7 @@ export const useDataStore = create<DataState>((set) => ({
   searchRows: null,
   status: 'idle',
   message: null,
+  errorDetails: null,
   stats: null,
   totalRows: 0,
   matchedRows: null,
@@ -120,6 +155,7 @@ export const useDataStore = create<DataState>((set) => ({
       searchRows: null,
       status: 'loading',
       message: null,
+      errorDetails: null,
       stats: null,
       totalRows: 0,
       matchedRows: null,
@@ -241,16 +277,23 @@ export const useDataStore = create<DataState>((set) => ({
 
       return nextState;
     }),
-  setError: (message) =>
+  setError: (message, details) =>
     set((state) => {
       if (import.meta.env.DEV) {
-        console.error('[data-store] setError', { message, previousStatus: state.status });
+        console.error('[data-store] setError', { message, previousStatus: state.status, details });
       }
       return {
         status: 'error',
-        message
+        message,
+        errorDetails: buildErrorDetails(message, details)
       };
     }),
+  clearError: () =>
+    set((state) => ({
+      message: null,
+      errorDetails: null,
+      status: state.status === 'error' ? 'idle' : state.status
+    })),
   setFilterSummary: ({ matchedRows, totalRows, fuzzyUsed, filterMatchCounts }) =>
     set(() => ({
       filterMatchedRows: matchedRows,
@@ -335,9 +378,11 @@ export const useDataStore = create<DataState>((set) => ({
     set((state) => ({
       fileName: null,
       columns: [],
+      columnInference: {},
       searchRows: null,
       status: 'idle',
       message: null,
+      errorDetails: null,
       stats: null,
       totalRows: 0,
       matchedRows: null,

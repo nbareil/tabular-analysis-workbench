@@ -15,4 +15,13 @@ declare global {
   interface Window {
     showOpenFilePicker?: (options?: OpenFilePickerOptions) => Promise<FileSystemFileHandle[]>;
   }
+
+  interface FileSystemFileHandle {
+    queryPermission?: (descriptor?: FileSystemPermissionDescriptor) => Promise<PermissionState>;
+    requestPermission?: (descriptor?: FileSystemPermissionDescriptor) => Promise<PermissionState>;
+  }
+
+  interface FileSystemDirectoryHandle {
+    entries?: () => AsyncIterableIterator<[string, FileSystemHandle]>;
+  }
 }

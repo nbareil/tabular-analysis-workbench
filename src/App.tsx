@@ -4,7 +4,7 @@ import { proxy } from 'comlink';
 
 import { useAppStore } from '@state/appStore';
 import { useDataStore, type GridRow } from '@state/dataStore';
-import { useSessionStore } from '@state/sessionStore';
+import { useSessionStore, getSessionSnapshot } from '@state/sessionStore';
 import { useTagStore } from '@state/tagStore';
 import DataGrid from '@components/DataGrid';
 import FilterBuilder from '@components/filter/FilterBuilder';
@@ -14,12 +14,16 @@ import ColumnsPanel from '@components/ColumnsPanel';
 import LabelsPanel from '@components/LabelsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
 import TagNoteDialog from '@components/tagging/TagNoteDialog';
+import CapabilityGate from '@components/CapabilityGate';
+import CapabilityWarningBanner from '@components/CapabilityWarningBanner';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
 import { logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
 import { summariseLabelFilters } from '@utils/labelFilters';
 import { serializeToCsv, generateExportFilename } from '@utils/csvExport';
+import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
+import { useSessionPersistence } from '@/hooks/useSessionPersistence';
 
 const formatBytes = (bytes: number): string => {
   if (bytes <= 0) {
@@ -30,6 +34,14 @@ const formatBytes = (bytes: number): string => {
   const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** exponent;
   return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+};
+
+const formatTime = (timestamp: number): string => {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  }).format(new Date(timestamp));
 };
 
 const App = (): JSX.Element => {
@@ -55,6 +67,8 @@ const App = (): JSX.Element => {
   const clearSearchResult = useDataStore((state) => state.clearSearchResult);
   const loaderStatus = useDataStore((state) => state.status);
   const loaderMessage = useDataStore((state) => state.message);
+  const errorDetails = useDataStore((state) => state.errorDetails);
+  const clearErrorDetails = useDataStore((state) => state.clearError);
   const matchedRows = useDataStore((state) => state.matchedRows);
   const totalRows = useDataStore((state) => state.totalRows);
   const stats = useDataStore((state) => state.stats);
@@ -77,10 +91,46 @@ const App = (): JSX.Element => {
     note: string;
   } | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
+  const [capabilityReport, setCapabilityReport] = useState<CapabilityReport>(() => detectCapabilities());
+  const [warningsDismissed, setWarningsDismissed] = useState(false);
+  const opfsCapability = capabilityReport.checks.find((entry) => entry.id === 'opfs');
+  const opfsAvailable = Boolean(opfsCapability?.present);
+  const sessionPersistence = useSessionPersistence(opfsAvailable);
+  const {
+    restoring: persistenceRestoring,
+    error: persistenceError,
+    lastSavedAt: persistenceLastSavedAt
+  } = sessionPersistence;
 
   useEffect(() => {
-  document.documentElement.classList.toggle('dark', theme === 'dark');
+    document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const refreshCapabilities = () => {
+      setCapabilityReport((previous) => {
+        const next = detectCapabilities();
+        const previousWarningIds = (previous?.warnings ?? []).map((entry) => entry.id).join(',');
+        const nextWarningIds = next.warnings.map((entry) => entry.id).join(',');
+        if (previousWarningIds !== nextWarningIds) {
+          setWarningsDismissed(false);
+        }
+        return next;
+      });
+    };
+
+    window.addEventListener('focus', refreshCapabilities);
+    window.addEventListener('visibilitychange', refreshCapabilities);
+
+    return () => {
+      window.removeEventListener('focus', refreshCapabilities);
+      window.removeEventListener('visibilitychange', refreshCapabilities);
+    };
+  }, []);
 
   useEffect(() => {
     // Prevent back button navigation to avoid triggering on horizontal scroll/swipe
@@ -202,7 +252,7 @@ const App = (): JSX.Element => {
                 console.error('[app] Worker onError', error);
               }
               if (!cancelled) {
-                setError(error.message ?? 'Failed to load file');
+                setError(error.message ?? 'Failed to load file', error);
               }
             }
           })
@@ -212,7 +262,7 @@ const App = (): JSX.Element => {
           console.error('[app] loadFile threw', error);
         }
         if (!cancelled) {
-          setError(error instanceof Error ? error.message : String(error));
+          setError(error instanceof Error ? error.message : String(error), error);
         }
       }
     };
@@ -238,6 +288,10 @@ const App = (): JSX.Element => {
   );
 
   const statusText = useMemo(() => {
+    if (persistenceRestoring) {
+      return 'Restoring previous session…';
+    }
+
     let base: string;
     if (matchedRows != null && totalRows > 0) {
       base = `Showing ${matchedRows.toLocaleString()} of ${totalRows.toLocaleString()} rows`;
@@ -252,11 +306,29 @@ const App = (): JSX.Element => {
     }
 
     if (labelFilterSummary) {
-      return `${base} • ${labelFilterSummary.summary}`;
+      base = `${base} • ${labelFilterSummary.summary}`;
+    }
+
+    if (persistenceError) {
+      return `${base} • ${persistenceError}`;
+    }
+
+    if (persistenceLastSavedAt) {
+      return `${base} • Auto-saved ${formatTime(persistenceLastSavedAt)}`;
     }
 
     return base;
-  }, [matchedRows, totalRows, loaderMessage, loaderStatus, stats, labelFilterSummary]);
+  }, [
+    persistenceRestoring,
+    matchedRows,
+    totalRows,
+    loaderMessage,
+    loaderStatus,
+    stats,
+    labelFilterSummary,
+    persistenceError,
+    persistenceLastSavedAt
+  ]);
 
   const openNoteEditor = useCallback(
     ({ rowId }: { rowId: number }) => {
@@ -426,7 +498,7 @@ const App = (): JSX.Element => {
       }
     } catch (error) {
       if ((error as DOMException)?.name !== 'AbortError') {
-        setError(error instanceof Error ? error.message : String(error));
+        setError(error instanceof Error ? error.message : String(error), error);
       }
     }
   }, [setError, setFileHandle]);
@@ -488,7 +560,7 @@ const App = (): JSX.Element => {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Failed to export CSV', error);
-      setError('Failed to export CSV');
+      setError('Failed to export CSV', error instanceof Error ? error : undefined);
     }
   }, [fileHandle, matchedRows, allColumns, setError]);
 
@@ -509,21 +581,66 @@ const App = (): JSX.Element => {
       }
     } catch (error) {
       console.error('Failed to export tags', error);
-      setError('Failed to export tags');
+      setError('Failed to export tags', error instanceof Error ? error : undefined);
     }
   }, [exportTags, fileHandle, setError]);
 
+  const handleDownloadDiagnostics = useCallback(() => {
+    if (!errorDetails) {
+      return;
+    }
+
+    const payload = {
+      ...errorDetails,
+      session: getSessionSnapshot()
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `diagnostics-${new Date().toISOString()}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    clearErrorDetails();
+  }, [clearErrorDetails, errorDetails]);
+
+  const capabilityWarnings = capabilityReport?.warnings ?? [];
+  const showCapabilityWarnings =
+    capabilityReport.ok && capabilityWarnings.length > 0 && !warningsDismissed;
+
+  if (!capabilityReport.ok) {
+    return <CapabilityGate report={capabilityReport} />;
+  }
+
   return (
     <div className="flex h-full flex-col bg-canvas text-slate-100">
+      {showCapabilityWarnings && (
+        <CapabilityWarningBanner
+          warnings={capabilityWarnings}
+          onDismiss={() => setWarningsDismissed(true)}
+        />
+      )}
       <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-semibold">Tabular Analysis Workbench</h1>
           <span className="text-xs uppercase tracking-wide text-slate-400">
             {workerReady ? 'Data worker ready' : 'Initializing worker…'}
           </span>
+          {persistenceRestoring && (
+            <span className="text-xs uppercase tracking-wide text-amber-300">
+              Restoring session…
+            </span>
+          )}
           {loaderMessage && (
             <span className="text-xs uppercase tracking-wide text-slate-500">
               {loaderMessage}
+            </span>
+          )}
+          {persistenceError && (
+            <span className="text-xs uppercase tracking-wide text-red-400">
+              {persistenceError}
             </span>
           )}
         </div>
@@ -551,10 +668,19 @@ const App = (): JSX.Element => {
             type="button"
             className="rounded bg-accent px-3 py-1 text-sm font-semibold text-slate-900"
             onClick={handleOpenFile}
-            disabled={!workerReady || loaderStatus === 'loading'}
+            disabled={!workerReady || loaderStatus === 'loading' || persistenceRestoring}
           >
             {loaderStatus === 'loading' ? 'Loading…' : 'Open File'}
           </button>
+          {errorDetails && (
+            <button
+              type="button"
+              className="rounded border border-red-500/60 px-2 py-1 text-xs text-red-200"
+              onClick={handleDownloadDiagnostics}
+            >
+              Diagnostics
+            </button>
+          )}
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"

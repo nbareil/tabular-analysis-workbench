@@ -56,6 +56,7 @@ interface SessionStore extends SessionSnapshot {
   setTags: (tags: Record<number, TagRecord>) => void;
   touch: () => void;
   clear: () => void;
+  hydrate: (snapshot: SessionSnapshot) => void;
 }
 
 const defaultColumnLayout: ColumnLayoutState = {
@@ -121,5 +122,30 @@ export const useSessionStore = create<SessionStore>((set) => ({
   setLabels: (labels) => set(() => ({ labels, updatedAt: Date.now() })),
   setTags: (tags) => set(() => ({ tags, updatedAt: Date.now() })),
   touch: () => set(() => ({ updatedAt: Date.now() })),
-  clear: () => set(() => ({ ...initialState, updatedAt: Date.now() }))
+  clear: () => set(() => ({ ...initialState, updatedAt: Date.now() })),
+  hydrate: (snapshot) =>
+    set((state) => ({
+      ...state,
+      ...snapshot,
+      updatedAt: snapshot.updatedAt ?? Date.now()
+    }))
 }));
+
+const buildSnapshot = (state: SessionStore): SessionSnapshot => ({
+  fileHandle: state.fileHandle,
+  filters: state.filters,
+  sorts: state.sorts,
+  groups: state.groups,
+  groupAggregations: state.groupAggregations,
+  columnLayout: state.columnLayout,
+  searchCaseSensitive: state.searchCaseSensitive,
+  interfaceFontFamily: state.interfaceFontFamily,
+  interfaceFontSize: state.interfaceFontSize,
+  dataFontFamily: state.dataFontFamily,
+  dataFontSize: state.dataFontSize,
+  labels: state.labels,
+  tags: state.tags,
+  updatedAt: state.updatedAt
+});
+
+export const getSessionSnapshot = (): SessionSnapshot => buildSnapshot(useSessionStore.getState());
