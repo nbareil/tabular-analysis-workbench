@@ -1254,7 +1254,7 @@ const api: DataWorkerApi = {
             return true;
           }
           if (needle.length <= 10) {
-            const distance = damerauLevenshtein(value, needle);
+            const distance = damerauLevenshtein(value, needle, 2);
             if (distance <= 2) {
               return true;
             }

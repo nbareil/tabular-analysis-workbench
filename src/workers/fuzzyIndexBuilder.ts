@@ -249,12 +249,15 @@ export class FuzzyIndexBuilder {
 
     // Score candidates
     const matches: Array<{ token: string; distance: number; frequency: number }> = [];
+    const tokens = columnSnapshot.tokens;
 
     for (const tokenId of candidates) {
-      const tokenEntry = columnSnapshot.tokens.find(t => t.id === tokenId);
-      if (!tokenEntry) continue;
+      const tokenEntry = tokens[tokenId];
+      if (!tokenEntry || tokenEntry.id !== tokenId) {
+        continue;
+      }
 
-      const distance = damerauLevenshtein(queryNormalized, tokenEntry.token);
+      const distance = damerauLevenshtein(queryNormalized, tokenEntry.token, maxDistance);
       if (distance <= maxDistance) {
         matches.push({
           token: tokenEntry.token,

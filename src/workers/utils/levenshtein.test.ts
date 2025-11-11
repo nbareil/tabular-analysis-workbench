@@ -26,6 +26,11 @@ describe('damerauLevenshtein', () => {
     expect(damerauLevenshtein('a', '')).toBe(1);
     expect(damerauLevenshtein('', 'a')).toBe(1);
   });
+
+  it('supports optional maxDistance thresholds', () => {
+    expect(damerauLevenshtein('hello', 'hallo', 2)).toBe(1);
+    expect(damerauLevenshtein('abcdef', 'azced', 2)).toBeGreaterThan(2);
+  });
 });
 
 describe('isSimilar', () => {
