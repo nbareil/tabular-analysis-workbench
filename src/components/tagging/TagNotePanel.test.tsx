@@ -5,6 +5,31 @@ import TagNotePanel from './TagNotePanel';
 import { useTagStore } from '@state/tagStore';
 import type { LabelDefinition } from '@workers/types';
 
+vi.mock('@components/tagging/MarkdownEditor', () => {
+  return {
+    __esModule: true,
+    default: ({
+      value,
+      onChange,
+      placeholder,
+      disabled
+    }: {
+      value: string;
+      onChange: (next: string) => void;
+      placeholder?: string;
+      disabled?: boolean;
+    }) => (
+      <textarea
+        data-testid="markdown-editor"
+        value={value}
+        placeholder={placeholder}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    )
+  };
+});
+
 const storeSnapshot = (() => {
   const state = useTagStore.getState();
   return {

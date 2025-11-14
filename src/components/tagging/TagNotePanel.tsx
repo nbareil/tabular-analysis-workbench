@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useTagStore } from '@state/tagStore';
 import TagPalette from './TagPalette';
+import MarkdownEditor from './MarkdownEditor';
 import { renderMarkdownToSafeHtml } from '@utils/markdown';
 
 interface TagNotePanelProps {
@@ -156,13 +157,20 @@ const TagNotePanel = ({
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-[11px] uppercase tracking-wide text-slate-500">Write</label>
-                <textarea
-                  className="h-56 w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+                <label className="text-[11px] uppercase tracking-wide text-slate-500">
+                  Write <span className="text-slate-400">(Cmd/Ctrl + Enter saves)</span>
+                </label>
+                <MarkdownEditor
                   value={note}
-                  onChange={(event) => setNote(event.target.value)}
+                  onChange={setNote}
                   placeholder="Add context for this row…"
                   disabled={saving}
+                  autoFocus
+                  onSubmitShortcut={() => {
+                    if (!saving) {
+                      handleSave();
+                    }
+                  }}
                 />
               </div>
               <div className="space-y-2">

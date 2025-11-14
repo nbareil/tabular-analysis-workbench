@@ -11,6 +11,7 @@ import { TAG_COLUMN_ID } from './types';
 import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
 import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import { normalizeString } from './utils/stringUtils';
+import { damerauLevenshtein } from './utils/levenshtein';
 
 export interface FuzzyMatchInfo {
   column: string;
@@ -70,6 +71,16 @@ const tokenizeFuzzyQuery = (value: string): string[] => {
   }
 
   return normalized ? [normalized] : [];
+};
+
+const tokenizeValueForFuzzy = (value: string): string[] => {
+  const normalized = value.toLowerCase().normalize('NFC');
+  const tokens = normalized
+    .split(/[\s\p{P}]+/u)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+
+  return tokens.length > 0 ? tokens : normalized ? [normalized] : [];
 };
 
 const parseBooleanValue = (value: unknown): boolean | null => {
@@ -286,11 +297,45 @@ const evaluatePredicate = (
               };
             }
 
-            for (const fuzzyMatch of fuzzyMatches) {
-              const matchedToken = fuzzyMatch.token;
+            if (tokenConfigs.length > 0) {
+              const rowTokenCache: Array<string[] | null> = new Array(rowCount).fill(null);
+              const resolveRowTokens = (index: number): string[] => {
+                const cached = rowTokenCache[index];
+                if (cached) {
+                  return cached;
+                }
+                const tokens = tokenizeValueForFuzzy(valuesNormalised[index]);
+                rowTokenCache[index] = tokens;
+                return tokens;
+              };
+
               for (let index = 0; index < rowCount; index += 1) {
-                if (valuesNormalised[index].includes(matchedToken)) {
-                  result[index] = predicate.operator === 'eq' ? 1 : 0;
+                const rowTokens = resolveRowTokens(index);
+                if (!rowTokens.length) {
+                  continue;
+                }
+
+                const matchesFuzzy = tokenConfigs.some((config) => {
+                  const distanceLimit =
+                    forceFuzzy && config.distance === 0 ? 1 : config.distance;
+                  if (distanceLimit <= 0) {
+                    return rowTokens.some((token) => token.includes(config.token));
+                  }
+
+                  return rowTokens.some(
+                    (token) =>
+                      damerauLevenshtein(token, config.token, distanceLimit) <= distanceLimit
+                  );
+                });
+
+                if (!matchesFuzzy) {
+                  continue;
+                }
+
+                if (predicate.operator === 'eq') {
+                  result[index] = 1;
+                } else {
+                  result[index] = 0;
                 }
               }
             }

@@ -469,4 +469,56 @@ describe('filterEngine', () => {
     expect(Array.from(result.matches)).toEqual([0]);
     expect(result.fuzzyUsed).toBeUndefined();
   });
+
+  it('scores fuzzy matches using Damerau-Levenshtein even when suggestions are unavailable', () => {
+    const batch = buildRowBatch(
+      {
+        message: stringColumn(['logni sucess'])
+      },
+      { message: 'string' }
+    );
+    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['placeholder']);
+    fuzzyIndex.columns = [
+      {
+        key: 'message',
+        truncated: true,
+        tokens: [],
+        trigramIndex: {}
+      }
+    ];
+
+    const result = evaluateFilter(
+      batch,
+      {
+        column: 'message',
+        operator: 'eq',
+        value: 'login success'
+      },
+      { fuzzyIndex }
+    );
+
+    expect(Array.from(result.matches)).toEqual([1]);
+  });
+
+  it('uses fuzzy scoring to exclude rows for neq predicates', () => {
+    const batch = buildRowBatch(
+      {
+        message: stringColumn(['login success', 'payment accepted'])
+      },
+      { message: 'string' }
+    );
+    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['login success', 'payment accepted']);
+
+    const result = evaluateFilter(
+      batch,
+      {
+        column: 'message',
+        operator: 'neq',
+        value: 'login sucess'
+      },
+      { fuzzyIndex }
+    );
+
+    expect(Array.from(result.matches)).toEqual([0, 1]);
+  });
 });
