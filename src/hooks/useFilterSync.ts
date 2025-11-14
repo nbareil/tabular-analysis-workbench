@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 import { useDataStore } from '@state/dataStore';
 import { useSessionStore, type FilterState } from '@state/sessionStore';
@@ -64,6 +64,9 @@ export const useFilterSync = (): UseFilterSyncResult => {
   const setMatchedRowCount = useDataStore((state) => state.setMatchedRowCount);
   const bumpViewVersion = useDataStore((state) => state.bumpViewVersion);
   const clearSearchResult = useDataStore((state) => state.clearSearchResult);
+  const loaderStatus = useDataStore((state) => state.status);
+  const totalRows = useDataStore((state) => state.totalRows);
+  const bootstrapAppliedRef = useRef(false);
 
   const applyFilters = useCallback(
     async (nextFilters: FilterState[]) => {
@@ -122,6 +125,25 @@ export const useFilterSync = (): UseFilterSyncResult => {
     },
     [setFilters, clearFilterSummary, clearSearchResult, setFilterSummary, setMatchedRowCount, setFuzzyUsed, bumpViewVersion]
   );
+
+  useEffect(() => {
+    if (loaderStatus !== 'ready' || totalRows === 0) {
+      bootstrapAppliedRef.current = false;
+      return;
+    }
+
+    if (!filters.length) {
+      bootstrapAppliedRef.current = false;
+      return;
+    }
+
+    if (bootstrapAppliedRef.current) {
+      return;
+    }
+
+    bootstrapAppliedRef.current = true;
+    void applyFilters(filters);
+  }, [applyFilters, filters, loaderStatus, totalRows]);
 
   return { filters, applyFilters };
 };
