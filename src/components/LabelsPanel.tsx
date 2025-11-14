@@ -4,6 +4,7 @@ import type { FilterState } from '@state/sessionStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useTagStore } from '@state/tagStore';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
+import { parseTagExport } from '@utils/tagExport';
 
 interface LabelsPanelProps {
   open: boolean;
@@ -20,6 +21,9 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
   const { filters, applyFilters } = useFilterSync();
   const [labelName, setLabelName] = useState('');
   const [mergeStrategy, setMergeStrategy] = useState<'merge' | 'replace'>('merge');
+  const [importing, setImporting] = useState(false);
+  const [importFeedback, setImportFeedback] = useState<string | null>(null);
+  const [importErrorMessage, setImportErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -34,6 +38,8 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
   useEffect(() => {
     if (!open) {
       setLabelName('');
+      setImportFeedback(null);
+      setImportErrorMessage(null);
     }
   }, [open]);
 
@@ -126,6 +132,10 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
       return;
     }
 
+    setImportFeedback(null);
+    setImportErrorMessage(null);
+    setImporting(true);
+
     try {
       const openFilePicker = window.showOpenFilePicker!;
       const [handle] = await openFilePicker({
@@ -138,10 +148,29 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
       });
       const file = await handle.getFile();
       const text = await file.text();
-      const snapshot = JSON.parse(text);
-      await importTags(snapshot, mergeStrategy);
+      const parsed = parseTagExport(JSON.parse(text));
+      const response = await importTags(parsed.snapshot, mergeStrategy);
+
+      if (!response) {
+        throw new Error('Failed to import annotations.');
+      }
+
+      const labelCount = response.labels.length;
+      const annotationCount = Object.keys(response.tags).length;
+      const labelPlural = labelCount === 1 ? 'label' : 'labels';
+      const annotationPlural = annotationCount === 1 ? 'annotation' : 'annotations';
+      const sourceName = parsed.metadata?.source?.fileName ?? file.name;
+      const context = sourceName ? ` from ${sourceName}` : '';
+      setImportFeedback(
+        `Imported ${labelCount} ${labelPlural} and ${annotationCount} ${annotationPlural}${context}.`
+      );
     } catch (error) {
       console.error('Failed to import tags', error);
+      setImportErrorMessage(
+        error instanceof Error ? error.message : 'Failed to import annotations.'
+      );
+    } finally {
+      setImporting(false);
     }
   };
 
@@ -211,9 +240,16 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
                 type="button"
                 className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
                 onClick={handleImport}
+                disabled={importing}
               >
-                Import Tags
+                {importing ? 'Importing…' : 'Import Tags'}
               </button>
+              {importFeedback && (
+                <p className="text-xs text-emerald-400">{importFeedback}</p>
+              )}
+              {importErrorMessage && (
+                <p className="text-xs text-red-400">{importErrorMessage}</p>
+              )}
             </div>
             <div className="rounded border border-dashed border-slate-700 p-3 text-xs text-slate-400">
               <p className="font-semibold text-slate-300">Coming soon</p>

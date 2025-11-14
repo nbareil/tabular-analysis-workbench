@@ -133,8 +133,8 @@ Future enhancements:
 3. Response drives UI updates and surfaces number of affected rows in a toast.
 
 ### Export / Import
-- Export: UI calls `exportTags`, stringifies payload (pretty-print optional), and uses `showSaveFilePicker`.
-- Import: UI reads JSON, validates version, then calls `importTags`. On success, replace local store and notify the user.
+- Export: UI calls `exportTags`, receives a versioned envelope `{ version, exportedAt, source, payload }`, stringifies it (pretty-print optional), and writes via `showSaveFilePicker`.
+- Import: UI reads JSON, validates the envelope (while still accepting legacy snapshot-only files), then calls `importTags`. On success, replace local store and notify the user with counts + source metadata.
 - Both flows leave original dataset untouched, satisfying PRD §4.7.
 
 ## Persistence & Scheduling

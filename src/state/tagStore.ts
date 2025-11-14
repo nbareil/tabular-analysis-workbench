@@ -29,7 +29,10 @@ interface TagState {
   upsertLabel: (input: PartialLabelInput) => Promise<LabelDefinition | null>;
   deleteLabel: (labelId: string) => Promise<boolean>;
   exportTags: () => Promise<ExportTagsResponse | null>;
-  importTags: (snapshot: TaggingSnapshot, mergeStrategy?: 'replace' | 'merge') => Promise<void>;
+  importTags: (
+    snapshot: TaggingSnapshot,
+    mergeStrategy?: 'replace' | 'merge'
+  ) => Promise<TaggingSnapshot | null>;
   reset: () => void;
 }
 
@@ -212,11 +215,13 @@ export const useTagStore = create<TagState>((set, get) => ({
         status: 'ready',
         error: null
       });
+      return response;
     } catch (error) {
       set({
         status: 'error',
         error: error instanceof Error ? error.message : String(error)
       });
+      return null;
     }
   },
   reset() {

@@ -22,6 +22,8 @@ import { logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
 import { summariseLabelFilters } from '@utils/labelFilters';
 import { serializeToCsv, generateExportFilename } from '@utils/csvExport';
+import { saveJsonFile } from '@utils/fileAccess';
+import { buildTagExportFilename } from '@utils/tagExport';
 import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
 import { useSessionPersistence } from '@/hooks/useSessionPersistence';
 
@@ -517,15 +519,15 @@ const AppShell = ({
       const response = await exportTags();
       if (response) {
         const json = JSON.stringify(response, null, 2);
-        const blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `tags-${fileHandle?.name ?? 'export'}.json`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        const suggestedName = buildTagExportFilename(
+          response.source?.fileName ?? fileHandle?.name,
+          response.exportedAt
+        );
+        await saveJsonFile({
+          suggestedName,
+          contents: json,
+          description: 'Tag and note annotations'
+        });
       }
     } catch (error) {
       console.error('Failed to export tags', error);

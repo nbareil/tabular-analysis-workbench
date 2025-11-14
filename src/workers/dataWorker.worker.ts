@@ -13,25 +13,26 @@ import {
 } from './rowIndexStore';
 import { groupMaterializedRows, normaliseGroupColumns } from './groupEngine';
 import { RowBatchStore } from './rowBatchStore';
-import type {
-  ColumnType,
-  ColumnInference,
-  Delimiter,
-  FilterNode,
-  GroupingRequest,
-  GroupingResult,
-  LabelDefinition,
-  RowBatch,
-  SortDefinition,
-  TagRowsRequest,
-  TagRowsResponse,
-  TaggingSnapshot,
-  ExportTagsResponse,
-  UpdateLabelRequest,
-  DeleteLabelRequest,
-  DeleteLabelResponse,
-  ImportTagsRequest,
-  TagRecord
+import {
+  type ColumnType,
+  type ColumnInference,
+  type Delimiter,
+  type FilterNode,
+  type GroupingRequest,
+  type GroupingResult,
+  type LabelDefinition,
+  type RowBatch,
+  type SortDefinition,
+  type TagRowsRequest,
+  type TagRowsResponse,
+  type TaggingSnapshot,
+  type ExportTagsResponse,
+  type UpdateLabelRequest,
+  type DeleteLabelRequest,
+  type DeleteLabelResponse,
+  type ImportTagsRequest,
+  type TagRecord,
+  TAG_EXPORT_VERSION
 } from './types';
 import { evaluateFilterOnRows } from './filterEngine';
 import type { SearchRequest, SearchResult } from './searchEngine';
@@ -1456,10 +1457,28 @@ const api: DataWorkerApi = {
     return { deleted, updated };
   },
   async exportTags(): Promise<ExportTagsResponse> {
+    const exportedAt = Date.now();
+    const fileName = state.dataset.fileHandle?.name ?? null;
+    const rowCount =
+      typeof state.dataset.totalRows === 'number' && Number.isFinite(state.dataset.totalRows)
+        ? Math.max(0, state.dataset.totalRows)
+        : undefined;
+    const source =
+      fileName != null || typeof rowCount === 'number'
+        ? {
+            fileName,
+            rowCount
+          }
+        : undefined;
+
     return {
-      labels: state.tagging.labels,
-      tags: state.tagging.tags,
-      exportedAt: Date.now()
+      version: TAG_EXPORT_VERSION,
+      exportedAt,
+      source,
+      payload: {
+        labels: state.tagging.labels,
+        tags: state.tagging.tags
+      }
     };
   },
   async importTags(request: ImportTagsRequest): Promise<TaggingSnapshot> {
