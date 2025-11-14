@@ -105,6 +105,28 @@ const CELL_HORIZONTAL_PADDING_PX = 32;
 const MIN_COLUMN_WIDTH = 120;
 const MAX_COLUMN_WIDTH = 520;
 
+export const getNextRowIndex = ({
+  rowCount,
+  currentIndex,
+  direction
+}: {
+  rowCount: number;
+  currentIndex: number | null;
+  direction: 'up' | 'down';
+}): number | null => {
+  if (rowCount <= 0) {
+    return null;
+  }
+
+  if (currentIndex == null || Number.isNaN(currentIndex)) {
+    return direction === 'down' ? 0 : rowCount - 1;
+  }
+
+  const delta = direction === 'down' ? 1 : -1;
+  const nextIndex = Math.max(0, Math.min(rowCount - 1, currentIndex + delta));
+  return nextIndex;
+};
+
 const TagCellRenderer = ({
 value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element => {
@@ -190,6 +212,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const initialRowsRequestedRef = useRef(false);
   const loadingVersionRef = useRef<number | null>(null);
   const computedVersionRef = useRef<number | null>(null);
+  const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const [tagMutationPending, setTagMutationPending] = useState(false);
 
   useEffect(() => {
@@ -687,6 +710,79 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     }
   }, [contextMenu, tagMutationPending]);
 
+  useEffect(() => {
+    const container = gridContainerRef.current;
+    if (!gridApi || !container) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+        return;
+      }
+
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      const targetElement = event.target as HTMLElement | null;
+      if (targetElement?.closest('input, textarea, select, [contenteditable="true"]')) {
+        return;
+      }
+
+      const rowCount = gridApi.getDisplayedRowCount();
+      if (rowCount <= 0) {
+        return;
+      }
+
+      const selectedNodes = gridApi.getSelectedNodes();
+      const anchorNode = selectedNodes[selectedNodes.length - 1];
+      const direction = event.key === 'ArrowDown' ? 'down' : 'up';
+      const targetIndex = getNextRowIndex({
+        rowCount,
+        currentIndex: anchorNode?.rowIndex ?? null,
+        direction
+      });
+
+      if (targetIndex == null) {
+        return;
+      }
+
+      event.preventDefault();
+
+      const selectIndex = (index: number): boolean => {
+        const node = gridApi.getDisplayedRowAtIndex(index);
+        if (!node) {
+          return false;
+        }
+
+        gridApi.deselectAll();
+        node.setSelected(true, undefined, true);
+        gridApi.ensureIndexVisible(index, 'middle');
+        return true;
+      };
+
+      if (selectIndex(targetIndex)) {
+        return;
+      }
+
+      gridApi.ensureIndexVisible(targetIndex, 'middle');
+      requestAnimationFrame(() => {
+        selectIndex(targetIndex);
+      });
+    };
+
+    container.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      container.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [gridApi]);
+
   const handleCellContextMenu = useCallback(
     (params: CellContextMenuEvent<GridRow>) => {
       const mouseEvent = params.event as MouseEvent;
@@ -1074,6 +1170,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
   return (
   <div
+  ref={gridContainerRef}
   className={`${themeClass} h-full w-full`}
   style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
     onContextMenu={(e) => e.preventDefault()}

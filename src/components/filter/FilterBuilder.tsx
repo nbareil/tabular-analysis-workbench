@@ -5,7 +5,12 @@ import type { GridColumn } from '@state/dataStore';
 import { useDataStore } from '@state/dataStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useTagStore } from '@state/tagStore';
-import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
+import {
+  TAG_COLUMN_ID,
+  TAG_NO_LABEL_FILTER_VALUE,
+  type ColumnInference,
+  type LabelDefinition
+} from '@workers/types';
 
 interface FilterBuilderProps {
   columns: GridColumn[];
@@ -54,7 +59,7 @@ const smartParseDatetime = (value: string, isEnd: boolean = false): number | str
   return Number.isFinite(timestamp) ? timestamp : '';
 };
 
-const defaultFilter = (column: string, labels: any): FilterState => {
+const defaultFilter = (column: string, labels: LabelDefinition[]): FilterState => {
   const isTagColumn = column === TAG_COLUMN_ID;
   return {
     id: crypto.randomUUID(),
@@ -93,6 +98,50 @@ const normaliseFilterForColumn = (
     caseSensitive: false,
     enabled: filter.enabled ?? true
   };
+};
+
+interface BuildFilterParams {
+  columns: GridColumn[];
+  columnInference: Record<string, ColumnInference>;
+  tagLabels: LabelDefinition[];
+}
+
+export const buildNewFilter = ({
+  columns,
+  columnInference,
+  tagLabels
+}: BuildFilterParams): FilterState | null => {
+  if (!columns.length) {
+    return null;
+  }
+
+  const firstColumn =
+    columns.find((column) => column.key !== TAG_COLUMN_ID) ?? columns[0] ?? null;
+  if (!firstColumn) {
+    return null;
+  }
+
+  const newFilter = defaultFilter(firstColumn.key, tagLabels);
+  if (firstColumn.type === 'datetime' && firstColumn.key !== TAG_COLUMN_ID) {
+    newFilter.operator = 'between';
+    const inference = columnInference[firstColumn.key];
+    const minDatetime = inference?.minDatetime;
+    const maxDatetime = inference?.maxDatetime;
+    if (minDatetime != null && maxDatetime != null) {
+      newFilter.value = minDatetime;
+      newFilter.value2 = maxDatetime;
+      newFilter.rawValue = formatDatetimeForInput(minDatetime);
+      newFilter.rawValue2 = formatDatetimeForInput(maxDatetime);
+    } else {
+      const now = Date.now();
+      newFilter.value = now;
+      newFilter.value2 = now + 86_400_000;
+      newFilter.rawValue = formatDatetimeForInput(now);
+      newFilter.rawValue2 = formatDatetimeForInput(now + 86_400_000);
+    }
+  }
+
+  return newFilter;
 };
 
 const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
@@ -141,26 +190,13 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
   );
 
   const handleAdd = () => {
-    const firstColumn = columns.find(c => c.key !== TAG_COLUMN_ID)?.key || '';
-    const newFilter = defaultFilter(firstColumn, tagLabels);
-    const columnType = columnMap[firstColumn]?.type;
-    if (columnType === 'datetime' && firstColumn !== TAG_COLUMN_ID) {
-      newFilter.operator = 'between';
-      const inference = columnInference[firstColumn];
-      const minDatetime = inference?.minDatetime;
-      const maxDatetime = inference?.maxDatetime;
-      if (minDatetime != null && maxDatetime != null) {
-        newFilter.value = minDatetime;
-        newFilter.value2 = maxDatetime;
-        newFilter.rawValue = formatDatetimeForInput(minDatetime);
-        newFilter.rawValue2 = formatDatetimeForInput(maxDatetime);
-      } else {
-        const now = Date.now();
-        newFilter.value = now;
-        newFilter.value2 = now + 86400000;
-        newFilter.rawValue = formatDatetimeForInput(now);
-        newFilter.rawValue2 = formatDatetimeForInput(now + 86400000);
-      }
+    const newFilter = buildNewFilter({
+      columns,
+      columnInference,
+      tagLabels
+    });
+    if (!newFilter) {
+      return;
     }
     const next = [...filters, newFilter];
     void applyFilters(next);

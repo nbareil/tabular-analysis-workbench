@@ -6,7 +6,12 @@ import type { ColumnState } from 'ag-grid-community';
 import type { ICellRendererParams } from 'ag-grid-community';
 import type { TagCellValue } from '@utils/tagCells';
 
-import { MarkdownTooltip, evaluateFilterMenuMetadata, buildSortStateFromColumnState } from './DataGrid';
+import {
+  MarkdownTooltip,
+  evaluateFilterMenuMetadata,
+  buildSortStateFromColumnState,
+  getNextRowIndex
+} from './DataGrid';
 
 describe('evaluateFilterMenuMetadata', () => {
   it('marks equality as matching when exact predicate already exists', () => {
@@ -189,5 +194,61 @@ describe('MarkdownTooltip', () => {
     const { container } = render(<MarkdownTooltip {...mockParams} />);
 
     expect(container.firstChild).toBeNull();
+  });
+});
+
+describe('getNextRowIndex', () => {
+  it('selects the first row when moving down without an active selection', () => {
+    expect(
+      getNextRowIndex({
+        rowCount: 10,
+        currentIndex: null,
+        direction: 'down'
+      })
+    ).toBe(0);
+  });
+
+  it('selects the last row when moving up without an active selection', () => {
+    expect(
+      getNextRowIndex({
+        rowCount: 4,
+        currentIndex: null,
+        direction: 'up'
+      })
+    ).toBe(3);
+  });
+
+  it('moves relative to the current selection and clamps to bounds', () => {
+    expect(
+      getNextRowIndex({
+        rowCount: 5,
+        currentIndex: 0,
+        direction: 'up'
+      })
+    ).toBe(0);
+    expect(
+      getNextRowIndex({
+        rowCount: 5,
+        currentIndex: 4,
+        direction: 'down'
+      })
+    ).toBe(4);
+    expect(
+      getNextRowIndex({
+        rowCount: 5,
+        currentIndex: 2,
+        direction: 'down'
+      })
+    ).toBe(3);
+  });
+
+  it('returns null when the grid has no rows', () => {
+    expect(
+      getNextRowIndex({
+        rowCount: 0,
+        currentIndex: null,
+        direction: 'down'
+      })
+    ).toBeNull();
   });
 });

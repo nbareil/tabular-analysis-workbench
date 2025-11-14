@@ -7,7 +7,7 @@ import { useDataStore, type GridRow } from '@state/dataStore';
 import { useSessionStore, getSessionSnapshot } from '@state/sessionStore';
 import { useTagStore } from '@state/tagStore';
 import DataGrid from '@components/DataGrid';
-import FilterBuilder from '@components/filter/FilterBuilder';
+import FilterBuilder, { buildNewFilter } from '@components/filter/FilterBuilder';
 import { FuzzyBanner } from '@components/FuzzyBanner';
 import PivotView from '@components/PivotView';
 import ColumnsPanel from '@components/ColumnsPanel';
@@ -26,6 +26,7 @@ import { saveJsonFile } from '@utils/fileAccess';
 import { buildTagExportFilename } from '@utils/tagExport';
 import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
 import { useSessionPersistence } from '@/hooks/useSessionPersistence';
+import { useFilterSync } from '@/hooks/useFilterSync';
 
 const formatBytes = (bytes: number): string => {
   if (bytes <= 0) {
@@ -85,12 +86,14 @@ const AppShell = ({
   const totalRows = useDataStore((state) => state.totalRows);
   const stats = useDataStore((state) => state.stats);
   const columns = useDataStore((state) => state.columns);
+  const columnInference = useDataStore((state) => state.columnInference);
   const columnKeys = useDataStore((state) => state.columns.map((column) => column.key));
   const allColumns = useDataStore((state) => state.columns);
   const tagLabels = useTagStore((state) => state.labels);
   const tagRecords = useTagStore((state) => state.tags);
   const applyTagToRows = useTagStore((state) => state.applyTag);
   const exportTags = useTagStore((state) => state.exportTags);
+  const { applyFilters } = useFilterSync();
   const [searchTerm, setSearchTerm] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -263,6 +266,62 @@ const AppShell = ({
     setNoteEditor(null);
     setNoteSaving(false);
   }, [fileHandle]);
+
+  const addFilterFromShortcut = useCallback((): boolean => {
+    const newFilter = buildNewFilter({
+      columns,
+      columnInference,
+      tagLabels
+    });
+
+    if (!newFilter) {
+      return false;
+    }
+
+    void applyFilters([...filters, newFilter]);
+    return true;
+  }, [applyFilters, columns, columnInference, filters, tagLabels]);
+
+  useEffect(() => {
+    const handleShortcutKey = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+
+      if (key === 'f') {
+        event.preventDefault();
+        setSidebarCollapsed((value) => !value);
+        return;
+      }
+
+      if (key === 'a') {
+        const added = addFilterFromShortcut();
+        if (!added) {
+          return;
+        }
+        event.preventDefault();
+        if (isSidebarCollapsed) {
+          setSidebarCollapsed(false);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleShortcutKey);
+    return () => {
+      window.removeEventListener('keydown', handleShortcutKey);
+    };
+  }, [addFilterFromShortcut, isSidebarCollapsed, setSidebarCollapsed]);
 
   const filterExpression = useMemo(() => buildFilterExpression(filters), [filters]);
 
