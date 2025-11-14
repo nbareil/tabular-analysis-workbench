@@ -251,13 +251,6 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
                 <p className="text-xs text-red-400">{importErrorMessage}</p>
               )}
             </div>
-            <div className="rounded border border-dashed border-slate-700 p-3 text-xs text-slate-400">
-              <p className="font-semibold text-slate-300">Coming soon</p>
-              <p>
-                The full tagging experience will allow bulk edits, keyboard shortcuts, and inline notes.
-                This panel scaffolds the label catalog so implementation can plug in later.
-              </p>
-            </div>
           </section>
           <section className="space-y-2 overflow-auto">
             {status === 'loading' && (
