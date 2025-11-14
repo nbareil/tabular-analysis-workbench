@@ -11,6 +11,7 @@ import type {
   GridApi,
   ColumnApi,
   GridReadyEvent,
+  SelectionChangedEvent,
   ColDef,
   ICellRendererParams
 } from 'ag-grid-community';
@@ -214,6 +215,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const computedVersionRef = useRef<number | null>(null);
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const [tagMutationPending, setTagMutationPending] = useState(false);
+  const [keyboardFocusedRowId, setKeyboardFocusedRowId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!columns.length) {
@@ -477,6 +479,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       computedVersionRef.current = null;
       setAutoColumnWidths({});
       initialRowsRequestedRef.current = false;
+      setKeyboardFocusedRowId(null);
     }
   }, [status, viewVersion]);
 
@@ -716,6 +719,34 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       return;
     }
 
+    const resolveFocusColumnId = (): string | null => {
+      if (columnApi && typeof columnApi.getAllDisplayedColumns === 'function') {
+        const displayedColumns = columnApi.getAllDisplayedColumns();
+        if (displayedColumns.length > 0) {
+          const firstColumn = displayedColumns[0] as {
+            getColId?: () => string;
+            colId?: string;
+          };
+          const colId =
+            typeof firstColumn.getColId === 'function'
+              ? firstColumn.getColId()
+              : firstColumn.colId;
+          if (colId) {
+            return colId;
+          }
+        }
+      }
+
+      const fallback = columnDefs[0];
+      if (fallback?.field) {
+        return fallback.field;
+      }
+      if (fallback?.colId) {
+        return fallback.colId;
+      }
+      return TAG_COLUMN_ID;
+    };
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) {
         return;
@@ -754,6 +785,8 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
       event.preventDefault();
 
+      const focusColumnId = resolveFocusColumnId();
+
       const selectIndex = (index: number): boolean => {
         const node = gridApi.getDisplayedRowAtIndex(index);
         if (!node) {
@@ -763,6 +796,14 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         gridApi.deselectAll();
         node.setSelected(true, undefined, true);
         gridApi.ensureIndexVisible(index, 'middle');
+        if (focusColumnId && typeof gridApi.setFocusedCell === 'function') {
+          gridApi.setFocusedCell(index, focusColumnId);
+        }
+        const nodeRowId =
+          typeof node.data?.__rowId === 'number' && Number.isFinite(node.data.__rowId)
+            ? node.data.__rowId
+            : null;
+        setKeyboardFocusedRowId(nodeRowId);
         return true;
       };
 
@@ -781,7 +822,19 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     return () => {
       container.removeEventListener('keydown', handleKeyDown);
     };
-  }, [gridApi]);
+  }, [columnApi, columnDefs, gridApi]);
+
+  useEffect(() => {
+    if (!gridApi) {
+      return;
+    }
+
+    if (typeof gridApi.redrawRows === 'function') {
+      gridApi.redrawRows();
+    } else {
+      gridApi.refreshCells?.({ force: true });
+    }
+  }, [gridApi, keyboardFocusedRowId]);
 
   const handleCellContextMenu = useCallback(
     (params: CellContextMenuEvent<GridRow>) => {
@@ -1192,8 +1245,24 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
           maxBlocksInCache={2}
           getRowId={(params) => (params.data ? String(params.data.__rowId) : '')}
           tooltipShowDelay={0}
+          getRowClass={(params) =>
+            typeof params.data?.__rowId === 'number' &&
+            Number.isFinite(params.data.__rowId) &&
+            params.data.__rowId === keyboardFocusedRowId
+              ? 'ag-row-keyboard-active'
+              : undefined
+          }
           onCellContextMenu={handleCellContextMenu}
           onSortChanged={handleSortChanged}
+          onSelectionChanged={(event: SelectionChangedEvent) => {
+            const nodes = event.api?.getSelectedNodes?.() ?? [];
+            const anchor = nodes[nodes.length - 1];
+            const rowId =
+              typeof anchor?.data?.__rowId === 'number' && Number.isFinite(anchor.data.__rowId)
+                ? anchor.data.__rowId
+                : null;
+            setKeyboardFocusedRowId(rowId);
+          }}
           onGridReady={(event: GridReadyEvent) => {
             setGridApi(event.api);
             setColumnApi(event.columnApi);

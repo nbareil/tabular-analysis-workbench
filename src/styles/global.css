@@ -27,3 +27,17 @@ body {
 button {
   font-family: inherit;
 }
+
+.ag-theme-quartz .ag-row.ag-row-keyboard-active .ag-cell,
+.ag-theme-quartz .ag-row.ag-row-focus .ag-cell {
+  background-color: rgba(251, 191, 36, 0.3) !important;
+  border-color: rgba(245, 158, 11, 0.55) !important;
+  color: rgb(15 23 42) !important;
+}
+
+.ag-theme-quartz-dark .ag-row.ag-row-keyboard-active .ag-cell,
+.ag-theme-quartz-dark .ag-row.ag-row-focus .ag-cell {
+  background-color: rgba(251, 191, 36, 0.3) !important;
+  border-color: rgba(245, 158, 11, 0.55) !important;
+  color: rgb(248 250 252) !important;
+}
