@@ -723,14 +723,11 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       if (columnApi && typeof columnApi.getAllDisplayedColumns === 'function') {
         const displayedColumns = columnApi.getAllDisplayedColumns();
         if (displayedColumns.length > 0) {
-          const firstColumn = displayedColumns[0] as {
-            getColId?: () => string;
-            colId?: string;
-          };
+          const firstColumn = displayedColumns[0];
           const colId =
-            typeof firstColumn.getColId === 'function'
+            firstColumn && typeof firstColumn.getColId === 'function'
               ? firstColumn.getColId()
-              : firstColumn.colId;
+              : null;
           if (colId) {
             return colId;
           }
@@ -740,9 +737,6 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       const fallback = columnDefs[0];
       if (fallback?.field) {
         return fallback.field;
-      }
-      if (fallback?.colId) {
-        return fallback.colId;
       }
       return TAG_COLUMN_ID;
     };
@@ -794,7 +788,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         }
 
         gridApi.deselectAll();
-        node.setSelected(true, undefined, true);
+        node.setSelected(true, undefined, 'api');
         gridApi.ensureIndexVisible(index, 'middle');
         if (focusColumnId && typeof gridApi.setFocusedCell === 'function') {
           gridApi.setFocusedCell(index, focusColumnId);
@@ -855,7 +849,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         const alreadySelected = params.node.isSelected?.() ?? false;
         if (!alreadySelected) {
           gridApi.deselectAll();
-          params.node.setSelected(true, undefined, true);
+          params.node.setSelected(true, undefined, 'api');
         }
       }
 

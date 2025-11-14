@@ -53,8 +53,9 @@ const isTaggingSnapshot = (value: unknown): value is TaggingSnapshot => {
     return false;
   }
 
-  const labels = (value as TaggingSnapshot).labels;
-  const tags = (value as TaggingSnapshot).tags;
+  const candidate = value as { labels?: unknown; tags?: unknown };
+  const labels = candidate.labels;
+  const tags = candidate.tags;
 
   if (!Array.isArray(labels) || !labels.every(isLabelDefinition)) {
     return false;

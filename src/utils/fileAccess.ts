@@ -1,5 +1,36 @@
+type SavePickerWritableStream = {
+  write: (data: Blob) => Promise<void>;
+  close: () => Promise<void>;
+};
+
+type SavePickerHandle = {
+  createWritable: () => Promise<SavePickerWritableStream>;
+};
+
+type SavePickerOptions = {
+  suggestedName?: string;
+  types?: Array<{
+    description?: string;
+    accept?: Record<string, string[]>;
+  }>;
+};
+
+type ShowSaveFilePicker = (options?: SavePickerOptions) => Promise<SavePickerHandle>;
+
+const getSaveFilePicker = (): ShowSaveFilePicker | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const candidate = (window as Window & {
+    showSaveFilePicker?: ShowSaveFilePicker;
+  }).showSaveFilePicker;
+
+  return typeof candidate === 'function' ? candidate : null;
+};
+
 const supportsFileSystemSave = (): boolean => {
-  return typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
+  return getSaveFilePicker() !== null;
 };
 
 const supportsAnchors = (): boolean => {
@@ -21,28 +52,23 @@ export const saveJsonFile = async ({
 }: SaveJsonOptions): Promise<void> => {
   const blob = new Blob([contents], { type: mimeType });
 
-  if (supportsFileSystemSave()) {
-    const picker = (window as typeof window & {
-      showSaveFilePicker?: typeof window.showSaveFilePicker;
-    }).showSaveFilePicker;
-
-    if (typeof picker === 'function') {
-      const handle = await picker({
-        suggestedName,
-        types: [
-          {
-            description,
-            accept: {
-              [mimeType]: ['.json']
-            }
+  const picker = getSaveFilePicker();
+  if (picker) {
+    const handle = await picker({
+      suggestedName,
+      types: [
+        {
+          description,
+          accept: {
+            [mimeType]: ['.json']
           }
-        ]
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return;
-    }
+        }
+      ]
+    });
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return;
   }
 
   if (!supportsAnchors()) {
