@@ -6,6 +6,9 @@ files directly from the local file system, evaluates complex filters inside a
 dedicated worker, and lets analysts tag, annotate, and export insights without
 ever uploading data off the device.
 
+https://nbareil.github.io/tabular-analysis-workbench/
+
+
 ## Why This Tool Exists
 - 100% local analysis: zero ingestion services, no telemetry, and no data leaves
   the user’s machine.
