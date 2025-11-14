@@ -3,8 +3,7 @@ import type { FuzzyIndexFingerprint } from './fuzzyIndexStore';
 import type { TaggingSnapshot } from './types';
 
 const TAG_DIRECTORY = 'annotations';
-const TAG_FILE_NAME = 'tags.json';
-const TAG_TEMP_FILE_NAME = 'tags.tmp.json';
+const TAG_FILE_PREFIX = 'tags';
 const TAG_STORE_VERSION = 1;
 
 const textEncoder = new TextEncoder();
@@ -23,39 +22,87 @@ const supportsOpfs = (): boolean => {
   );
 };
 
+const sanitizeSegment = (value: string): string => {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 64);
+};
+
+export const buildTaggingStoreKey = (fingerprint: FuzzyIndexFingerprint): string => {
+  const baseName =
+    typeof fingerprint.fileName === 'string' && fingerprint.fileName.trim().length > 0
+      ? fingerprint.fileName
+      : 'dataset';
+  const fileName = sanitizeSegment(baseName) || 'dataset';
+  const fileSize =
+    typeof fingerprint.fileSize === 'number' && Number.isFinite(fingerprint.fileSize)
+      ? Math.max(0, Math.floor(fingerprint.fileSize))
+      : 0;
+  const lastModified =
+    typeof fingerprint.lastModified === 'number' && Number.isFinite(fingerprint.lastModified)
+      ? Math.max(0, Math.floor(fingerprint.lastModified))
+      : 0;
+
+  return `${fileName}-${fileSize}-${lastModified}`;
+};
+
+const buildFileNames = (key: string): { data: string; temp: string } => {
+  const prefix = `${TAG_FILE_PREFIX}-${key}`;
+  return {
+    data: `${prefix}.json`,
+    temp: `${prefix}.tmp.json`
+  };
+};
+
 export class TaggingStore {
   private readonly directory: FileSystemDirectoryHandle | null;
   private readonly handle: FileSystemFileHandle | null;
+  private readonly fileName: string | null;
+  private readonly tempFileName: string | null;
+  private readonly storeKey: string | null;
 
   private constructor(
     directory: FileSystemDirectoryHandle | null,
-    handle: FileSystemFileHandle | null
+    handle: FileSystemFileHandle | null,
+    fileName: string | null,
+    tempFileName: string | null,
+    storeKey: string | null
   ) {
     this.directory = directory;
     this.handle = handle;
+    this.fileName = fileName;
+    this.tempFileName = tempFileName;
+    this.storeKey = storeKey;
   }
 
-  static async create(): Promise<TaggingStore> {
-    if (!supportsOpfs()) {
-      return new TaggingStore(null, null);
+  static async create(fingerprint: FuzzyIndexFingerprint | null): Promise<TaggingStore> {
+    if (!supportsOpfs() || !fingerprint) {
+      return new TaggingStore(null, null, null, null, null);
     }
 
     try {
       const root = await navigator.storage.getDirectory();
       const directory = await root.getDirectoryHandle(TAG_DIRECTORY, { create: true });
-      const handle = await directory.getFileHandle(TAG_FILE_NAME, { create: true });
+      const storeKey = buildTaggingStoreKey(fingerprint);
+      const { data, temp } = buildFileNames(storeKey);
+      const handle = await directory.getFileHandle(data, { create: true });
 
       if (import.meta.env?.DEV) {
         logDebug('tagging-store', 'created tagging store', {
-          fileName: TAG_FILE_NAME,
-          directory: TAG_DIRECTORY
+          fileName: data,
+          directory: TAG_DIRECTORY,
+          fingerprint
         });
       }
 
-      return new TaggingStore(directory, handle);
+      return new TaggingStore(directory, handle, data, temp, storeKey);
     } catch (error) {
       console.warn('[tagging-store] Failed to initialise OPFS handles', error);
-      return new TaggingStore(null, null);
+      return new TaggingStore(null, null, null, null, null);
     }
   }
 
@@ -85,7 +132,7 @@ export class TaggingStore {
   }
 
   async save(snapshot: TaggingSnapshot): Promise<void> {
-    if (!this.directory || !this.handle) {
+    if (!this.directory || !this.handle || !this.fileName || !this.tempFileName) {
       return;
     }
 
@@ -96,7 +143,7 @@ export class TaggingStore {
     };
 
     // Atomic write: write to temp file, then move
-    const tempHandle = await this.directory.getFileHandle(TAG_TEMP_FILE_NAME, { create: true });
+    const tempHandle = await this.directory.getFileHandle(this.tempFileName, { create: true });
     const writable = await tempHandle.createWritable({ keepExistingData: false });
     try {
       const data = textEncoder.encode(JSON.stringify(envelope));
@@ -104,7 +151,7 @@ export class TaggingStore {
       await writable.close();
 
       // Move temp to final (atomic replace)
-      await (this.directory as any).move(TAG_TEMP_FILE_NAME, TAG_FILE_NAME);
+      await (this.directory as any).move(this.tempFileName, this.fileName);
     } catch (error) {
       await writable.abort();
       console.warn('[tagging-store] Failed to persist snapshot', error);
@@ -113,12 +160,12 @@ export class TaggingStore {
   }
 
   async clear(): Promise<void> {
-    if (!this.directory) {
+    if (!this.directory || !this.fileName) {
       return;
     }
 
     try {
-      await this.directory.removeEntry(TAG_FILE_NAME);
+      await this.directory.removeEntry(this.fileName);
     } catch (error) {
       console.warn('[tagging-store] Failed to clear snapshot', error);
     }

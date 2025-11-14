@@ -49,7 +49,7 @@ interface TaggingSnapshot {
 |-------|----------------|
 | Worker memory (`state.tagging`) | Authoritative copy of labels + row tags during a session. |
 | Zustand store (`useTagStore`) | UI-facing cache, populated via worker RPC. Handles optimistic updates and exposes async helpers to components. |
-| OPFS (`/annotations`) | Durable storage. Files are written atomically with temp/replace to avoid tearing: <br>• `labels.json` → `LabelDefinition[]` <br>• `tags.json` → `Record<RowId, TagRecord>` <br>• Future: `history.jsonl` for audit trail if undo/redo becomes persistent. |
+| OPFS (`/annotations`) | Durable storage scoped by dataset fingerprint (file name + size + mtime). Files are written atomically with temp/replace to avoid tearing: <br>• `tags-<fingerprint>.json` → combined `TaggingSnapshot` keyed to the CSV version <br>• Future: `history.jsonl` for audit trail if undo/redo becomes persistent. |
 | Session snapshot (`SessionState`) | Stores tag palette + visibility preferences, but **not** the full tag map (to avoid duplication). |
 
 Persisted files follow versioned envelopes:
@@ -113,10 +113,11 @@ Future enhancements:
 4. Response updates Zustand store; debounce writes OPFS envelope.
 
 ### Tagging Rows
-1. Caller supplies list of `RowId`s and selected `labelId`.
-2. Worker maps each row to `{ labelId, note, color, updatedAt }`.
-3. Response's `updated` map merges into UI store, triggering grid highlight + status bar counts.
-4. Persistence scheduler flushes snapshots to OPFS.
+1. Analysts select rows via the pinned label column (checkboxes w/ header select respect filters) or Cmd/Ctrl-click multi-select.
+2. Caller supplies the deduped list of `RowId`s and selected `labelId`.
+3. Worker maps each row to `{ labelId, note, color, updatedAt }`.
+4. Response's `updated` map merges into UI store, triggering grid highlight + status bar counts plus context-menu feedback showing the batch size.
+5. Persistence scheduler flushes the dataset-scoped snapshot to OPFS.
 
 ### Adding / Editing Notes
 - Notes share the same `tagRows` request body (`note` field). UI should pass existing `labelId` to avoid stripping labels.

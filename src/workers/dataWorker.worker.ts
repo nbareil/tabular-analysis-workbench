@@ -321,11 +321,21 @@ const resetTaggingState = (): void => {
   state.tagging.dirty = false;
 };
 
-const hydrateTaggingStore = async (): Promise<void> => {
+const hydrateTaggingStore = async (
+  fingerprint: FuzzyIndexFingerprint | null
+): Promise<void> => {
   clearTaggingPersistTimer();
 
+  if (!fingerprint) {
+    state.tagging.store = null;
+    state.tagging.labels = [];
+    state.tagging.tags = {};
+    state.tagging.dirty = false;
+    return;
+  }
+
   try {
-    const store = await TaggingStore.create();
+    const store = await TaggingStore.create(fingerprint);
     state.tagging.store = store;
 
     const snapshot = await store.load();
@@ -581,7 +591,7 @@ const api: DataWorkerApi = {
       debugLog('Created new FuzzyIndexBuilder for parsing');
     }
 
-    await hydrateTaggingStore();
+    await hydrateTaggingStore(fuzzyFingerprint);
 
     const compression = detectCompression({
       fileName: file.name ?? handle.name,

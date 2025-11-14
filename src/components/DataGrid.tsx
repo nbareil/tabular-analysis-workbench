@@ -314,6 +314,9 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       headerTooltip: 'Row label',
       pinned: 'left',
       lockPosition: true,
+      headerCheckboxSelection: true,
+      headerCheckboxSelectionFilteredOnly: true,
+      checkboxSelection: true,
       suppressMenu: true,
       sortable: false,
       resizable: false,
@@ -699,6 +702,14 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         void loadTags();
       }
 
+      if (gridApi && params.node && typeof params.node.setSelected === 'function') {
+        const alreadySelected = params.node.isSelected?.() ?? false;
+        if (!alreadySelected) {
+          gridApi.deselectAll();
+          params.node.setSelected(true, undefined, true);
+        }
+      }
+
       const rawValue = params.value as TagCellValue | unknown;
       if (!isTagColumn && rawValue == null) {
         return;
@@ -744,7 +755,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         rowId
       });
     },
-    [loadTags, tagLabels.length, tagStatus]
+    [gridApi, loadTags, tagLabels.length, tagStatus]
   );
 
   const getSelectedRowIds = useCallback((): number[] => {
@@ -933,6 +944,15 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     const hasTagOrNote =
       Boolean(activeRecord?.labelId) || Boolean(activeRecord?.note);
     const isTagLoading = isLabelColumn && (tagStatus === 'loading' || tagStatus === 'idle');
+    const selectedRowIds = getSelectedRowIds();
+    const selectionIncludesContext =
+      contextMenu.rowId != null && selectedRowIds.includes(contextMenu.rowId);
+    const bulkApplyCount =
+      contextMenu.rowId == null
+        ? selectedRowIds.length
+        : selectionIncludesContext
+          ? selectedRowIds.length
+          : selectedRowIds.length + 1;
 
     const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
 
@@ -971,6 +991,11 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
             <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">
               Labels
             </div>
+            {bulkApplyCount > 1 ? (
+              <div className="px-2 pb-1 text-[10px] uppercase tracking-wide text-emerald-500">
+                Applies to {bulkApplyCount} rows
+              </div>
+            ) : null}
             {isTagLoading ? (
               <div className="px-2 py-1 text-[11px] text-slate-400">Loading labels…</div>
             ) : null}
@@ -1061,9 +1086,9 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         <AgGridReact<GridRow>
           columnDefs={columnDefs}
           defaultColDef={defaultColDef}
-          suppressRowClickSelection
           suppressContextMenu
           rowSelection="multiple"
+          rowMultiSelectWithClick
           animateRows
           rowModelType="infinite"
           cacheBlockSize={500}
