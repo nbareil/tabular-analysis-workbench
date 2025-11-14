@@ -7,56 +7,55 @@ dedicated worker, and lets analysts tag, annotate, and export insights without
 ever uploading data off the device.
 
 ## Why This Tool Exists
-- 100% local analysis — no ingestion services, no telemetry (PRD §1, §3).
-- Optimized for very large CSV/TSV and `.gz` variants with back-pressure aware
-  streaming (PRD §4.1, TDD §7.1–7.3).
-- Provides spreadsheet-like ergonomics (global search, grouping, annotations)
-  on top of forensic-first defaults defined in the PRD/TDD set.
+- 100% local analysis: zero ingestion services, no telemetry, and no data leaves
+  the user’s machine.
+- Built for very large CSV/TSV and `.gz` variants with back-pressure-aware
+  streaming and incremental rendering.
+- Feels like a spreadsheet tuned for DFIR workflows: global search, grouping,
+  annotations, and persistence designed around long-form timelines.
 
 ## Feature Overview
 
-| Capability | Description | Specs |
-| --- | --- | --- |
-| Streaming ingestion | Streams up to 2 GB with gzip support, worker batching, and checkpointed byte offsets. | PRD §4.1, TDD §7.1–7.3 |
-| Filtering & search | Rich filter builder with regex operators, per-cell context menu, and fuzzy fallback. | PRD §4.3, §3.3.a; TDD §7.4 |
-| Grouping & aggregations | Worker-powered pivoting plus DuckDB-WASM fallback for heavy workloads. | PRD §4.3; TDD §7.5 |
-| Tagging & notes | Color-coded tags, markdown notes, and import/export flows persisted to OPFS. | PRD §4.4; TDD §7.7 |
-| Session persistence | Auto-save filters, layouts, and annotation state to OPFS. | PRD §4.6; TDD §6.5, §7.6 |
-| UI polish | Column chooser, collapsible filter panel, keyboard shortcuts, and accessibility fixes. | PRD §4.5, §4.3 |
+| Capability | Description |
+| --- | --- |
+| Streaming ingestion | Streams files up to ~2 GB with gzip support, chunked workers, and checkpointed byte offsets for random access. |
+| Filtering & search | Rich filter builder, regex operators, per-cell context menu shortcuts, and a fuzzy fallback path. |
+| Grouping & aggregations | Worker-powered pivoting plus DuckDB-WASM fallback for high-cardinality workloads. |
+| Tagging & notes | Color-coded tags, markdown notes, and import/export flows persisted to the Origin Private File System (OPFS). |
+| Session persistence | Auto-saves filters, layouts, and annotation state to OPFS so sessions resume instantly. |
+| UI polish | Column chooser, collapsible filter panel, keyboard shortcuts, accessibility fixes, and global search. |
 
 ### Detailed Capabilities
-- **File support:** `.csv`, `.tsv`, `.csv.gz`, `.tsv.gz` with delimiter detection and
-  UTF-8 decoding. Files use the File System Access API and never leave the
-  device (PRD §4.1, TDD §7.1).
+- **File support:** `.csv`, `.tsv`, `.csv.gz`, `.tsv.gz` with delimiter detection.
+  Files never leave the device thanks to the File System Access API.
 - **Multi-threaded parsing:** Type inference, ingestion batching, and byte-offset
-  indexing live in a dedicated worker so the UI stays responsive (TDD §3.2,
-  §7.2–7.3).
+  indexing run in a dedicated worker, keeping the UI responsive as data streams
+  in.
 - **Filters and grouping:** Combine equals/contains/range/regex predicates,
   toggle case sensitivity, and pivot over one or more columns with counts,
-  min/max, sum, and average (PRD §4.3, TDD §7.4–7.5).
-- **Fuzzy fallback search:** Damerau–Levenshtein powered search when exact
-  filters return zero rows, complete with distance chips and “back to exact”
-  controls (PRD §3.3.a, TDD §7.6).
+  min/max, sum, and average.
+- **Fuzzy fallback search:** Damerau–Levenshtein powered search activates when
+  exact filters return zero rows, with distance chips and “back to exact”
+  controls.
 - **Tagging & annotation workflow:** Apply labels, open the Tag/Note dialog, and
   synchronize markdown notes; exports honor OPFS storage limits and deliver JSON
-  bundles ready for sharing (PRD §4.4, TDD §7.7).
+  bundles ready for sharing.
 - **Session restore:** Auto-saves every minute, reloads the previous dataset,
-  filters, column sizing, and annotation state after you grant the file handle
-  again (TDD §6.5, §7.6).
+  filters, column sizing, and annotation state after the user grants the file
+  handle again.
 - **Security posture:** All work stays local, markdown rendering is sanitized,
-  and capability checks enforce Chromium-only APIs (PRD §5, TDD §3.1).
+  and capability checks enforce Chromium-only APIs.
 
 ## Architecture Snapshot
-- **React 18 + Vite** UI with Tailwind theming and AG Grid virtualization (TDD
-  §3.1–3.2).
+- **React 18 + Vite** UI with Tailwind theming and AG Grid virtualization.
 - **Workers everywhere:** Comlink-powered data worker handles parsing, query
   execution, fuzzy search, and DuckDB plans so the UI just receives row batches.
 - **Origin Private File System (OPFS):** Persists session metadata, annotation
-  maps, and byte-offset checkpoints for fast resume (PRD §4.6, TDD §7.3, §7.6).
-- **DuckDB-WASM optional path:** For high-cardinality grouping and SQL-like
-  aggregations (TDD §7.5).
-- **Testing stack:** Vitest + Testing Library for unit and component tests, with
-  planned Playwright-based end-to-end coverage (TDD §9).
+  maps, and byte-offset checkpoints for fast resume.
+- **DuckDB-WASM optional path:** Provides SQL-like aggregations for heavy
+  grouping and sorting workflows.
+- **Testing stack:** Vitest + Testing Library for unit/component coverage with
+  Playwright-based end-to-end tests on the roadmap.
 
 ## Installation
 
@@ -92,8 +91,8 @@ npm run preview   # Serves dist/ for local smoke tests
 ### Filtering & Search
 - Use the **Filter Builder** to add predicates per column. Context menus (right
   click) provide “Filter in/out” shortcuts.
-- Toggle case sensitivity, match mode (equals/contains/regex), or time range
-  defaults defined in PRD §4.3.
+- Toggle case sensitivity, match mode (equals/contains/regex), or default time
+  ranges for datetime fields.
 - Run a **Global Search** across visible columns; when no rows match, enable the
   suggested fuzzy distance chips to widen the results.
 
@@ -137,4 +136,5 @@ before picking up a task.
 ## Support & Contributions
 - File new feature or bug ideas through `bd create` so they enter the shared
   beads backlog.
-- Align work ideas with PRD/TDD references to maintain requirement traceability.
+- Keep documentation, requirements, and implementation notes in sync when you
+  contribute new features.
