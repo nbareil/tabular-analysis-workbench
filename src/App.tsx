@@ -317,9 +317,9 @@ const AppShell = ({
       }
     };
 
-    window.addEventListener('keydown', handleShortcutKey);
+    window.addEventListener('keydown', handleShortcutKey, true);
     return () => {
-      window.removeEventListener('keydown', handleShortcutKey);
+      window.removeEventListener('keydown', handleShortcutKey, true);
     };
   }, [addFilterFromShortcut, isSidebarCollapsed, setSidebarCollapsed]);
 
