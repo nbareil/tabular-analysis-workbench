@@ -44,7 +44,17 @@ const formatTime = (timestamp: number): string => {
   }).format(new Date(timestamp));
 };
 
-const App = (): JSX.Element => {
+interface AppShellProps {
+  capabilityReport: CapabilityReport;
+  warningsDismissed: boolean;
+  onDismissWarnings: () => void;
+}
+
+const AppShell = ({
+  capabilityReport,
+  warningsDismissed,
+  onDismissWarnings
+}: AppShellProps): JSX.Element => {
   const theme = useAppStore((state) => state.theme);
   const toggleTheme = useAppStore((state) => state.toggleTheme);
   const [workerReady, setWorkerReady] = useState(false);
@@ -91,8 +101,6 @@ const App = (): JSX.Element => {
     note: string;
   } | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
-  const [capabilityReport, setCapabilityReport] = useState<CapabilityReport>(() => detectCapabilities());
-  const [warningsDismissed, setWarningsDismissed] = useState(false);
   const opfsCapability = capabilityReport.checks.find((entry) => entry.id === 'opfs');
   const opfsAvailable = Boolean(opfsCapability?.present);
   const sessionPersistence = useSessionPersistence(opfsAvailable);
@@ -105,32 +113,6 @@ const App = (): JSX.Element => {
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return undefined;
-    }
-
-    const refreshCapabilities = () => {
-      setCapabilityReport((previous) => {
-        const next = detectCapabilities();
-        const previousWarningIds = (previous?.warnings ?? []).map((entry) => entry.id).join(',');
-        const nextWarningIds = next.warnings.map((entry) => entry.id).join(',');
-        if (previousWarningIds !== nextWarningIds) {
-          setWarningsDismissed(false);
-        }
-        return next;
-      });
-    };
-
-    window.addEventListener('focus', refreshCapabilities);
-    window.addEventListener('visibilitychange', refreshCapabilities);
-
-    return () => {
-      window.removeEventListener('focus', refreshCapabilities);
-      window.removeEventListener('visibilitychange', refreshCapabilities);
-    };
-  }, []);
 
   useEffect(() => {
     // Prevent back button navigation to avoid triggering on horizontal scroll/swipe
@@ -576,16 +558,12 @@ const App = (): JSX.Element => {
   const showCapabilityWarnings =
     capabilityReport.ok && capabilityWarnings.length > 0 && !warningsDismissed;
 
-  if (!capabilityReport.ok) {
-    return <CapabilityGate report={capabilityReport} />;
-  }
-
   return (
     <div className="flex h-full flex-col bg-canvas text-slate-100">
       {showCapabilityWarnings && (
         <CapabilityWarningBanner
           warnings={capabilityWarnings}
-          onDismiss={() => setWarningsDismissed(true)}
+          onDismiss={onDismissWarnings}
         />
       )}
       <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
@@ -763,6 +741,49 @@ const App = (): JSX.Element => {
         saving={noteSaving}
       />
     </div>
+  );
+};
+
+const App = (): JSX.Element => {
+  const [capabilityReport, setCapabilityReport] = useState<CapabilityReport>(() => detectCapabilities());
+  const [warningsDismissed, setWarningsDismissed] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const refreshCapabilities = () => {
+      setCapabilityReport((previous) => {
+        const next = detectCapabilities();
+        const previousWarningIds = (previous?.warnings ?? []).map((entry) => entry.id).join(',');
+        const nextWarningIds = next.warnings.map((entry) => entry.id).join(',');
+        if (previousWarningIds !== nextWarningIds) {
+          setWarningsDismissed(false);
+        }
+        return next;
+      });
+    };
+
+    window.addEventListener('focus', refreshCapabilities);
+    window.addEventListener('visibilitychange', refreshCapabilities);
+
+    return () => {
+      window.removeEventListener('focus', refreshCapabilities);
+      window.removeEventListener('visibilitychange', refreshCapabilities);
+    };
+  }, []);
+
+  if (!capabilityReport.ok) {
+    return <CapabilityGate report={capabilityReport} />;
+  }
+
+  return (
+    <AppShell
+      capabilityReport={capabilityReport}
+      warningsDismissed={warningsDismissed}
+      onDismissWarnings={() => setWarningsDismissed(true)}
+    />
   );
 };
 
