@@ -88,6 +88,10 @@ export interface LoadCompleteSummary {
   durationMs: number;
   columnTypes: Record<string, ColumnType>;
   columnInference: Record<string, ColumnInference>;
+  metrics?: {
+    fuzzyRowBuildMs: number;
+    fuzzySnapshotMs: number;
+  };
 }
 
 export interface GlobalSearchResult {
@@ -700,7 +704,7 @@ const api: DataWorkerApi = {
       });
       const parseStartTime = now();
 
-      await parseDelimitedStream(
+      const parseMetrics = await parseDelimitedStream(
         source,
         {
           onHeader: async (header) => {
@@ -825,12 +829,17 @@ const api: DataWorkerApi = {
       state.dataset.totalRows = finalRows;
       state.dataset.bytesParsed = finalBytes;
 
+      const fuzzyRowBuildMs = roundMs(parseMetrics?.fuzzyRowBuildMs ?? 0);
+      let fuzzySnapshotMs = 0;
+
       // Build and persist fuzzy index if builder was used
       if (fuzzyIndexBuilder) {
         const buildStart = now();
         const columnSnapshots = fuzzyIndexBuilder.buildSnapshots();
+        const snapshotDuration = now() - buildStart;
+        fuzzySnapshotMs = roundMs(snapshotDuration);
         debugLog('FuzzyIndexBuilder.buildSnapshots completed', {
-          durationMs: roundMs(now() - buildStart),
+          durationMs: fuzzySnapshotMs,
           columnCount: columnSnapshots.length
         });
 
@@ -861,7 +870,11 @@ const api: DataWorkerApi = {
           bytesParsed: finalBytes,
           durationMs: endTime - startTime,
           columnTypes: state.dataset.columnTypes,
-          columnInference: state.dataset.columnInference
+          columnInference: state.dataset.columnInference,
+          metrics: {
+            fuzzyRowBuildMs,
+            fuzzySnapshotMs
+          }
         };
         const completeStart = now();
         await callbacks.onComplete(summary);
@@ -893,6 +906,8 @@ const api: DataWorkerApi = {
         storedBatches,
         chunkCount,
         slowStoreBatchCount,
+        fuzzyRowBuildMs,
+        fuzzySnapshotMs,
         longestStoreBatchMs: roundMs(longestStoreDurationMs),
         averageStoreBatchMs:
           storedBatches > 0 ? roundMs(totalStoreDurationMs / storedBatches) : 0,

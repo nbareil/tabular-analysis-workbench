@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { parseDelimitedStream } from './csvParser';
+import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import type {
   ColumnBatch,
   NumberColumnBatch,
@@ -138,5 +139,26 @@ describe('parseDelimitedStream', () => {
     expect(decodeStringColumn(batch.columns.col1)).toEqual(['Value;One', 'Fourth']);
     expect(decodeStringColumn(batch.columns.col2)).toEqual(['Second', 'Fifth;Value']);
     expect(decodeStringColumn(batch.columns.col3)).toEqual(['Third', 'Sixth']);
+  });
+
+  it('reports fuzzy builder metrics when enabled', async () => {
+    const chunks = ['name,city\nAlice,Paris\n'];
+    const source = iterableFromStrings(chunks);
+    const builder = new FuzzyIndexBuilder();
+    const addRowSpy = vi.spyOn(builder, 'addRow');
+    const metrics = await parseDelimitedStream(
+      source,
+      {
+        onHeader: async () => {},
+        onBatch: async () => {}
+      },
+      {
+        fuzzyIndexBuilder: builder
+      }
+    );
+
+    expect(addRowSpy).toHaveBeenCalled();
+    expect(metrics.fuzzyRowBuildMs).toBeGreaterThanOrEqual(0);
+    addRowSpy.mockRestore();
   });
 });

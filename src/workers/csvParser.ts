@@ -26,6 +26,10 @@ export interface ParserCallbacks {
   onCheckpoint?: (payload: { rowIndex: number; byteOffset: number }) => void | Promise<void>;
 }
 
+export interface ParserMetrics {
+  fuzzyRowBuildMs: number;
+}
+
 const DEFAULT_BATCH_SIZE = 10_000;
 
 interface InternalState {
@@ -46,6 +50,7 @@ interface InternalState {
   totalBytes: number;
   inferencer: TypeInferencer | null;
   currentRowStartOffset: number;
+  fuzzyRowBuildMs: number;
 }
 
 const createInitialState = (): InternalState => ({
@@ -65,8 +70,14 @@ const createInitialState = (): InternalState => ({
   totalRows: 0,
   totalBytes: 0,
   inferencer: null,
-  currentRowStartOffset: 0
+  currentRowStartOffset: 0,
+  fuzzyRowBuildMs: 0
 });
+
+const timestamp = (): number =>
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now();
 
 const resetColumnBuilders = (state: InternalState): void => {
   state.columnBuilders = state.header ? state.header.map(() => []) : [];
@@ -288,7 +299,7 @@ export const parseDelimitedStream = async (
   source: AsyncIterable<Uint8Array>,
   callbacks: ParserCallbacks,
   options: ParserOptions = {}
-): Promise<void> => {
+): Promise<ParserMetrics> => {
   const state = createInitialState();
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
   const checkpointInterval = options.checkpointInterval ?? 50_000;
@@ -382,7 +393,11 @@ export const parseDelimitedStream = async (
 
     const normalized = normalizeRow(rowCells, state.header.length);
     state.inferencer?.updateRow(normalized);
-    options.fuzzyIndexBuilder?.addRow(state.header, normalized);
+    if (options.fuzzyIndexBuilder) {
+      const start = timestamp();
+      options.fuzzyIndexBuilder.addRow(state.header, normalized);
+      state.fuzzyRowBuildMs += timestamp() - start;
+    }
     ensureColumnBuilders(state);
     for (let columnIndex = 0; columnIndex < state.header.length; columnIndex += 1) {
       const columnValues = state.columnBuilders[columnIndex];
@@ -527,4 +542,7 @@ export const parseDelimitedStream = async (
   }
 
   await flushBatch(true);
+  return {
+    fuzzyRowBuildMs: state.fuzzyRowBuildMs
+  };
 };
