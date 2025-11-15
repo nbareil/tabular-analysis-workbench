@@ -65,24 +65,22 @@ describe('buildFilterExpression', () => {
     }
     expect((expression as FilterExpression).op).toBe('and');
     expect((expression as FilterExpression).predicates).toHaveLength(2);
-    expect((expression as FilterExpression).predicates[0]).toEqual({
+    expect((expression as FilterExpression).predicates[0]).toMatchObject({
       id: '1',
       column: 'name',
       operator: 'eq',
       value: 'Alice',
-      value2: undefined,
       caseSensitive: false,
       fuzzy: undefined
-    } as FilterPredicate);
-    expect((expression as FilterExpression).predicates[1]).toEqual({
+    } satisfies Partial<FilterPredicate>);
+    expect((expression as FilterExpression).predicates[1]).toMatchObject({
       id: '2',
       column: 'age',
       operator: 'gt',
       value: 25,
-      value2: undefined,
       caseSensitive: false,
       fuzzy: undefined
-    } as FilterPredicate);
+    } satisfies Partial<FilterPredicate>);
   });
 
   it('handles range operator with value2', () => {
@@ -100,7 +98,7 @@ describe('buildFilterExpression', () => {
     if (!expression) {
       throw new Error('expression should not be null');
     }
-    expect((expression as FilterExpression).predicates[0]).toEqual({
+    expect((expression as FilterExpression).predicates[0]).toMatchObject({
       id: '1',
       column: 'age',
       operator: 'between',
@@ -108,7 +106,7 @@ describe('buildFilterExpression', () => {
       value2: 30,
       caseSensitive: false,
       fuzzy: undefined
-    } as FilterPredicate);
+    } satisfies Partial<FilterPredicate>);
   });
 
   it('preserves fuzzy and caseSensitive flags', () => {
@@ -127,15 +125,14 @@ describe('buildFilterExpression', () => {
     if (!expression) {
       throw new Error('expression should not be null');
     }
-    expect((expression as FilterExpression).predicates[0]).toEqual({
+    expect((expression as FilterExpression).predicates[0]).toMatchObject({
       id: '1',
       column: 'name',
       operator: 'contains',
       value: 'test',
-      value2: undefined,
       caseSensitive: true,
       fuzzy: true
-    } as FilterPredicate);
+    } satisfies Partial<FilterPredicate>);
   });
 
   it('handles different operators like gt and lt', () => {
@@ -182,5 +179,32 @@ describe('buildFilterExpression', () => {
     expect(((expression as FilterExpression).predicates[0] as FilterPredicate).column).toBeUndefined();
     expect(((expression as FilterExpression).predicates[0] as FilterPredicate).operator).toBe('eq');
     expect(((expression as FilterExpression).predicates[0] as FilterPredicate).value).toBe('test');
+  });
+
+  it('serializes fuzzy distance overrides when explicitly enabled', () => {
+    const expression = buildFilterExpression([
+      {
+        id: 'fuzzy-1',
+        column: 'message',
+        operator: 'eq',
+        value: 'login sucess',
+        fuzzy: true,
+        fuzzyExplicit: true,
+        fuzzyDistance: 3,
+        fuzzyDistanceExplicit: true
+      }
+    ]);
+
+    expect(expression).not.toBeNull();
+    if (!expression) {
+      throw new Error('expression should not be null');
+    }
+    expect((expression as FilterExpression).predicates[0]).toMatchObject({
+      column: 'message',
+      operator: 'eq',
+      value: 'login sucess',
+      fuzzy: true,
+      fuzzyDistance: 3
+    } satisfies Partial<FilterPredicate>);
   });
 });

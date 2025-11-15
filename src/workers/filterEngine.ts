@@ -59,6 +59,16 @@ const determineMaxDistance = (value: string): number => {
   return 0;
 };
 
+const clampExplicitDistance = (value: unknown): number | null => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return null;
+  }
+  const rounded = Math.floor(value);
+  if (rounded < 1) {
+    return null;
+  }
+  return Math.min(3, rounded);
+};
 const tokenizeFuzzyQuery = (value: string): string[] => {
   const normalized = value.toLowerCase().normalize('NFC');
   const tokens = normalized
@@ -216,6 +226,7 @@ const evaluatePredicate = (
       const valuesNormalised = values.map((value) =>
         normalizeString(String(value ?? ''), predicate.caseSensitive ?? false)
       );
+      const explicitDistance = clampExplicitDistance(predicate.fuzzyDistance);
 
       if (predicate.operator === 'eq' || predicate.operator === 'neq') {
         let hasExactMatches = false;
@@ -230,7 +241,7 @@ const evaluatePredicate = (
         const queryTokens = tokenizeFuzzyQuery(trimmedQuery);
         const tokenConfigs = queryTokens.map((token) => ({
           token,
-          distance: determineMaxDistance(token)
+          distance: explicitDistance ?? determineMaxDistance(token)
         }));
         const maxTokenDistance = tokenConfigs.reduce(
           (acc, config) => Math.max(acc, config.distance),
@@ -239,7 +250,8 @@ const evaluatePredicate = (
         const forceFuzzy = predicate.fuzzy === true;
         const allowAutoFuzzy =
           predicate.fuzzy !== false && !hasExactMatches && maxTokenDistance > 0;
-        const infoMaxDistance = forceFuzzy ? Math.max(maxTokenDistance, 1) : maxTokenDistance;
+        const infoMaxDistance =
+          explicitDistance ?? (forceFuzzy ? Math.max(maxTokenDistance, 1) : maxTokenDistance);
         const fuzzyIndex = context.fuzzyIndex;
         let fuzzyInfo: FuzzyMatchInfo | undefined;
 

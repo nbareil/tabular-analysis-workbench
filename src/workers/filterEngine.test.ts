@@ -446,6 +446,43 @@ describe('filterEngine', () => {
     expect(result.fuzzyUsed?.query).toBe('login sucess');
   });
 
+  it('honours explicit fuzzy distance overrides', () => {
+    const batch = buildRowBatch(
+      {
+        message: stringColumn(['kitten'])
+      },
+      { message: 'string' }
+    );
+    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['kitten']);
+
+    const defaultResult = evaluateFilter(
+      batch,
+      {
+        column: 'message',
+        operator: 'eq',
+        value: 'sitting'
+      },
+      { fuzzyIndex }
+    );
+
+    expect(Array.from(defaultResult.matches)).toEqual([0]);
+    expect(defaultResult.fuzzyUsed?.maxDistance).toBe(2);
+
+    const overrideResult = evaluateFilter(
+      batch,
+      {
+        column: 'message',
+        operator: 'eq',
+        value: 'sitting',
+        fuzzy: true,
+        fuzzyDistance: 3
+      },
+      { fuzzyIndex }
+    );
+
+    expect(Array.from(overrideResult.matches)).toEqual([1]);
+  });
+
   it('skips fuzzy fallback when predicate explicitly opts out', () => {
     const batch = buildRowBatch(
       {

@@ -45,11 +45,16 @@ const applyAutoFuzzyFlag = (
     }
 
     changed = true;
-    return {
+    const nextFilter: FilterState = {
       ...filter,
       fuzzy: true,
-      fuzzyExplicit: filter.fuzzyExplicit ?? false
+      fuzzyExplicit: filter.fuzzyExplicit ?? false,
+      fuzzyDistanceExplicit: false
     };
+    if (typeof fuzzyUsed.maxDistance === 'number') {
+      nextFilter.fuzzyDistance = fuzzyUsed.maxDistance;
+    }
+    return nextFilter;
   });
 
   return changed ? { filters: updated, changed: true } : { filters, changed: false };

@@ -67,6 +67,7 @@ export interface FilterPredicate {
   value2?: unknown;
   caseSensitive?: boolean;
   fuzzy?: boolean;
+  fuzzyDistance?: number;
 }
 
 export interface FilterExpression {

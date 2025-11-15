@@ -69,6 +69,7 @@ const defaultFilter = (column: string, labels: LabelDefinition[]): FilterState =
     caseSensitive: false,
     fuzzy: false,
     fuzzyExplicit: isTagColumn,
+    fuzzyDistanceExplicit: false,
     enabled: true
   };
 };
@@ -95,6 +96,8 @@ const normaliseFilterForColumn = (
     value2: undefined,
     fuzzy: false,
     fuzzyExplicit: true,
+    fuzzyDistance: undefined,
+    fuzzyDistanceExplicit: false,
     caseSensitive: false,
     enabled: filter.enabled ?? true
   };
@@ -226,6 +229,8 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
           value2: undefined,
           fuzzy: false,
           fuzzyExplicit: false,
+          fuzzyDistance: undefined,
+          fuzzyDistanceExplicit: false,
           caseSensitive: false
         };
       }
@@ -253,6 +258,13 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
 
       if (updates.column === TAG_COLUMN_ID || updated.column === TAG_COLUMN_ID) {
         return normaliseFilterForColumn(updated, tagLabels);
+      }
+
+      if (updates.operator && updates.operator !== 'eq') {
+        updated.fuzzy = false;
+        updated.fuzzyExplicit = false;
+        updated.fuzzyDistance = undefined;
+        updated.fuzzyDistanceExplicit = false;
       }
 
       return updated;
