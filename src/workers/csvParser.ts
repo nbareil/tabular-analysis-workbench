@@ -40,7 +40,8 @@ interface InternalState {
   skipNextLF: boolean;
   fieldBuffer: string;
   currentRow: string[];
-  batchRows: string[][];
+  columnBuilders: string[][];
+  pendingRowCount: number;
   totalRows: number;
   totalBytes: number;
   inferencer: TypeInferencer | null;
@@ -59,12 +60,27 @@ const createInitialState = (): InternalState => ({
   skipNextLF: false,
   fieldBuffer: '',
   currentRow: [],
-  batchRows: [],
+  columnBuilders: [],
+  pendingRowCount: 0,
   totalRows: 0,
   totalBytes: 0,
   inferencer: null,
   currentRowStartOffset: 0
 });
+
+const resetColumnBuilders = (state: InternalState): void => {
+  state.columnBuilders = state.header ? state.header.map(() => []) : [];
+  state.pendingRowCount = 0;
+};
+
+const ensureColumnBuilders = (state: InternalState): void => {
+  if (!state.header) {
+    return;
+  }
+  if (state.columnBuilders.length !== state.header.length) {
+    resetColumnBuilders(state);
+  }
+};
 
 const textEncoder = new TextEncoder();
 
@@ -197,9 +213,9 @@ const createDatetimeColumnBatch = (values: string[]): DatetimeColumnBatch => {
   };
 };
 
-const buildColumnsFromRows = (
+const buildColumnsFromBuilders = (
   header: string[],
-  rows: string[][],
+  columnValues: string[][],
   inferencer: TypeInferencer | null
 ): {
   columns: Record<string, ColumnBatch>;
@@ -212,7 +228,7 @@ const buildColumnsFromRows = (
 
   for (let colIndex = 0; colIndex < header.length; colIndex += 1) {
     const columnName = header[colIndex];
-    const values = rows.map((row) => row[colIndex] ?? '');
+    const values = columnValues[colIndex] ?? [];
     const inference = inferencer ? inferencer.resolve(columnName) : null;
     const targetType = inference?.type ?? 'string';
 
@@ -308,11 +324,11 @@ export const parseDelimitedStream = async (
   }
 
   const flushBatch = async (eof: boolean): Promise<void> => {
-    if (!state.header || state.batchRows.length === 0) {
+    if (!state.header || state.pendingRowCount === 0) {
       return;
     }
 
-    const rowCount = state.batchRows.length;
+    const rowCount = state.pendingRowCount;
     const startId = state.totalRows;
     const rowIds = new Uint32Array(rowCount);
 
@@ -320,9 +336,9 @@ export const parseDelimitedStream = async (
       rowIds[idx] = startId + idx;
     }
 
-    const { columns, columnTypes, columnInference } = buildColumnsFromRows(
+    const { columns, columnTypes, columnInference } = buildColumnsFromBuilders(
       state.header,
-      state.batchRows,
+      state.columnBuilders,
       state.inferencer
     );
     state.totalRows += rowCount;
@@ -339,7 +355,7 @@ export const parseDelimitedStream = async (
       }
     };
 
-    state.batchRows = [];
+    resetColumnBuilders(state);
     await callbacks.onBatch(batch);
   };
 
@@ -351,6 +367,7 @@ export const parseDelimitedStream = async (
       state.header = dedupeHeader(rowCells);
       state.delimiterResolved = true;
       state.inferencer = new TypeInferencer(state.header);
+      resetColumnBuilders(state);
       state.currentRowStartOffset = state.totalBytes;
 
       if (callbacks.onHeader) {
@@ -359,16 +376,23 @@ export const parseDelimitedStream = async (
       return;
     }
 
-    if (state.batchRows.length >= batchSize) {
+    if (state.pendingRowCount >= batchSize) {
       await flushBatch(false);
     }
 
     const normalized = normalizeRow(rowCells, state.header.length);
     state.inferencer?.updateRow(normalized);
     options.fuzzyIndexBuilder?.addRow(state.header, normalized);
-    state.batchRows.push(normalized);
+    ensureColumnBuilders(state);
+    for (let columnIndex = 0; columnIndex < state.header.length; columnIndex += 1) {
+      const columnValues = state.columnBuilders[columnIndex];
+      if (columnValues) {
+        columnValues.push(normalized[columnIndex] ?? '');
+      }
+    }
+    state.pendingRowCount += 1;
 
-    const rowIndex = state.totalRows + state.batchRows.length - 1;
+    const rowIndex = state.totalRows + state.pendingRowCount - 1;
     const rowStartOffset = state.currentRowStartOffset;
 
     if (checkpointInterval > 0 && callbacks.onCheckpoint && rowIndex % checkpointInterval === 0) {
