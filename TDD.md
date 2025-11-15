@@ -133,6 +133,7 @@
 1. Dirty flags set when filters, column layouts, or open file handles change.
 2. Every minute session controller serializes session.json (file handle serialized via structuredClone handle reference).
 3. On app bootstrap, controller checks OPFS for latest session; if present, requests permission to rehydrate file handle and triggers loadFile with stored filters and layouts.
+4. Auto-save scheduler debounces writes by ~5 seconds after a change while also enforcing the 60 second maximum interval and flushing pending work on `beforeunload`.
 
 ### 6.6 Export flow
 1. User selects export type (filtered CSV or tags JSON).
@@ -263,7 +264,7 @@ interface AnnotationRecord {
     tags.json              // Record<RowId, AnnotationRecord>
 ```
 - Files written using atomic replace pattern (write to temp, move).
-- Total storage capped (approx 200 MB) with LRU cleanup triggered on session load.
+- Total storage capped (approx 200 MB) with LRU cleanup triggered on session load/save. Cleanup prefers transient caches (row-cache, fuzzy-index, row-index) before annotations/sessions and must never delete the active `sessions/latest.json`.
 
 ## 9. UI and UX Implementation Details
 - Theme system: CSS variables for color tokens; default dark palette aligning with forensic tooling.

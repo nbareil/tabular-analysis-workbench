@@ -1,5 +1,6 @@
 import type { SessionSnapshot } from '@state/sessionStore';
 import { supportsOpfs } from './capabilities';
+import { enforceOpfsBudget } from './opfsQuotaManager';
 import {
   ACTIVE_HANDLE_KEY,
   clearActiveFileHandle,
@@ -139,6 +140,9 @@ export const saveSessionSnapshot = async (
     };
 
     await writeJsonFile(directory, SESSION_FILE, envelope);
+    await enforceOpfsBudget({
+      preserve: (entry) => entry.directory === SESSION_DIRECTORY && entry.name === SESSION_FILE
+    });
     return { updatedAt: envelope.updatedAt };
   } catch (error) {
     console.warn('[session] Failed to persist snapshot', error);
@@ -169,6 +173,10 @@ export const loadSessionSnapshot = async (): Promise<LoadedSessionSnapshot | nul
     if (!envelope || envelope.version !== SESSION_VERSION) {
       return null;
     }
+
+    await enforceOpfsBudget({
+      preserve: (entry) => entry.directory === SESSION_DIRECTORY && entry.name === SESSION_FILE
+    });
 
     const activeHandle = envelope.handleKey ? await loadActiveFileHandle() : null;
     return {

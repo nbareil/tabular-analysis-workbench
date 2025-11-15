@@ -111,9 +111,11 @@ npm run preview   # Serves dist/ for local smoke tests
   import/export the annotation JSON bundle.
 
 ### Session Persistence & OPFS
-- Sessions auto-save every minute and whenever you close the file picker. On
-  reload you will be prompted to re-authorize the last dataset so filters, tags,
-  and layout return instantly.
+- Sessions auto-save every minute (and within ~5 seconds of edits) plus when you
+  close the file picker. Reloading prompts you to re-authorize the last dataset
+  so filters, tags, and layout return instantly.
+- The OPFS cache (sessions, indexes, annotations, row-cache) is capped at
+  roughly 200 MB. Oldest files are pruned on load/save to stay within quota.
 
 ### Exporting Results
 - Use **Export → Filtered rows** to write the visible dataset to `.csv` or

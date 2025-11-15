@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useSessionStore, getSessionSnapshot } from '@state/sessionStore';
 import { saveSessionSnapshot, loadSessionSnapshot } from '@utils/sessionPersistence';
+import { AutoSaveScheduler } from '@utils/autoSaveScheduler';
 
 export interface SessionPersistenceStatus {
   supported: boolean;
@@ -11,6 +12,7 @@ export interface SessionPersistenceStatus {
 }
 
 const AUTO_SAVE_INTERVAL_MS = 60_000;
+const AUTO_SAVE_DEBOUNCE_MS = 5_000;
 
 const requestReadPermission = async (
   handle: FileSystemFileHandle
@@ -42,6 +44,7 @@ export const useSessionPersistence = (
   });
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
+  const schedulerRef = useRef<AutoSaveScheduler | null>(null);
 
   useEffect(() => {
     if (!enabled) {
@@ -69,6 +72,7 @@ export const useSessionPersistence = (
     const unsubscribe = useSessionStore.subscribe((state, previous) => {
       if (state.updatedAt !== previous.updatedAt) {
         dirtyRef.current = true;
+        schedulerRef.current?.markDirty();
       }
     });
 
@@ -105,6 +109,26 @@ export const useSessionPersistence = (
 
   useEffect(() => {
     if (!enabled || typeof window === 'undefined') {
+      schedulerRef.current?.dispose();
+      schedulerRef.current = null;
+      return undefined;
+    }
+
+    const scheduler = new AutoSaveScheduler({
+      debounceMs: AUTO_SAVE_DEBOUNCE_MS,
+      maxIntervalMs: AUTO_SAVE_INTERVAL_MS,
+      save: persistSnapshot
+    });
+    schedulerRef.current = scheduler;
+
+    return () => {
+      scheduler.dispose();
+      schedulerRef.current = null;
+    };
+  }, [enabled, persistSnapshot]);
+
+  useEffect(() => {
+    if (!enabled || typeof window === 'undefined') {
       return undefined;
     }
 
@@ -116,20 +140,6 @@ export const useSessionPersistence = (
     window.addEventListener('beforeunload', handle);
     return () => {
       window.removeEventListener('beforeunload', handle);
-    };
-  }, [enabled, persistSnapshot]);
-
-  useEffect(() => {
-    if (!enabled || typeof window === 'undefined') {
-      return undefined;
-    }
-
-    const interval = window.setInterval(() => {
-      void persistSnapshot();
-    }, AUTO_SAVE_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(interval);
     };
   }, [enabled, persistSnapshot]);
 
