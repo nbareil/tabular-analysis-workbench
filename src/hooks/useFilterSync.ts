@@ -67,9 +67,12 @@ export const useFilterSync = (): UseFilterSyncResult => {
   const loaderStatus = useDataStore((state) => state.status);
   const totalRows = useDataStore((state) => state.totalRows);
   const bootstrapAppliedRef = useRef(false);
+  const requestIdRef = useRef(0);
 
   const applyFilters = useCallback(
     async (nextFilters: FilterState[]) => {
+      const requestId = requestIdRef.current + 1;
+      requestIdRef.current = requestId;
       let filtersToApply = nextFilters;
       setFilters(filtersToApply);
 
@@ -84,6 +87,9 @@ export const useFilterSync = (): UseFilterSyncResult => {
             offset: 0,
             limit: 0
           });
+          if (requestId !== requestIdRef.current) {
+            return;
+          }
           clearFilterSummary();
           clearSearchResult();
           setMatchedRowCount(response.totalRows);
@@ -99,6 +105,9 @@ export const useFilterSync = (): UseFilterSyncResult => {
         };
 
         const response = await worker.applyFilter(request);
+        if (requestId !== requestIdRef.current) {
+          return;
+        }
 
         const { filters: maybeUpdated, changed } = applyAutoFuzzyFlag(
           filtersToApply,
