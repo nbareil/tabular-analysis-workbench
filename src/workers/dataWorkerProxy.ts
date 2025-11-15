@@ -1,33 +1,6 @@
 import { wrap, type Remote } from 'comlink';
 
-import type {
-  DataWorkerApi,
-  LoadFileCallbacks,
-  LoadFileRequest,
-  SeekRowsRequest,
-  SeekRowsResult,
-  ApplySortRequest,
-  ApplySortResult,
-  ApplyFilterRequest,
-  ApplyFilterResult,
-  FetchRowsRequest,
-  FetchRowsResult,
-  GroupingRequest,
-  GroupingResult,
-  TaggingSnapshot,
-  TagRowsRequest,
-  TagRowsResponse,
-  ExportTagsResponse,
-  UpdateLabelRequest,
-  DeleteLabelRequest,
-  DeleteLabelResponse,
-  ImportTagsRequest,
-  LabelDefinition,
-  LoadCompleteSummary,
-  PersistFuzzyIndexRequest,
-  FuzzyIndexSnapshot,
-  GlobalSearchResult
-} from './dataWorker.worker';
+import type { DataWorkerApi } from './workerApiTypes';
 
 let workerInstance: Remote<DataWorkerApi> | null = null;
 
@@ -70,4 +43,4 @@ export type {
   PersistFuzzyIndexRequest,
   FuzzyIndexSnapshot,
   GlobalSearchResult
-};
+} from './workerApiTypes';

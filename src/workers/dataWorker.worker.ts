@@ -1,43 +1,12 @@
 import { expose } from 'comlink';
 
-import { parseDelimitedStream, type ParserOptions } from './csvParser';
-import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
-import { damerauLevenshtein } from './utils/levenshtein';
-import { normalizeValue } from './utils/stringUtils';
 import type { MaterializedRow } from './utils/materializeRowBatch';
-import { detectCompression } from './utils/detectCompression';
-import {
-  RowIndexStore,
-  type RowIndexData,
-  findNearestCheckpoint
-} from './rowIndexStore';
+import { RowIndexStore, findNearestCheckpoint } from './rowIndexStore';
 import { groupMaterializedRows, normaliseGroupColumns } from './groupEngine';
 import { RowBatchStore } from './rowBatchStore';
-import {
-  type ColumnType,
-  type ColumnInference,
-  type Delimiter,
-  type FilterNode,
-  type GroupingRequest,
-  type GroupingResult,
-  type LabelDefinition,
-  type RowBatch,
-  type SortDefinition,
-  type TagRowsRequest,
-  type TagRowsResponse,
-  type TaggingSnapshot,
-  type ExportTagsResponse,
-  type UpdateLabelRequest,
-  type DeleteLabelRequest,
-  type DeleteLabelResponse,
-  type ImportTagsRequest,
-  type TagRecord,
-  TAG_EXPORT_VERSION
-} from './types';
-import { evaluateFilterOnRows } from './filterEngine';
-import type { SearchRequest, SearchResult } from './searchEngine';
+import type { GroupingRequest, GroupingResult } from './types';
+import type { SearchRequest } from './searchEngine';
 import { shouldPreferDuckDb, tryGroupWithDuckDb } from './duckDbPlan';
-import { sortRowIds, sortRowIdsProgressive } from './sortEngine';
 import {
   FuzzyIndexStore,
   type FuzzyIndexSnapshot,
@@ -47,8 +16,37 @@ import {
 } from './fuzzyIndexStore';
 import { createFuzzyFingerprint, fuzzySnapshotMatchesFingerprint } from './fuzzyIndexUtils';
 import { logDebug } from '../utils/debugLog';
-import { buildTagRecord, cascadeLabelDeletion, isTagRecordEmpty } from './taggingHelpers';
 import { createDataWorkerState } from './state/dataWorkerState';
+import { createIngestionPipeline } from './controllers/ingestionPipeline';
+import { createFilterController } from './controllers/filterController';
+import { createSortController } from './controllers/sortController';
+import { createSearchController } from './controllers/searchController';
+import { createTaggingController } from './controllers/taggingController';
+import type {
+  WorkerInitOptions,
+  LoadFileRequest,
+  LoadFileCallbacks,
+  SeekRowsRequest,
+  SeekRowsResult,
+  PersistFuzzyIndexRequest,
+  ApplySortRequest,
+  ApplySortResult,
+  ApplyFilterRequest,
+  ApplyFilterResult,
+  FetchRowsRequest,
+  FetchRowsResult,
+  DataWorkerApi,
+  GlobalSearchResult,
+  TaggingSnapshot,
+  TagRowsRequest,
+  TagRowsResponse,
+  ExportTagsResponse,
+  UpdateLabelRequest,
+  DeleteLabelRequest,
+  DeleteLabelResponse,
+  ImportTagsRequest,
+  LabelDefinition
+} from './workerApiTypes';
 
 export type {
   GroupingRequest,
@@ -67,186 +65,8 @@ export type {
 
 export type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
 
-export interface WorkerInitOptions {
-  enableDuckDb?: boolean;
-  chunkSize?: number;
-  debugLogging?: boolean;
-  slowBatchThresholdMs?: number;
-}
-
-export interface LoadFileRequest {
-  handle: FileSystemFileHandle;
-  delimiter?: Delimiter;
-  batchSize?: number;
-  encoding?: string;
-  checkpointInterval?: number;
-}
-
-export interface LoadCompleteSummary {
-  rowsParsed: number;
-  bytesParsed: number;
-  durationMs: number;
-  columnTypes: Record<string, ColumnType>;
-  columnInference: Record<string, ColumnInference>;
-  metrics?: {
-    fuzzyRowBuildMs: number;
-    fuzzySnapshotMs: number;
-  };
-}
-
-export interface GlobalSearchResult {
-  rows: number[];
-  totalRows: number;
-  matchedRows: number;
-}
-
-export interface LoadFileCallbacks {
-  onStart?: (payload: { columns: string[] }) => void | Promise<void>;
-  onProgress?: (progress: { rowsParsed: number; bytesParsed: number; batchesStored: number }) => void | Promise<void>;
-  onComplete?: (summary: LoadCompleteSummary) => void | Promise<void>;
-  onError?: (error: { message: string; name?: string; stack?: string }) => void | Promise<void>;
-}
-
-export interface SeekRowsRequest {
-  handle: FileSystemFileHandle;
-  startRow: number;
-  rowCount: number;
-}
-
-export interface SeekRowsResult {
-  entries: Array<{ rowIndex: number; byteOffset: number }>;
-  checkpointInterval: number;
-}
-
-export interface PersistFuzzyIndexRequest {
-  createdAt?: number;
-  rowCount: number;
-  bytesParsed: number;
-  tokenLimit: number;
-  trigramSize: number;
-  columns: FuzzyColumnSnapshot[];
-}
-
-export interface ApplySortRequest {
-  sorts: SortDefinition[];
-  offset?: number;
-  limit?: number;
-  progressive?: boolean;
-  visibleRows?: number;
-}
-
-export interface ApplySortResult {
-  rows: MaterializedRow[];
-  totalRows: number;
-  matchedRows: number;
-  sorts: SortDefinition[];
-  sortComplete?: boolean;
-  sortedRowCount?: number;
-}
-
-export interface ApplyFilterRequest {
-  expression: FilterNode | null;
-  offset?: number;
-  limit?: number;
-}
-
-export interface ApplyFilterResult {
-  rows: MaterializedRow[];
-  totalRows: number;
-  matchedRows: number;
-  expression: FilterNode | null;
-  fuzzyUsed?: import('./filterEngine').FuzzyMatchInfo;
-  predicateMatchCounts?: Record<string, number>;
-}
-
-export interface FetchRowsRequest {
-  offset: number;
-  limit: number;
-}
-
-export interface FetchRowsResult {
-  rows: MaterializedRow[];
-  totalRows: number;
-  matchedRows: number;
-}
-
-export interface DataWorkerApi {
-  init: (options: WorkerInitOptions) => Promise<void>;
-  ping: () => Promise<string>;
-  loadFile: (request: LoadFileRequest, callbacks: LoadFileCallbacks) => Promise<void>;
-  loadRowIndex: (handle: FileSystemFileHandle) => Promise<RowIndexData | null>;
-  seekRows: (request: SeekRowsRequest) => Promise<SeekRowsResult | null>;
-  applySorts: (request: ApplySortRequest) => Promise<ApplySortResult>;
-  applyFilter: (request: ApplyFilterRequest) => Promise<ApplyFilterResult>;
-  fetchRows: (request: FetchRowsRequest) => Promise<FetchRowsResult>;
-  groupBy: (request: GroupingRequest) => Promise<GroupingResult>;
-  globalSearch: (request: SearchRequest) => Promise<GlobalSearchResult>;
-  fetchRowsByIds: (rowIds: number[]) => Promise<MaterializedRow[]>;
-  loadTags: () => Promise<TaggingSnapshot>;
-  tagRows: (request: TagRowsRequest) => Promise<TagRowsResponse>;
-  clearTag: (rowIds: number[]) => Promise<TagRowsResponse>;
-  updateLabel: (request: UpdateLabelRequest) => Promise<LabelDefinition>;
-  deleteLabel: (request: DeleteLabelRequest) => Promise<DeleteLabelResponse>;
-  exportTags: () => Promise<ExportTagsResponse>;
-  importTags: (request: ImportTagsRequest) => Promise<TaggingSnapshot>;
-  getFuzzyIndexSnapshot: () => Promise<FuzzyIndexSnapshot | null>;
-  persistFuzzyIndexSnapshot: (
-    request: PersistFuzzyIndexRequest
-  ) => Promise<FuzzyIndexSnapshot | null>;
-  clearFuzzyIndexSnapshot: () => Promise<void>;
-  persistTags: () => Promise<void>;
-}
 
 const state = createDataWorkerState();
-
-const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-
-const roundMs = (value: number): number => {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-
-  return Math.round(value * 100) / 100;
-};
-
-const DEFAULT_LABEL_COLOR = '#8899ff';
-
-const generateRandomId = (): string =>
-  typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-
-const normaliseImportedLabel = (label: LabelDefinition, fallbackTimestamp: number): LabelDefinition => {
-  const safeId =
-    typeof label.id === 'string' && label.id.trim().length > 0 ? label.id.trim() : generateRandomId();
-  const safeName =
-    typeof label.name === 'string' && label.name.trim().length > 0 ? label.name.trim() : 'Untitled label';
-  const safeColor =
-    typeof label.color === 'string' && label.color.trim().length > 0
-      ? label.color.trim()
-      : DEFAULT_LABEL_COLOR;
-  const createdAt =
-    typeof label.createdAt === 'number' && Number.isFinite(label.createdAt)
-      ? label.createdAt
-      : fallbackTimestamp;
-  const updatedAt =
-    typeof label.updatedAt === 'number' && Number.isFinite(label.updatedAt)
-      ? label.updatedAt
-      : fallbackTimestamp;
-  const description =
-    typeof label.description === 'string' && label.description.trim().length > 0
-      ? label.description.trim()
-      : undefined;
-
-  return {
-    id: safeId,
-    name: safeName,
-    color: safeColor,
-    description,
-    createdAt,
-    updatedAt
-  };
-};
 
 const ensureBatchStore = (): RowBatchStore => {
   if (!state.dataset.batchStore) {
@@ -321,6 +141,22 @@ const materializeViewWindow = async (offset: number, limit?: number): Promise<Ma
   return rows;
 };
 
+const ingestionPipeline = createIngestionPipeline({ state });
+const filterController = createFilterController({
+  state,
+  materializeViewWindow
+});
+const sortController = createSortController({
+  state,
+  materializeViewWindow,
+  getActiveRowCount
+});
+const searchController = createSearchController({
+  state,
+  materializeViewWindow
+});
+const taggingController = createTaggingController(state);
+
 
 
 
@@ -337,453 +173,21 @@ const api: DataWorkerApi = {
       debugLogging: options.debugLogging,
       slowBatchThresholdMs: threshold
     });
+
+    await ingestionPipeline.init();
+    filterController.init();
+    sortController.init();
+    searchController.init();
+    taggingController.init();
   },
   async ping() {
     return 'pong';
   },
-  async loadFile({ handle, delimiter, batchSize, encoding, checkpointInterval }, callbacks) {
-    if (!handle) {
-      throw new Error('A file handle must be provided to loadFile.');
-    }
-
-    await state.persistTaggingNow();
-    state.resetTagging();
-
-    const debugEnabled = state.options.debugLogging;
-    const slowBatchThreshold = state.options.slowBatchThresholdMs;
-    let datasetKey = 'pending';
-    const debugLog = (event: string, payload?: Record<string, unknown>) => {
-      if (!debugEnabled) {
-        return;
-      }
-
-      logDebug(`data-worker][dataset:${datasetKey}`, event, payload);
-    };
-
-    if (state.dataset.batchStore) {
-      const clearStart = now();
-      try {
-        await state.dataset.batchStore.clear();
-        debugLog('Cleared existing batch store', { durationMs: roundMs(now() - clearStart) });
-      } catch (error) {
-        console.warn('[data-worker] Failed to clear existing batch store', error);
-        debugLog('Failed clearing existing batch store', {
-          durationMs: roundMs(now() - clearStart),
-          message: error instanceof Error ? error.message : String(error)
-        });
-      }
-    }
-
-    datasetKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const batchStoreStart = now();
-    const batchStore = await RowBatchStore.create(datasetKey);
-    debugLog('RowBatchStore.create completed', { durationMs: roundMs(now() - batchStoreStart) });
-
-    state.prepareDatasetForLoad({
-      batchStore,
-      datasetKey,
-      fileHandle: handle
-    });
-
-    const fileStart = now();
-    const file = await handle.getFile();
-    debugLog('handle.getFile resolved', {
-      durationMs: roundMs(now() - fileStart),
-      name: file.name ?? handle.name ?? 'unknown',
-      size: file.size,
-      type: file.type
-    });
-
-    const fuzzyFingerprint = createFuzzyFingerprint(file, handle);
-    const fuzzyStoreStart = now();
-    const fuzzyIndexStore = await FuzzyIndexStore.create(handle);
-    debugLog('FuzzyIndexStore.create completed', {
-      durationMs: roundMs(now() - fuzzyStoreStart)
-    });
-    state.updateDataset((dataset) => {
-      dataset.fuzzyIndexStore = fuzzyIndexStore;
-      dataset.fuzzyFingerprint = fuzzyFingerprint;
-    });
-
-    const cachedFuzzyIndex = await fuzzyIndexStore.load();
-    let fuzzyIndexBuilder: FuzzyIndexBuilder | undefined;
-
-    if (
-      cachedFuzzyIndex &&
-      fuzzySnapshotMatchesFingerprint(cachedFuzzyIndex, fuzzyFingerprint)
-    ) {
-      state.updateDataset((dataset) => {
-        dataset.fuzzyIndexSnapshot = cachedFuzzyIndex;
-      });
-      debugLog('Hydrated fuzzy index snapshot from cache', {
-        createdAt: cachedFuzzyIndex.createdAt,
-        columnCount: cachedFuzzyIndex.columns.length,
-        tokenLimit: cachedFuzzyIndex.tokenLimit
-      });
-    } else {
-      if (cachedFuzzyIndex) {
-        debugLog('Discarded stale fuzzy index snapshot', {
-          cachedFingerprint: cachedFuzzyIndex.fingerprint,
-          expectedFingerprint: fuzzyFingerprint
-        });
-        await fuzzyIndexStore.clear();
-      }
-
-      // Create builder to build fuzzy index from scratch
-      fuzzyIndexBuilder = new FuzzyIndexBuilder();
-      debugLog('Created new FuzzyIndexBuilder for parsing');
-    }
-
-    await state.hydrateTaggingStore(fuzzyFingerprint);
-
-    const compression = detectCompression({
-      fileName: file.name ?? handle.name,
-      mimeType: file.type
-    });
-    debugLog('Compression detected', { compression: compression ?? 'none' });
-
-    let stream: ReadableStream<Uint8Array> = file.stream();
-
-    if (compression === 'gzip') {
-      if (typeof DecompressionStream === 'undefined') {
-        throw new Error('This browser does not support gzip decompression.');
-      }
-
-      try {
-        stream = stream.pipeThrough(new DecompressionStream('gzip') as any);
-        debugLog('Applied gzip DecompressionStream');
-      } catch (error) {
-        throw new Error(
-          error instanceof Error
-            ? `Failed to decompress gzip stream: ${error.message}`
-            : 'Failed to decompress gzip stream'
-        );
-      }
-    }
-
-    const reader = stream.getReader();
-    const targetCheckpointInterval = checkpointInterval ?? 50_000;
-    const options: ParserOptions = {
-      delimiter,
-      batchSize,
-      encoding,
-      checkpointInterval: targetCheckpointInterval,
-      fuzzyIndexBuilder
-    };
-
-    const startTime = now();
-    let finalRows = 0;
-    let finalBytes = 0;
-    let storedBatches = 0;
-    let previousRowsParsed = 0;
-    let previousBytesParsed = 0;
-
-    let totalStoreDurationMs = 0;
-    let longestStoreDurationMs = 0;
-    let slowStoreBatchCount = 0;
-
-    let totalProgressCallbackMs = 0;
-    let longestProgressCallbackMs = 0;
-
-    let checkpointCount = 0;
-    let totalCheckpointMs = 0;
-    let longestCheckpointMs = 0;
-
-    let chunkCount = 0;
-    let totalReadMs = 0;
-    let longestReadMs = 0;
-
-    const indexStoreStart = now();
-    const indexStore = await RowIndexStore.create(handle, {
-      checkpointInterval: targetCheckpointInterval
-    });
-    debugLog('RowIndexStore.create completed', { durationMs: roundMs(now() - indexStoreStart) });
-
-    const source: AsyncIterable<Uint8Array> = {
-      async *[Symbol.asyncIterator]() {
-        try {
-          while (true) {
-            const readStart = now();
-            const { value, done } = await reader.read();
-            const readDuration = now() - readStart;
-
-            if (done) {
-              return;
-            }
-
-            if (value) {
-              chunkCount += 1;
-              totalReadMs += readDuration;
-              if (readDuration > longestReadMs) {
-                longestReadMs = readDuration;
-              }
-
-              if (debugEnabled && readDuration >= slowBatchThreshold) {
-                debugLog('Slow chunk read', {
-                  chunkIndex: chunkCount,
-                  readDurationMs: roundMs(readDuration)
-                });
-              }
-
-              yield value;
-            }
-          }
-        } finally {
-          reader.releaseLock();
-        }
-      }
-    };
-
-    try {
-      debugLog('Starting parseDelimitedStream', {
-        delimiter: delimiter ?? 'auto',
-        batchSize: batchSize ?? 'default',
-        encoding: encoding ?? 'utf-8',
-        checkpointInterval: targetCheckpointInterval
-      });
-      const parseStartTime = now();
-
-      const parseMetrics = await parseDelimitedStream(
-        source,
-        {
-          onHeader: async (header) => {
-            state.updateDataset((dataset) => {
-              dataset.header = header;
-            });
-            if (callbacks.onStart) {
-              const callbackStart = now();
-              await callbacks.onStart({ columns: header });
-              const duration = now() - callbackStart;
-              debugLog('onStart callback completed', {
-                durationMs: roundMs(duration),
-                columnCount: header.length
-              });
-              if (duration >= slowBatchThreshold) {
-                debugLog('Slow onStart callback detected', {
-                  durationMs: roundMs(duration)
-                });
-              }
-            } else {
-              debugLog('No onStart callback provided', { columnCount: header.length });
-            }
-          },
-          onBatch: async (batch) => {
-            finalRows = batch.stats.rowsParsed;
-            finalBytes = batch.stats.bytesParsed;
-            storedBatches += 1;
-
-            const rowsInBatch = Math.max(0, finalRows - previousRowsParsed);
-            const bytesInBatch = Math.max(0, finalBytes - previousBytesParsed);
-            previousRowsParsed = finalRows;
-            previousBytesParsed = finalBytes;
-
-            const storeStart = now();
-            await batchStore.storeBatch(batch);
-            const storeDuration = now() - storeStart;
-            totalStoreDurationMs += storeDuration;
-            if (storeDuration > longestStoreDurationMs) {
-              longestStoreDurationMs = storeDuration;
-            }
-
-            const shouldLogBatch =
-              storeDuration >= slowBatchThreshold || storedBatches <= 5 || storedBatches % 50 === 0;
-
-            if (storeDuration >= slowBatchThreshold) {
-              slowStoreBatchCount += 1;
-            }
-
-            if (shouldLogBatch) {
-              debugLog('Stored batch', {
-                batchesStored: storedBatches,
-                rowsInBatch,
-                cumulativeRowsParsed: finalRows,
-                cumulativeBytesParsed: finalBytes,
-                storeDurationMs: roundMs(storeDuration),
-                slowStore: storeDuration >= slowBatchThreshold,
-                bytesInBatch
-              });
-            }
-
-            state.updateDataset((dataset) => {
-              dataset.columnTypes = {
-                ...dataset.columnTypes,
-                ...batch.columnTypes
-              };
-              dataset.columnInference = {
-                ...dataset.columnInference,
-                ...batch.columnInference
-              };
-              dataset.totalRows = finalRows;
-              dataset.bytesParsed = finalBytes;
-            });
-
-            if (callbacks.onProgress) {
-              const payload = {
-                rowsParsed: finalRows,
-                bytesParsed: finalBytes,
-                batchesStored: storedBatches
-              };
-              const progressStart = now();
-              await callbacks.onProgress(payload);
-              const progressDuration = now() - progressStart;
-              totalProgressCallbackMs += progressDuration;
-              if (progressDuration > longestProgressCallbackMs) {
-                longestProgressCallbackMs = progressDuration;
-              }
-
-              if (progressDuration >= slowBatchThreshold) {
-                debugLog('Slow onProgress callback detected', {
-                  durationMs: roundMs(progressDuration),
-                  batchesStored: storedBatches
-                });
-              }
-            }
-          },
-          onCheckpoint: async ({ rowIndex, byteOffset }) => {
-            const checkpointStart = now();
-            indexStore.record({ rowIndex, byteOffset });
-            const checkpointDuration = now() - checkpointStart;
-            checkpointCount += 1;
-            totalCheckpointMs += checkpointDuration;
-
-            if (checkpointDuration > longestCheckpointMs) {
-              longestCheckpointMs = checkpointDuration;
-            }
-
-            if (checkpointDuration >= slowBatchThreshold) {
-              debugLog('Slow checkpoint record detected', {
-                rowIndex,
-                byteOffset,
-                checkpointDurationMs: roundMs(checkpointDuration)
-              });
-            }
-          }
-        },
-        options
-      );
-
-      debugLog('parseDelimitedStream completed', {
-        durationMs: roundMs(now() - parseStartTime),
-        storedBatches,
-        rowsParsed: finalRows,
-        bytesParsed: finalBytes
-      });
-
-      state.updateDataset((dataset) => {
-        dataset.totalRows = finalRows;
-        dataset.bytesParsed = finalBytes;
-      });
-
-      const fuzzyRowBuildMs = roundMs(parseMetrics?.fuzzyRowBuildMs ?? 0);
-      let fuzzySnapshotMs = 0;
-
-      // Build and persist fuzzy index if builder was used
-      if (fuzzyIndexBuilder) {
-        const buildStart = now();
-        const columnSnapshots = fuzzyIndexBuilder.buildSnapshots();
-        const snapshotDuration = now() - buildStart;
-        fuzzySnapshotMs = roundMs(snapshotDuration);
-        debugLog('FuzzyIndexBuilder.buildSnapshots completed', {
-          durationMs: fuzzySnapshotMs,
-          columnCount: columnSnapshots.length
-        });
-
-        const fuzzySnapshot = {
-          version: FUZZY_INDEX_STORE_VERSION,
-          createdAt: Date.now(),
-          rowCount: finalRows,
-          bytesParsed: finalBytes,
-          tokenLimit: fuzzyIndexBuilder.getTokenLimit(),
-          trigramSize: fuzzyIndexBuilder.getTrigramSize(),
-          fingerprint: fuzzyFingerprint,
-          columns: columnSnapshots
-        };
-
-        const persistStart = now();
-        await fuzzyIndexStore.save(fuzzySnapshot);
-        debugLog('FuzzyIndexStore.save completed', {
-          durationMs: roundMs(now() - persistStart)
-        });
-
-        state.updateDataset((dataset) => {
-          dataset.fuzzyIndexSnapshot = fuzzySnapshot;
-        });
-      }
-
-      if (callbacks.onComplete) {
-        const endTime = now();
-        const summary: LoadCompleteSummary = {
-          rowsParsed: finalRows,
-          bytesParsed: finalBytes,
-          durationMs: endTime - startTime,
-          columnTypes: state.dataset.columnTypes,
-          columnInference: state.dataset.columnInference,
-          metrics: {
-            fuzzyRowBuildMs,
-            fuzzySnapshotMs
-          }
-        };
-        const completeStart = now();
-        await callbacks.onComplete(summary);
-        const completeDuration = now() - completeStart;
-        debugLog('onComplete callback completed', {
-          durationMs: roundMs(completeDuration),
-          rowsParsed: finalRows,
-          bytesParsed: finalBytes
-        });
-        if (completeDuration >= slowBatchThreshold) {
-          debugLog('Slow onComplete callback detected', {
-            durationMs: roundMs(completeDuration)
-          });
-        }
-      }
-
-      const finalizeStart = now();
-      await indexStore.finalize({ rowCount: finalRows, bytesParsed: finalBytes });
-      debugLog('RowIndexStore.finalize completed', {
-        durationMs: roundMs(now() - finalizeStart),
-        rowCount: finalRows,
-        bytesParsed: finalBytes
-      });
-
-      debugLog('Load complete summary', {
-        totalDurationMs: roundMs(now() - startTime),
-        rowsParsed: finalRows,
-        bytesParsed: finalBytes,
-        storedBatches,
-        chunkCount,
-        slowStoreBatchCount,
-        fuzzyRowBuildMs,
-        fuzzySnapshotMs,
-        longestStoreBatchMs: roundMs(longestStoreDurationMs),
-        averageStoreBatchMs:
-          storedBatches > 0 ? roundMs(totalStoreDurationMs / storedBatches) : 0,
-        checkpointCount,
-        longestCheckpointMs: roundMs(longestCheckpointMs),
-        averageCheckpointMs:
-          checkpointCount > 0 ? roundMs(totalCheckpointMs / checkpointCount) : 0,
-        longestReadMs: roundMs(longestReadMs),
-        averageReadMs: chunkCount > 0 ? roundMs(totalReadMs / chunkCount) : 0,
-        longestProgressCallbackMs: roundMs(longestProgressCallbackMs),
-        totalProgressCallbackMs: roundMs(totalProgressCallbackMs),
-        averageProgressCallbackMs:
-          storedBatches > 0 ? roundMs(totalProgressCallbackMs / storedBatches) : 0
-      });
-    } catch (error) {
-      debugLog('loadFile encountered error', {
-        message: error instanceof Error ? error.message : String(error)
-      });
-      await indexStore.abort();
-      if (callbacks.onError) {
-        const normalised =
-          error instanceof Error
-            ? { message: error.message, name: error.name, stack: error.stack }
-            : { message: String(error) };
-        await callbacks.onError(normalised);
-      }
-
-      throw error;
-    }
+  async loadFile(request: LoadFileRequest, callbacks: LoadFileCallbacks) {
+    filterController.clear();
+    sortController.clear();
+    taggingController.clear();
+    await ingestionPipeline.run(request, callbacks);
   },
   async loadRowIndex(handle) {
     return RowIndexStore.load(handle);
@@ -813,183 +217,11 @@ const api: DataWorkerApi = {
       checkpointInterval: index.checkpointInterval
     };
   },
-  async applySorts({ sorts, offset = 0, limit, progressive = false, visibleRows = 1000 }): Promise<ApplySortResult> {
-    const totalRows = state.dataset.totalRows;
-
-    if (!totalRows) {
-      state.updateDataset((dataset) => {
-        dataset.sorts = [];
-        dataset.sortedRowIds = null;
-      });
-      return { rows: [], totalRows: 0, matchedRows: 0, sorts: [] };
-    }
-
-    const batchStore = state.dataset.batchStore;
-    if (!batchStore) {
-      return { rows: [], totalRows: 0, matchedRows: 0, sorts: [] };
-    }
-
-    const validSorts = sorts.filter((sort) => state.dataset.columnTypes[sort.column] != null);
-    state.updateDataset((dataset) => {
-      dataset.sorts = validSorts;
-      dataset.sortedRowIds = null;
-    });
-
-    if (!validSorts.length) {
-      const rows = await materializeViewWindow(offset, limit);
-      return {
-        rows,
-        totalRows,
-        matchedRows: getActiveRowCount(),
-        sorts: []
-      };
-    }
-
-    const baseRowIds = state.dataset.filterRowIds
-      ? Array.from(state.dataset.filterRowIds)
-      : Array.from({ length: totalRows }, (_, index) => index);
-
-    if (!baseRowIds.length) {
-      return { rows: [], totalRows, matchedRows: 0, sorts: validSorts };
-    }
-
-    // Cancel any existing background sort
-    if (state.dataset.backgroundSortPromise) {
-      // Note: In a real implementation, we'd need a way to cancel the promise
-      state.updateDataset((dataset) => {
-        dataset.backgroundSortPromise = null;
-      });
-    }
-
-    let sortResult;
-    if (progressive && baseRowIds.length > visibleRows * 2) {
-      // Use progressive sorting for large datasets
-      sortResult = await sortRowIdsProgressive(
-        batchStore,
-        baseRowIds,
-        state.dataset.columnTypes,
-        validSorts,
-        visibleRows
-      );
-
-      // Store the background completion promise
-      if (sortResult.backgroundPromise) {
-        state.updateDataset((dataset) => {
-          dataset.backgroundSortPromise = sortResult.backgroundPromise!.then(
-            (completeSortedIds) => {
-              state.updateDataset((inner) => {
-                inner.sortedRowIds = completeSortedIds;
-                inner.sortComplete = true;
-                inner.backgroundSortPromise = null;
-              });
-              return completeSortedIds;
-            }
-          );
-        });
-      }
-
-      state.updateDataset((dataset) => {
-        dataset.sortComplete = sortResult.sortComplete;
-      });
-    } else {
-      // Use regular sorting for smaller datasets
-      const sortedRowIds = await sortRowIds(
-        batchStore,
-        baseRowIds,
-        state.dataset.columnTypes,
-        validSorts
-      );
-      sortResult = { sortedRowIds, sortComplete: true };
-      state.updateDataset((dataset) => {
-        dataset.sortComplete = true;
-        dataset.backgroundSortPromise = null;
-      });
-    }
-
-    state.updateDataset((dataset) => {
-      dataset.sortedRowIds = sortResult.sortedRowIds;
-    });
-
-    const rows = await materializeViewWindow(offset, limit);
-    return {
-      rows,
-      totalRows,
-      matchedRows: baseRowIds.length,
-      sorts: validSorts,
-      sortComplete: sortResult.sortComplete,
-      sortedRowCount: sortResult.sortComplete ? baseRowIds.length : visibleRows
-    };
+  async applySorts(request: ApplySortRequest): Promise<ApplySortResult> {
+    return sortController.run(request);
   },
-  async applyFilter({ expression, offset = 0, limit }: ApplyFilterRequest): Promise<ApplyFilterResult> {
-    state.updateDataset((dataset) => {
-      dataset.filterExpression = expression;
-      dataset.filterRowIds = null;
-      dataset.sortedRowIds = null;
-    });
-
-    const totalRows = state.dataset.totalRows;
-
-    if (!totalRows) {
-      return { rows: [], totalRows: 0, matchedRows: 0, expression };
-    }
-
-    if (!expression) {
-      const rows = await materializeViewWindow(offset, limit);
-      return {
-        rows,
-        totalRows,
-        matchedRows: totalRows,
-        expression
-      };
-    }
-
-    const batchStore = state.dataset.batchStore;
-    if (!batchStore) {
-      return {
-        rows: [],
-        totalRows,
-        matchedRows: 0,
-        expression
-      };
-    }
-
-    const matchedRowIds: number[] = [];
-    let fuzzyUsed: import('./filterEngine').FuzzyMatchInfo | undefined;
-    const predicateMatchCounts: Record<string, number> = {};
-
-    for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
-      const result = evaluateFilterOnRows(rows, state.dataset.columnTypes, expression, {
-        tags: state.tagging.tags,
-        fuzzyIndex: state.dataset.fuzzyIndexSnapshot
-      }, {
-        collectPredicateMatch: (predicateId, count) => {
-          const current = predicateMatchCounts[predicateId] ?? 0;
-          predicateMatchCounts[predicateId] = current + count;
-        }
-      });
-      for (let idx = 0; idx < result.matches.length; idx += 1) {
-        if (result.matches[idx] === 1) {
-          matchedRowIds.push(rowStart + idx);
-        }
-      }
-      if (result.fuzzyUsed && !fuzzyUsed) {
-        fuzzyUsed = result.fuzzyUsed;
-      }
-    }
-
-    state.updateDataset((dataset) => {
-      dataset.filterRowIds = Uint32Array.from(matchedRowIds);
-    });
-
-    const rows = await materializeViewWindow(offset, limit);
-    return {
-      rows,
-      totalRows,
-      matchedRows: matchedRowIds.length,
-      expression,
-      fuzzyUsed,
-      predicateMatchCounts
-    };
+  async applyFilter(request: ApplyFilterRequest): Promise<ApplyFilterResult> {
+    return filterController.run(request);
   },
   async fetchRows({ offset, limit }: FetchRowsRequest): Promise<FetchRowsResult> {
     if (import.meta.env.DEV) {
@@ -1089,389 +321,31 @@ const api: DataWorkerApi = {
     return groupMaterializedRows(collectedRows, state.dataset.columnTypes, normalisedRequest);
   },
   async globalSearch(request: SearchRequest): Promise<GlobalSearchResult> {
-    const batchStore = state.dataset.batchStore;
-    if (!batchStore) {
-      return {
-        rows: [],
-        totalRows: 0,
-        matchedRows: 0
-      };
-    }
-
-    const totalRows = state.dataset.totalRows;
-    if (!totalRows) {
-      return {
-        rows: [],
-        totalRows: 0,
-        matchedRows: 0
-      };
-    }
-
-    const limit = typeof request.limit === 'number' ? Math.max(1, request.limit) : 500;
-    const caseSensitive = Boolean(request.caseSensitive);
-    const trimmed = request.query.trim();
-    const columns =
-      request.columns.length > 0
-        ? request.columns.filter((column) => state.dataset.columnTypes[column] != null)
-        : Object.keys(state.dataset.columnTypes);
-
-    if (!trimmed) {
-      const rows = await materializeViewWindow(0, limit);
-      return {
-        rows: rows.map(row => row.__rowId),
-        totalRows,
-        matchedRows: rows.length
-      };
-    }
-
-    const needle = caseSensitive ? trimmed : trimmed.toLowerCase();
-    const matched: number[] = [];
-
-    for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
-      let filterMatches: Uint8Array | null = null;
-      if (request.filter) {
-        filterMatches = evaluateFilterOnRows(rows, state.dataset.columnTypes, request.filter, {
-          tags: state.tagging.tags,
-          fuzzyIndex: state.dataset.fuzzyIndexSnapshot
-        }).matches;
-      }
-
-      for (let idx = 0; idx < rows.length; idx += 1) {
-        if (filterMatches && filterMatches[idx] !== 1) {
-          continue;
-        }
-
-        const row = rows[idx]!;
-        const found = columns.some((column) => {
-          const value = normalizeValue(row[column], caseSensitive);
-          if (value.includes(needle)) {
-            return true;
-          }
-          if (needle.length <= 10) {
-            const distance = damerauLevenshtein(value, needle, 2);
-            if (distance <= 2) {
-              return true;
-            }
-          }
-          return false;
-        });
-
-        if (found) {
-          matched.push(rowStart + idx);
-          if (matched.length >= limit) {
-            return {
-              rows: matched,
-              totalRows,
-              matchedRows: matched.length
-            };
-          }
-        }
-      }
-    }
-
-    return {
-      rows: matched,
-      totalRows,
-      matchedRows: matched.length
-    };
+    return searchController.run(request);
   },
   async fetchRowsByIds(rowIds: number[]): Promise<MaterializedRow[]> {
-    if (!state.dataset.batchStore) {
-      return [];
-    }
-    const uniqueIds = Array.from(new Set(rowIds)).sort((a, b) => a - b);
-    const rows = await state.dataset.batchStore.materializeRows(uniqueIds);
-    const idToRow = new Map<number, MaterializedRow>();
-    uniqueIds.forEach((id, index) => {
-      idToRow.set(id, rows[index]!);
-    });
-    return rowIds.map(id => idToRow.get(id)).filter((row): row is MaterializedRow => row != null);
+    return searchController.fetchRowsByIds(rowIds);
   },
   async loadTags(): Promise<TaggingSnapshot> {
-    return {
-      labels: state.tagging.labels,
-      tags: state.tagging.tags
-    };
+    return taggingController.loadTags();
   },
-  async tagRows({ rowIds, labelId, note }: TagRowsRequest): Promise<TagRowsResponse> {
-    const timestamp = Date.now();
-    const resolvedLabelId = labelId ?? null;
-    const label = resolvedLabelId
-      ? state.tagging.labels.find((entry) => entry.id === resolvedLabelId)
-      : undefined;
-    const updated: TagRowsResponse['updated'] = {};
-    let mutated = false;
-
-    state.updateTagging((tagging) => {
-      for (const rowId of rowIds) {
-        if (!Number.isFinite(rowId) || rowId < 0) {
-          continue;
-        }
-
-        const existing = tagging.tags[rowId];
-        const record = buildTagRecord({
-          existing,
-          label,
-          labelId: resolvedLabelId,
-          note,
-          timestamp
-        });
-
-        if (isTagRecordEmpty(record)) {
-          if (existing) {
-            delete tagging.tags[rowId];
-            mutated = true;
-          }
-        } else {
-          const changed =
-            !existing ||
-            existing.labelId !== record.labelId ||
-            existing.note !== record.note ||
-            existing.color !== record.color;
-          tagging.tags[rowId] = record;
-          mutated = mutated || changed;
-        }
-
-        updated[rowId] = record;
-      }
-    });
-
-    if (mutated) {
-      state.markTaggingDirty();
-    }
-
-    return { updated };
+  async tagRows(request: TagRowsRequest): Promise<TagRowsResponse> {
+    return taggingController.tagRows(request);
   },
   async clearTag(rowIds: number[]): Promise<TagRowsResponse> {
-    const timestamp = Date.now();
-    const updated: TagRowsResponse['updated'] = {};
-    let mutated = false;
-
-    state.updateTagging((tagging) => {
-      for (const rowId of rowIds) {
-        if (!Number.isFinite(rowId) || rowId < 0) {
-          continue;
-        }
-
-        if (tagging.tags[rowId]) {
-          delete tagging.tags[rowId];
-          mutated = true;
-        }
-
-        updated[rowId] = {
-          labelId: null,
-          updatedAt: timestamp
-        };
-      }
-    });
-
-    if (mutated) {
-      state.markTaggingDirty();
-    }
-
-    return { updated };
+    return taggingController.clearTag(rowIds);
   },
-  async updateLabel({ label }: UpdateLabelRequest): Promise<LabelDefinition> {
-    const timestamp = Date.now();
-    const safeName =
-      typeof label.name === 'string' && label.name.trim().length > 0
-        ? label.name.trim()
-        : 'Untitled label';
-    const safeColor =
-      typeof label.color === 'string' && label.color.trim().length > 0
-        ? label.color.trim()
-        : DEFAULT_LABEL_COLOR;
-    const safeDescription =
-      typeof label.description === 'string' && label.description.trim().length > 0
-        ? label.description.trim()
-        : undefined;
-    const nextLabel: LabelDefinition = {
-      id: label.id,
-      name: safeName,
-      color: safeColor,
-      description: safeDescription,
-      createdAt: typeof label.createdAt === 'number' ? label.createdAt : timestamp,
-      updatedAt: timestamp
-    };
-
-    state.updateTagging((tagging) => {
-      const existingIndex = tagging.labels.findIndex((entry) => entry.id === label.id);
-      if (existingIndex >= 0) {
-        tagging.labels[existingIndex] = nextLabel;
-      } else {
-        tagging.labels.push(nextLabel);
-      }
-
-      for (const [key, record] of Object.entries(tagging.tags)) {
-        if (record.labelId !== nextLabel.id) {
-          continue;
-        }
-
-        const rowId = Number(key);
-        if (!Number.isFinite(rowId) || rowId < 0) {
-          continue;
-        }
-
-        tagging.tags[rowId] = {
-          ...record,
-          color: nextLabel.color,
-          updatedAt: timestamp
-        };
-      }
-    });
-
-    state.markTaggingDirty();
-
-    return nextLabel;
+  async updateLabel(request: UpdateLabelRequest): Promise<LabelDefinition> {
+    return taggingController.updateLabel(request);
   },
-  async deleteLabel({ labelId }: DeleteLabelRequest): Promise<DeleteLabelResponse> {
-    const timestamp = Date.now();
-    const updated: Record<number, TagRecord> = {};
-    let deleted = false;
-
-    state.updateTagging((tagging) => {
-      const before = tagging.labels.length;
-      tagging.labels = tagging.labels.filter((label) => label.id !== labelId);
-
-      for (const [rowId, record] of Object.entries(tagging.tags)) {
-        if (record.labelId !== labelId) {
-          continue;
-        }
-
-        const numericRowId = Number(rowId);
-        if (!Number.isFinite(numericRowId) || numericRowId < 0) {
-          continue;
-        }
-
-        const nextRecord = cascadeLabelDeletion(record, timestamp);
-        if (isTagRecordEmpty(nextRecord)) {
-          delete tagging.tags[numericRowId];
-        } else {
-          tagging.tags[numericRowId] = nextRecord;
-        }
-
-        updated[numericRowId] = nextRecord;
-      }
-
-      deleted = tagging.labels.length < before;
-    });
-    if (deleted || Object.keys(updated).length > 0) {
-      state.markTaggingDirty();
-    }
-
-    return { deleted, updated };
+  async deleteLabel(request: DeleteLabelRequest): Promise<DeleteLabelResponse> {
+    return taggingController.deleteLabel(request);
   },
   async exportTags(): Promise<ExportTagsResponse> {
-    const exportedAt = Date.now();
-    const fileName = state.dataset.fileHandle?.name ?? null;
-    const rowCount =
-      typeof state.dataset.totalRows === 'number' && Number.isFinite(state.dataset.totalRows)
-        ? Math.max(0, state.dataset.totalRows)
-        : undefined;
-    const source =
-      fileName != null || typeof rowCount === 'number'
-        ? {
-            fileName,
-            rowCount
-          }
-        : undefined;
-
-    return {
-      version: TAG_EXPORT_VERSION,
-      exportedAt,
-      source,
-      payload: {
-        labels: state.tagging.labels,
-        tags: state.tagging.tags
-      }
-    };
+    return taggingController.exportTags();
   },
   async importTags(request: ImportTagsRequest): Promise<TaggingSnapshot> {
-    const strategy = request.mergeStrategy ?? 'merge';
-    const timestamp = Date.now();
-    const incomingLabels = Array.isArray(request.labels) ? request.labels : [];
-    const normalisedIncoming = incomingLabels.map((entry) => normaliseImportedLabel(entry, timestamp));
-
-    const labelMap: Map<string, LabelDefinition> = new Map();
-    if (strategy === 'merge') {
-      for (const label of state.tagging.labels) {
-        labelMap.set(label.id, label);
-      }
-    }
-    for (const label of normalisedIncoming) {
-      labelMap.set(label.id, label);
-    }
-
-    const nextTags: Record<number, TagRecord> =
-      strategy === 'merge' ? { ...state.tagging.tags } : {};
-    const incomingTags = request.tags ?? {};
-
-    let mutated = strategy === 'replace';
-
-    for (const [rowKey, record] of Object.entries(incomingTags)) {
-      const rowId = Number(rowKey);
-      if (!Number.isFinite(rowId) || rowId < 0) {
-        continue;
-      }
-
-      const incomingLabelId =
-        typeof record.labelId === 'string' && record.labelId.trim().length > 0
-          ? record.labelId.trim()
-          : null;
-      if (incomingLabelId && !labelMap.has(incomingLabelId)) {
-        continue;
-      }
-
-      const label = incomingLabelId ? labelMap.get(incomingLabelId) : undefined;
-      const note =
-        typeof record.note === 'string'
-          ? record.note
-          : undefined;
-      const recordTimestamp =
-        typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
-          ? record.updatedAt
-          : timestamp;
-      const existing = strategy === 'merge' ? nextTags[rowId] : undefined;
-      const nextRecord = buildTagRecord({
-        existing,
-        label,
-        labelId: incomingLabelId,
-        note,
-        timestamp: recordTimestamp
-      });
-
-      if (isTagRecordEmpty(nextRecord)) {
-        if (nextTags[rowId]) {
-          delete nextTags[rowId];
-          mutated = true;
-        }
-        continue;
-      }
-
-      const previous = nextTags[rowId];
-      const changed =
-        !previous ||
-        previous.labelId !== nextRecord.labelId ||
-        previous.note !== nextRecord.note ||
-        previous.color !== nextRecord.color;
-
-      nextTags[rowId] = nextRecord;
-      mutated = mutated || changed;
-    }
-
-    state.updateTagging((tagging) => {
-      tagging.labels = Array.from(labelMap.values());
-      tagging.tags = nextTags;
-    });
-
-    if (mutated || normalisedIncoming.length > 0) {
-      state.markTaggingDirty();
-    }
-
-    return {
-      labels: state.tagging.labels,
-      tags: state.tagging.tags
-    };
+    return taggingController.importTags(request);
   },
   async getFuzzyIndexSnapshot(): Promise<FuzzyIndexSnapshot | null> {
     return state.dataset.fuzzyIndexSnapshot;
@@ -1542,7 +416,7 @@ const api: DataWorkerApi = {
     }
   },
   async persistTags(): Promise<void> {
-    await state.persistTaggingNow();
+    await taggingController.persistTags();
   }
 };
 

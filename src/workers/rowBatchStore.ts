@@ -199,31 +199,31 @@ export class RowBatchStore {
     const headerLengthBuffer = new ArrayBuffer(4);
     new DataView(headerLengthBuffer).setUint32(0, headerBytes.byteLength, true);
 
-    await writable.write(headerLengthBuffer);
-    await writable.write(headerBytes);
+    await writable.write(headerLengthBuffer as FileSystemWriteChunkType);
+    await writable.write(headerBytes as FileSystemWriteChunkType);
 
-    await writable.write(toWritableData(batch.rowIds));
+    await writable.write(toWritableData(batch.rowIds) as FileSystemWriteChunkType);
 
     for (const columnName of header.columnOrder) {
       const column = batch.columns[columnName]!;
 
       if (column.type === 'string') {
         const stringColumn = column as Extract<ColumnBatch, { type: 'string' }>;
-        await writable.write(toWritableData(stringColumn.offsets));
-        await writable.write(toWritableData(stringColumn.data));
+        await writable.write(toWritableData(stringColumn.offsets) as FileSystemWriteChunkType);
+        await writable.write(toWritableData(stringColumn.data) as FileSystemWriteChunkType);
       } else if (column.type === 'number') {
         const numberColumn = column as Extract<ColumnBatch, { type: 'number' }>;
-        await writable.write(toWritableData(numberColumn.data));
+        await writable.write(toWritableData(numberColumn.data) as FileSystemWriteChunkType);
       } else if (column.type === 'boolean') {
         const booleanColumn = column as Extract<ColumnBatch, { type: 'boolean' }>;
-        await writable.write(toWritableData(booleanColumn.data));
+        await writable.write(toWritableData(booleanColumn.data) as FileSystemWriteChunkType);
       } else if (column.type === 'datetime') {
         const datetimeColumn = column as Extract<ColumnBatch, { type: 'datetime' }>;
-        await writable.write(toWritableData(datetimeColumn.data));
+        await writable.write(toWritableData(datetimeColumn.data) as FileSystemWriteChunkType);
       }
 
       if ('nullMask' in column && column.nullMask) {
-        await writable.write(toWritableData(column.nullMask));
+        await writable.write(toWritableData(column.nullMask) as FileSystemWriteChunkType);
       }
     }
 

@@ -32,7 +32,10 @@ describe('useDiagnosticsReporter', () => {
     window.dispatchEvent(errorEvent);
     expect(useDataStore.getState().errorDetails?.message).toBe('Boom');
 
+    const rejectedPromise = Promise.reject(new Error('Rejected'));
+    void rejectedPromise.catch(() => {});
     const rejectionEvent = new PromiseRejectionEvent('unhandledrejection', {
+      promise: rejectedPromise,
       reason: new Error('Rejected')
     });
     window.dispatchEvent(rejectionEvent);
