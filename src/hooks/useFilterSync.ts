@@ -5,6 +5,7 @@ import { useSessionStore, type FilterState } from '@state/sessionStore';
 import { getDataWorker, type ApplyFilterRequest } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
 import type { FuzzyMatchInfo } from '@workers/filterEngine';
+import { reportAppError } from '@utils/diagnostics';
 
 export interface UseFilterSyncResult {
   filters: FilterState[];
@@ -135,6 +136,11 @@ export const useFilterSync = (): UseFilterSyncResult => {
         bumpViewVersion();
       } catch (error) {
         console.error('Failed to apply filter', error);
+        reportAppError('Failed to apply filter', error, {
+          operation: 'filters.apply',
+          context: { filterCount: filtersToApply.length },
+          retry: () => applyFilters(filtersToApply)
+        });
       }
     },
     [setFilters, clearFilterSummary, clearSearchResult, setFilterSummary, setMatchedRowCount, setFuzzyUsed, bumpViewVersion]

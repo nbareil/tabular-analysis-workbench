@@ -28,6 +28,7 @@ import { renderMarkdownToSafeHtml } from '@utils/markdown';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
+import { reportAppError } from '@utils/diagnostics';
 
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
@@ -465,6 +466,10 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
           }
         } catch (error) {
           console.error('Failed to fetch rows for grid', error);
+          reportAppError('Failed to fetch rows', error, {
+            operation: 'grid.fetchRows',
+            context: { startRow: params.startRow, endRow: params.endRow }
+          });
           params.failCallback();
         }
       }
@@ -1056,6 +1061,10 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         }
       } catch (error) {
         console.error('Failed to update labels', error);
+        reportAppError('Failed to update labels', error, {
+          operation: 'grid.updateLabels',
+          context: { rowCount: rowIds.length }
+        });
       } finally {
         setTagMutationPending(false);
         closeMenu();

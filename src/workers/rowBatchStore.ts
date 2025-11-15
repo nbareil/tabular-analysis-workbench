@@ -8,13 +8,13 @@ const MAX_IN_MEMORY_BATCHES = 4;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-const cloneViewToArrayBuffer = (view: ArrayBufferView): ArrayBuffer => {
-  const buffer = new ArrayBuffer(view.byteLength);
-  new Uint8Array(buffer).set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-  return buffer;
-};
+const toWritableData = (source: ArrayBuffer | ArrayBufferView): ArrayBuffer | Uint8Array => {
+  if (source instanceof ArrayBuffer) {
+    return source;
+  }
 
-const cloneArrayBuffer = (buffer: ArrayBuffer): ArrayBuffer => buffer.slice(0);
+  return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+};
 
 interface StoredColumnHeader {
   name: string;
@@ -202,28 +202,28 @@ export class RowBatchStore {
     await writable.write(headerLengthBuffer);
     await writable.write(headerBytes);
 
-    await writable.write(cloneViewToArrayBuffer(batch.rowIds));
+    await writable.write(toWritableData(batch.rowIds));
 
     for (const columnName of header.columnOrder) {
       const column = batch.columns[columnName]!;
 
       if (column.type === 'string') {
         const stringColumn = column as Extract<ColumnBatch, { type: 'string' }>;
-        await writable.write(cloneViewToArrayBuffer(stringColumn.offsets));
-        await writable.write(cloneArrayBuffer(stringColumn.data));
+        await writable.write(toWritableData(stringColumn.offsets));
+        await writable.write(toWritableData(stringColumn.data));
       } else if (column.type === 'number') {
         const numberColumn = column as Extract<ColumnBatch, { type: 'number' }>;
-        await writable.write(cloneViewToArrayBuffer(numberColumn.data));
+        await writable.write(toWritableData(numberColumn.data));
       } else if (column.type === 'boolean') {
         const booleanColumn = column as Extract<ColumnBatch, { type: 'boolean' }>;
-        await writable.write(cloneViewToArrayBuffer(booleanColumn.data));
+        await writable.write(toWritableData(booleanColumn.data));
       } else if (column.type === 'datetime') {
         const datetimeColumn = column as Extract<ColumnBatch, { type: 'datetime' }>;
-        await writable.write(cloneViewToArrayBuffer(datetimeColumn.data));
+        await writable.write(toWritableData(datetimeColumn.data));
       }
 
       if ('nullMask' in column && column.nullMask) {
-        await writable.write(cloneViewToArrayBuffer(column.nullMask));
+        await writable.write(toWritableData(column.nullMask));
       }
     }
 

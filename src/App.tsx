@@ -16,6 +16,7 @@ import OptionsPanel from '@components/options/OptionsPanel';
 import TagNotePanel from '@components/tagging/TagNotePanel';
 import CapabilityGate from '@components/CapabilityGate';
 import CapabilityWarningBanner from '@components/CapabilityWarningBanner';
+import DiagnosticsToast from '@components/DiagnosticsToast';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
 import { logDebug } from '@utils/debugLog';
@@ -28,6 +29,8 @@ import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
 import { useSessionPersistence } from '@/hooks/useSessionPersistence';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { formatBytes } from '@utils/formatBytes';
+import { reportAppError } from '@utils/diagnostics';
+import { useDiagnosticsReporter } from '@/hooks/useDiagnosticsReporter';
 
 const formatTime = (timestamp: number): string => {
   return new Intl.DateTimeFormat(undefined, {
@@ -65,7 +68,6 @@ const AppShell = ({
   const setHeader = useDataStore((state) => state.setHeader);
   const reportProgress = useDataStore((state) => state.reportProgress);
   const complete = useDataStore((state) => state.complete);
-  const setError = useDataStore((state) => state.setError);
   const setSearchResult = useDataStore((state) => state.setSearchResult);
   const clearSearchResult = useDataStore((state) => state.clearSearchResult);
   const loaderStatus = useDataStore((state) => state.status);
@@ -104,6 +106,8 @@ const AppShell = ({
     error: persistenceError,
     lastSavedAt: persistenceLastSavedAt
   } = sessionPersistence;
+
+  useDiagnosticsReporter();
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -160,7 +164,9 @@ const AppShell = ({
           window.addEventListener('beforeunload', handleBeforeUnload);
         }
       } catch (error) {
-        console.error('Failed to initialize data worker', error);
+        reportAppError('Failed to initialize data worker', error, {
+          operation: 'worker.init'
+        });
       }
     };
 
@@ -229,17 +235,24 @@ const AppShell = ({
                 console.error('[app] Worker onError', error);
               }
               if (!cancelled) {
-                setError(error.message ?? 'Failed to load file', error);
+                reportAppError(error.message ?? 'Failed to load file', error, {
+                  operation: 'worker.loadFile',
+                  context: { fileName: fileHandle.name }
+                });
               }
             }
           })
         );
       } catch (error) {
-        if (import.meta.env.DEV) {
-          console.error('[app] loadFile threw', error);
-        }
         if (!cancelled) {
-          setError(error instanceof Error ? error.message : String(error), error);
+          reportAppError(
+            error instanceof Error ? error.message : String(error),
+            error,
+            {
+              operation: 'worker.loadFile',
+              context: { fileName: fileHandle.name }
+            }
+          );
         }
       }
     };
@@ -249,7 +262,7 @@ const AppShell = ({
     return () => {
       cancelled = true;
     };
-  }, [complete, fileHandle, reportProgress, setError, setHeader, startLoading]);
+  }, [complete, fileHandle, reportProgress, setHeader, startLoading]);
 
   useEffect(() => {
     useTagStore.getState().reset();
@@ -448,6 +461,9 @@ const AppShell = ({
         });
       } catch (error) {
         console.error('Failed to perform global search', error);
+        reportAppError('Failed to perform global search', error, {
+          operation: 'grid.search'
+        });
       }
     }, 250);
 
@@ -466,14 +482,16 @@ const AppShell = ({
 
   const handleOpenFile = useCallback(async () => {
     if (!('showOpenFilePicker' in window)) {
-      setError('File System Access API is not supported in this browser.');
+      reportAppError('File System Access API is not supported in this browser.', null, {
+        operation: 'file.open'
+      });
       return;
     }
 
     try {
       const openFilePicker = window.showOpenFilePicker;
       if (!openFilePicker) {
-        setError('File picker unavailable.');
+        reportAppError('File picker unavailable.', null, { operation: 'file.open' });
         return;
       }
 
@@ -497,10 +515,14 @@ const AppShell = ({
       }
     } catch (error) {
       if ((error as DOMException)?.name !== 'AbortError') {
-        setError(error instanceof Error ? error.message : String(error), error);
+        reportAppError(
+          error instanceof Error ? error.message : String(error),
+          error,
+          { operation: 'file.open' }
+        );
       }
     }
-  }, [setError, setFileHandle]);
+  }, [clearSearchResult, setFileHandle]);
 
   const handleSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(event.target.value);
@@ -559,9 +581,12 @@ const AppShell = ({
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Failed to export CSV', error);
-      setError('Failed to export CSV', error instanceof Error ? error : undefined);
+      reportAppError('Failed to export CSV', error, {
+        operation: 'export.csv',
+        context: { matchedRows }
+      });
     }
-  }, [fileHandle, matchedRows, allColumns, setError]);
+  }, [fileHandle, matchedRows, allColumns]);
 
   const handleExportTags = useCallback(async () => {
     try {
@@ -580,9 +605,11 @@ const AppShell = ({
       }
     } catch (error) {
       console.error('Failed to export tags', error);
-      setError('Failed to export tags', error instanceof Error ? error : undefined);
+      reportAppError('Failed to export tags', error, {
+        operation: 'export.tags'
+      });
     }
-  }, [exportTags, fileHandle, setError]);
+  }, [exportTags, fileHandle]);
 
   const handleDownloadDiagnostics = useCallback(() => {
     if (!errorDetails) {
@@ -667,15 +694,6 @@ const AppShell = ({
           >
             {loaderStatus === 'loading' ? 'Loading…' : 'Open File'}
           </button>
-          {errorDetails && (
-            <button
-              type="button"
-              className="rounded border border-red-500/60 px-2 py-1 text-xs text-red-200"
-              onClick={handleDownloadDiagnostics}
-            >
-              Diagnostics
-            </button>
-          )}
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
@@ -791,6 +809,13 @@ const AppShell = ({
         }}
         saving={noteSaving}
       />
+      {errorDetails && (
+        <DiagnosticsToast
+          details={errorDetails}
+          onDismiss={clearErrorDetails}
+          onDownload={handleDownloadDiagnostics}
+        />
+      )}
     </div>
   );
 };

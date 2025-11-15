@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import { useDataStore } from '@state/dataStore';
 import { useSessionStore } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
+import { reportAppError } from '@utils/diagnostics';
 import type { GroupAggregationDefinition, GroupingResult } from '@workers/types';
 
 type AggregateOperator = GroupAggregationDefinition['operator'];
@@ -216,6 +217,11 @@ export const useGrouping = (): UseGroupingResult => {
         error instanceof Error ? error.message : 'Failed to compute grouping results';
       setGroupingError(message);
       console.error('Failed to compute grouping results', error);
+      reportAppError('Failed to compute grouping results', error, {
+        operation: 'grouping.compute',
+        context: { groups, aggregationCount: sanitizedAggregations.length },
+        retry: () => performRefresh()
+      });
     }
   }, [
     clearGrouping,

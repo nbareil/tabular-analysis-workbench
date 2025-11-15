@@ -20,7 +20,7 @@ export interface GridRow {
 
 export type LoaderStatus = 'idle' | 'loading' | 'ready' | 'error';
 
-interface DataState {
+export interface DataState {
   fileName: string | null;
   columns: GridColumn[];
   columnInference: Record<string, ColumnInference>;

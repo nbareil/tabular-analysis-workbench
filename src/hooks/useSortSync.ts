@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useDataStore } from '@state/dataStore';
 import { useSessionStore, type SessionSnapshot } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
+import { reportAppError } from '@utils/diagnostics';
 
 type SortState = SessionSnapshot['sorts'][number];
 
@@ -62,6 +63,11 @@ export const useSortSync = (): UseSortSyncResult => {
         return response.sorts;
       } catch (error) {
         console.error('Failed to apply sorts', error);
+        reportAppError('Failed to apply sorts', error, {
+          operation: 'sorts.apply',
+          context: { sortCount: nextSorts.length },
+          retry: () => applySortsInternal(nextSorts, options)
+        });
         throw error;
       }
     },

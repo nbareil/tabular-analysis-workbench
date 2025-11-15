@@ -47,8 +47,8 @@ import {
 } from './fuzzyIndexStore';
 import { createFuzzyFingerprint, fuzzySnapshotMatchesFingerprint } from './fuzzyIndexUtils';
 import { logDebug } from '../utils/debugLog';
-import { TaggingStore } from './taggingStore';
 import { buildTagRecord, cascadeLabelDeletion, isTagRecordEmpty } from './taggingHelpers';
+import { createDataWorkerState } from './state/dataWorkerState';
 
 export type {
   GroupingRequest,
@@ -197,73 +197,7 @@ export interface DataWorkerApi {
   persistTags: () => Promise<void>;
 }
 
-const state: {
-  options: {
-    enableDuckDb: boolean;
-    chunkSize: number;
-    debugLogging: boolean;
-    slowBatchThresholdMs: number;
-  };
-  dataset: {
-    batchStore: RowBatchStore | null;
-    datasetKey: string | null;
-    header: string[];
-    columnTypes: Record<string, ColumnType>;
-    columnInference: Record<string, ColumnInference>;
-    filterRowIds: Uint32Array | null;
-    filterExpression: FilterNode | null;
-    sorts: SortDefinition[];
-    sortedRowIds: Uint32Array | null;
-    totalRows: number;
-    bytesParsed: number;
-    fileHandle: FileSystemFileHandle | null;
-    fuzzyIndexStore: FuzzyIndexStore | null;
-    fuzzyIndexSnapshot: FuzzyIndexSnapshot | null;
-    fuzzyFingerprint: FuzzyIndexFingerprint | null;
-    backgroundSortPromise: Promise<Uint32Array | void> | null;
-    sortComplete: boolean;
-  };
-  tagging: {
-    labels: LabelDefinition[];
-    tags: Record<number, TagRecord>;
-    store: TaggingStore | null;
-    dirty: boolean;
-    persistTimer: number | null;
-  };
-} = {
-  options: {
-    enableDuckDb: false,
-    chunkSize: 1_048_576,
-    debugLogging: false,
-    slowBatchThresholdMs: 32
-  },
-  dataset: {
-    batchStore: null,
-    datasetKey: null,
-    header: [],
-    columnTypes: {},
-    columnInference: {},
-    filterRowIds: null,
-    filterExpression: null,
-    sorts: [],
-    sortedRowIds: null,
-    totalRows: 0,
-    bytesParsed: 0,
-    fileHandle: null,
-    fuzzyIndexStore: null,
-    fuzzyIndexSnapshot: null,
-    fuzzyFingerprint: null,
-    backgroundSortPromise: null,
-    sortComplete: true
-  },
-  tagging: {
-    labels: [],
-    tags: {},
-    store: null,
-    dirty: false,
-    persistTimer: null
-  }
-};
+const state = createDataWorkerState();
 
 const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -275,96 +209,12 @@ const roundMs = (value: number): number => {
   return Math.round(value * 100) / 100;
 };
 
-const TAG_PERSIST_DEBOUNCE_MS = 30_000;
 const DEFAULT_LABEL_COLOR = '#8899ff';
 
 const generateRandomId = (): string =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-
-const clearTaggingPersistTimer = (): void => {
-  if (state.tagging.persistTimer != null) {
-    clearTimeout(state.tagging.persistTimer);
-    state.tagging.persistTimer = null;
-  }
-};
-
-const persistTaggingNow = async (): Promise<void> => {
-  if (!state.tagging.store || !state.tagging.dirty) {
-    return;
-  }
-
-  try {
-    await state.tagging.store.save({
-      labels: state.tagging.labels,
-      tags: state.tagging.tags
-    });
-    state.tagging.dirty = false;
-  } catch (error) {
-    console.warn('[data-worker][tagging] Failed to persist snapshot', error);
-  }
-};
-
-const scheduleTaggingPersist = (): void => {
-  if (!state.tagging.store) {
-    return;
-  }
-
-  clearTaggingPersistTimer();
-  state.tagging.persistTimer = setTimeout(() => {
-    void persistTaggingNow();
-  }, TAG_PERSIST_DEBOUNCE_MS) as unknown as number;
-};
-
-const resetTaggingState = (): void => {
-  clearTaggingPersistTimer();
-  state.tagging.labels = [];
-  state.tagging.tags = {};
-  state.tagging.store = null;
-  state.tagging.dirty = false;
-};
-
-const hydrateTaggingStore = async (
-  fingerprint: FuzzyIndexFingerprint | null
-): Promise<void> => {
-  clearTaggingPersistTimer();
-
-  if (!fingerprint) {
-    state.tagging.store = null;
-    state.tagging.labels = [];
-    state.tagging.tags = {};
-    state.tagging.dirty = false;
-    return;
-  }
-
-  try {
-    const store = await TaggingStore.create(fingerprint);
-    state.tagging.store = store;
-
-    const snapshot = await store.load();
-    if (snapshot) {
-      state.tagging.labels = snapshot.labels ?? [];
-      state.tagging.tags = snapshot.tags ?? {};
-      state.tagging.dirty = false;
-    } else {
-      state.tagging.labels = [];
-      state.tagging.tags = {};
-      state.tagging.dirty = false;
-    }
-  } catch (error) {
-    console.warn('[data-worker][tagging] Failed to hydrate tagging store', error);
-    state.tagging.store = null;
-    state.tagging.labels = [];
-    state.tagging.tags = {};
-    state.tagging.dirty = false;
-  }
-};
-
-const markTaggingDirty = (): void => {
-  state.tagging.dirty = true;
-  scheduleTaggingPersist();
-};
 
 const normaliseImportedLabel = (label: LabelDefinition, fallbackTimestamp: number): LabelDefinition => {
   const safeId =
@@ -479,19 +329,14 @@ const materializeViewWindow = async (offset: number, limit?: number): Promise<Ma
 
 const api: DataWorkerApi = {
   async init(options) {
-    const previous = state.options;
     const threshold = options.slowBatchThresholdMs;
 
-    state.options = {
-      enableDuckDb: options.enableDuckDb ?? previous.enableDuckDb,
-      chunkSize: options.chunkSize ?? previous.chunkSize,
-      debugLogging:
-        typeof options.debugLogging === 'boolean' ? options.debugLogging : previous.debugLogging,
-      slowBatchThresholdMs:
-        typeof threshold === 'number' && Number.isFinite(threshold) && threshold >= 0
-          ? threshold
-          : previous.slowBatchThresholdMs
-    };
+    state.setOptions({
+      enableDuckDb: options.enableDuckDb,
+      chunkSize: options.chunkSize,
+      debugLogging: options.debugLogging,
+      slowBatchThresholdMs: threshold
+    });
   },
   async ping() {
     return 'pong';
@@ -501,8 +346,8 @@ const api: DataWorkerApi = {
       throw new Error('A file handle must be provided to loadFile.');
     }
 
-    await persistTaggingNow();
-    resetTaggingState();
+    await state.persistTaggingNow();
+    state.resetTagging();
 
     const debugEnabled = state.options.debugLogging;
     const slowBatchThreshold = state.options.slowBatchThresholdMs;
@@ -534,21 +379,11 @@ const api: DataWorkerApi = {
     const batchStore = await RowBatchStore.create(datasetKey);
     debugLog('RowBatchStore.create completed', { durationMs: roundMs(now() - batchStoreStart) });
 
-    state.dataset.batchStore = batchStore;
-    state.dataset.datasetKey = datasetKey;
-    state.dataset.header = [];
-    state.dataset.columnTypes = {};
-    state.dataset.columnInference = {};
-    state.dataset.filterRowIds = null;
-    state.dataset.filterExpression = null;
-    state.dataset.sorts = [];
-    state.dataset.sortedRowIds = null;
-    state.dataset.totalRows = 0;
-    state.dataset.bytesParsed = 0;
-    state.dataset.fileHandle = handle;
-    state.dataset.fuzzyIndexStore = null;
-    state.dataset.fuzzyIndexSnapshot = null;
-    state.dataset.fuzzyFingerprint = null;
+    state.prepareDatasetForLoad({
+      batchStore,
+      datasetKey,
+      fileHandle: handle
+    });
 
     const fileStart = now();
     const file = await handle.getFile();
@@ -565,8 +400,10 @@ const api: DataWorkerApi = {
     debugLog('FuzzyIndexStore.create completed', {
       durationMs: roundMs(now() - fuzzyStoreStart)
     });
-    state.dataset.fuzzyIndexStore = fuzzyIndexStore;
-    state.dataset.fuzzyFingerprint = fuzzyFingerprint;
+    state.updateDataset((dataset) => {
+      dataset.fuzzyIndexStore = fuzzyIndexStore;
+      dataset.fuzzyFingerprint = fuzzyFingerprint;
+    });
 
     const cachedFuzzyIndex = await fuzzyIndexStore.load();
     let fuzzyIndexBuilder: FuzzyIndexBuilder | undefined;
@@ -575,7 +412,9 @@ const api: DataWorkerApi = {
       cachedFuzzyIndex &&
       fuzzySnapshotMatchesFingerprint(cachedFuzzyIndex, fuzzyFingerprint)
     ) {
-      state.dataset.fuzzyIndexSnapshot = cachedFuzzyIndex;
+      state.updateDataset((dataset) => {
+        dataset.fuzzyIndexSnapshot = cachedFuzzyIndex;
+      });
       debugLog('Hydrated fuzzy index snapshot from cache', {
         createdAt: cachedFuzzyIndex.createdAt,
         columnCount: cachedFuzzyIndex.columns.length,
@@ -595,7 +434,7 @@ const api: DataWorkerApi = {
       debugLog('Created new FuzzyIndexBuilder for parsing');
     }
 
-    await hydrateTaggingStore(fuzzyFingerprint);
+    await state.hydrateTaggingStore(fuzzyFingerprint);
 
     const compression = detectCompression({
       fileName: file.name ?? handle.name,
@@ -708,7 +547,9 @@ const api: DataWorkerApi = {
         source,
         {
           onHeader: async (header) => {
-            state.dataset.header = header;
+            state.updateDataset((dataset) => {
+              dataset.header = header;
+            });
             if (callbacks.onStart) {
               const callbackStart = now();
               await callbacks.onStart({ columns: header });
@@ -763,16 +604,18 @@ const api: DataWorkerApi = {
               });
             }
 
-            state.dataset.columnTypes = {
-              ...state.dataset.columnTypes,
-              ...batch.columnTypes
-            };
-            state.dataset.columnInference = {
-              ...state.dataset.columnInference,
-              ...batch.columnInference
-            };
-            state.dataset.totalRows = finalRows;
-            state.dataset.bytesParsed = finalBytes;
+            state.updateDataset((dataset) => {
+              dataset.columnTypes = {
+                ...dataset.columnTypes,
+                ...batch.columnTypes
+              };
+              dataset.columnInference = {
+                ...dataset.columnInference,
+                ...batch.columnInference
+              };
+              dataset.totalRows = finalRows;
+              dataset.bytesParsed = finalBytes;
+            });
 
             if (callbacks.onProgress) {
               const payload = {
@@ -826,8 +669,10 @@ const api: DataWorkerApi = {
         bytesParsed: finalBytes
       });
 
-      state.dataset.totalRows = finalRows;
-      state.dataset.bytesParsed = finalBytes;
+      state.updateDataset((dataset) => {
+        dataset.totalRows = finalRows;
+        dataset.bytesParsed = finalBytes;
+      });
 
       const fuzzyRowBuildMs = roundMs(parseMetrics?.fuzzyRowBuildMs ?? 0);
       let fuzzySnapshotMs = 0;
@@ -860,7 +705,9 @@ const api: DataWorkerApi = {
           durationMs: roundMs(now() - persistStart)
         });
 
-        state.dataset.fuzzyIndexSnapshot = fuzzySnapshot;
+        state.updateDataset((dataset) => {
+          dataset.fuzzyIndexSnapshot = fuzzySnapshot;
+        });
       }
 
       if (callbacks.onComplete) {
@@ -970,8 +817,10 @@ const api: DataWorkerApi = {
     const totalRows = state.dataset.totalRows;
 
     if (!totalRows) {
-      state.dataset.sorts = [];
-      state.dataset.sortedRowIds = null;
+      state.updateDataset((dataset) => {
+        dataset.sorts = [];
+        dataset.sortedRowIds = null;
+      });
       return { rows: [], totalRows: 0, matchedRows: 0, sorts: [] };
     }
 
@@ -981,8 +830,10 @@ const api: DataWorkerApi = {
     }
 
     const validSorts = sorts.filter((sort) => state.dataset.columnTypes[sort.column] != null);
-    state.dataset.sorts = validSorts;
-    state.dataset.sortedRowIds = null;
+    state.updateDataset((dataset) => {
+      dataset.sorts = validSorts;
+      dataset.sortedRowIds = null;
+    });
 
     if (!validSorts.length) {
       const rows = await materializeViewWindow(offset, limit);
@@ -1005,7 +856,9 @@ const api: DataWorkerApi = {
     // Cancel any existing background sort
     if (state.dataset.backgroundSortPromise) {
       // Note: In a real implementation, we'd need a way to cancel the promise
-      state.dataset.backgroundSortPromise = null;
+      state.updateDataset((dataset) => {
+        dataset.backgroundSortPromise = null;
+      });
     }
 
     let sortResult;
@@ -1021,16 +874,23 @@ const api: DataWorkerApi = {
 
       // Store the background completion promise
       if (sortResult.backgroundPromise) {
-        state.dataset.backgroundSortPromise = sortResult.backgroundPromise.then(completeSortedIds => {
-          // Update the sortedRowIds with complete results
-          state.dataset.sortedRowIds = completeSortedIds;
-          state.dataset.sortComplete = true;
-          state.dataset.backgroundSortPromise = null;
-          return completeSortedIds;
+        state.updateDataset((dataset) => {
+          dataset.backgroundSortPromise = sortResult.backgroundPromise!.then(
+            (completeSortedIds) => {
+              state.updateDataset((inner) => {
+                inner.sortedRowIds = completeSortedIds;
+                inner.sortComplete = true;
+                inner.backgroundSortPromise = null;
+              });
+              return completeSortedIds;
+            }
+          );
         });
       }
 
-      state.dataset.sortComplete = sortResult.sortComplete;
+      state.updateDataset((dataset) => {
+        dataset.sortComplete = sortResult.sortComplete;
+      });
     } else {
       // Use regular sorting for smaller datasets
       const sortedRowIds = await sortRowIds(
@@ -1040,11 +900,15 @@ const api: DataWorkerApi = {
         validSorts
       );
       sortResult = { sortedRowIds, sortComplete: true };
-      state.dataset.sortComplete = true;
-      state.dataset.backgroundSortPromise = null;
+      state.updateDataset((dataset) => {
+        dataset.sortComplete = true;
+        dataset.backgroundSortPromise = null;
+      });
     }
 
-    state.dataset.sortedRowIds = sortResult.sortedRowIds;
+    state.updateDataset((dataset) => {
+      dataset.sortedRowIds = sortResult.sortedRowIds;
+    });
 
     const rows = await materializeViewWindow(offset, limit);
     return {
@@ -1057,9 +921,11 @@ const api: DataWorkerApi = {
     };
   },
   async applyFilter({ expression, offset = 0, limit }: ApplyFilterRequest): Promise<ApplyFilterResult> {
-    state.dataset.filterExpression = expression;
-    state.dataset.filterRowIds = null;
-    state.dataset.sortedRowIds = null;
+    state.updateDataset((dataset) => {
+      dataset.filterExpression = expression;
+      dataset.filterRowIds = null;
+      dataset.sortedRowIds = null;
+    });
 
     const totalRows = state.dataset.totalRows;
 
@@ -1111,7 +977,9 @@ const api: DataWorkerApi = {
       }
     }
 
-    state.dataset.filterRowIds = Uint32Array.from(matchedRowIds);
+    state.updateDataset((dataset) => {
+      dataset.filterRowIds = Uint32Array.from(matchedRowIds);
+    });
 
     const rows = await materializeViewWindow(offset, limit);
     return {
@@ -1334,40 +1202,42 @@ const api: DataWorkerApi = {
     const updated: TagRowsResponse['updated'] = {};
     let mutated = false;
 
-    for (const rowId of rowIds) {
-      if (!Number.isFinite(rowId) || rowId < 0) {
-        continue;
-      }
-
-      const existing = state.tagging.tags[rowId];
-      const record = buildTagRecord({
-        existing,
-        label,
-        labelId: resolvedLabelId,
-        note,
-        timestamp
-      });
-
-      if (isTagRecordEmpty(record)) {
-        if (existing) {
-          delete state.tagging.tags[rowId];
-          mutated = true;
+    state.updateTagging((tagging) => {
+      for (const rowId of rowIds) {
+        if (!Number.isFinite(rowId) || rowId < 0) {
+          continue;
         }
-      } else {
-        const changed =
-          !existing ||
-          existing.labelId !== record.labelId ||
-          existing.note !== record.note ||
-          existing.color !== record.color;
-        state.tagging.tags[rowId] = record;
-        mutated = mutated || changed;
-      }
 
-      updated[rowId] = record;
-    }
+        const existing = tagging.tags[rowId];
+        const record = buildTagRecord({
+          existing,
+          label,
+          labelId: resolvedLabelId,
+          note,
+          timestamp
+        });
+
+        if (isTagRecordEmpty(record)) {
+          if (existing) {
+            delete tagging.tags[rowId];
+            mutated = true;
+          }
+        } else {
+          const changed =
+            !existing ||
+            existing.labelId !== record.labelId ||
+            existing.note !== record.note ||
+            existing.color !== record.color;
+          tagging.tags[rowId] = record;
+          mutated = mutated || changed;
+        }
+
+        updated[rowId] = record;
+      }
+    });
 
     if (mutated) {
-      markTaggingDirty();
+      state.markTaggingDirty();
     }
 
     return { updated };
@@ -1377,24 +1247,26 @@ const api: DataWorkerApi = {
     const updated: TagRowsResponse['updated'] = {};
     let mutated = false;
 
-    for (const rowId of rowIds) {
-      if (!Number.isFinite(rowId) || rowId < 0) {
-        continue;
-      }
+    state.updateTagging((tagging) => {
+      for (const rowId of rowIds) {
+        if (!Number.isFinite(rowId) || rowId < 0) {
+          continue;
+        }
 
-      if (state.tagging.tags[rowId]) {
-        delete state.tagging.tags[rowId];
-        mutated = true;
-      }
+        if (tagging.tags[rowId]) {
+          delete tagging.tags[rowId];
+          mutated = true;
+        }
 
-      updated[rowId] = {
-        labelId: null,
-        updatedAt: timestamp
-      };
-    }
+        updated[rowId] = {
+          labelId: null,
+          updatedAt: timestamp
+        };
+      }
+    });
 
     if (mutated) {
-      markTaggingDirty();
+      state.markTaggingDirty();
     }
 
     return { updated };
@@ -1413,7 +1285,6 @@ const api: DataWorkerApi = {
       typeof label.description === 'string' && label.description.trim().length > 0
         ? label.description.trim()
         : undefined;
-    const existingIndex = state.tagging.labels.findIndex((entry) => entry.id === label.id);
     const nextLabel: LabelDefinition = {
       id: label.id,
       name: safeName,
@@ -1423,41 +1294,50 @@ const api: DataWorkerApi = {
       updatedAt: timestamp
     };
 
-    if (existingIndex >= 0) {
-      state.tagging.labels[existingIndex] = nextLabel;
-    } else {
-      state.tagging.labels.push(nextLabel);
-    }
-
-    for (const [key, record] of Object.entries(state.tagging.tags)) {
-      if (record.labelId !== nextLabel.id) {
-        continue;
+    state.updateTagging((tagging) => {
+      const existingIndex = tagging.labels.findIndex((entry) => entry.id === label.id);
+      if (existingIndex >= 0) {
+        tagging.labels[existingIndex] = nextLabel;
+      } else {
+        tagging.labels.push(nextLabel);
       }
 
-      const rowId = Number(key);
-      if (!Number.isFinite(rowId) || rowId < 0) {
-        continue;
+      for (const [key, record] of Object.entries(tagging.tags)) {
+        if (record.labelId !== nextLabel.id) {
+          continue;
+        }
+
+        const rowId = Number(key);
+        if (!Number.isFinite(rowId) || rowId < 0) {
+          continue;
+        }
+
+        tagging.tags[rowId] = {
+          ...record,
+          color: nextLabel.color,
+          updatedAt: timestamp
+        };
       }
+    });
 
-      state.tagging.tags[rowId] = {
-        ...record,
-        color: nextLabel.color,
-        updatedAt: timestamp
-      };
-    }
-
-    markTaggingDirty();
+    state.markTaggingDirty();
 
     return nextLabel;
   },
   async deleteLabel({ labelId }: DeleteLabelRequest): Promise<DeleteLabelResponse> {
-    const before = state.tagging.labels.length;
-    state.tagging.labels = state.tagging.labels.filter((label) => label.id !== labelId);
     const timestamp = Date.now();
     const updated: Record<number, TagRecord> = {};
+    let deleted = false;
 
-    for (const [rowId, record] of Object.entries(state.tagging.tags)) {
-      if (record.labelId === labelId) {
+    state.updateTagging((tagging) => {
+      const before = tagging.labels.length;
+      tagging.labels = tagging.labels.filter((label) => label.id !== labelId);
+
+      for (const [rowId, record] of Object.entries(tagging.tags)) {
+        if (record.labelId !== labelId) {
+          continue;
+        }
+
         const numericRowId = Number(rowId);
         if (!Number.isFinite(numericRowId) || numericRowId < 0) {
           continue;
@@ -1465,18 +1345,18 @@ const api: DataWorkerApi = {
 
         const nextRecord = cascadeLabelDeletion(record, timestamp);
         if (isTagRecordEmpty(nextRecord)) {
-          delete state.tagging.tags[numericRowId];
+          delete tagging.tags[numericRowId];
         } else {
-          state.tagging.tags[numericRowId] = nextRecord;
+          tagging.tags[numericRowId] = nextRecord;
         }
 
         updated[numericRowId] = nextRecord;
       }
-    }
 
-    const deleted = state.tagging.labels.length < before;
+      deleted = tagging.labels.length < before;
+    });
     if (deleted || Object.keys(updated).length > 0) {
-      markTaggingDirty();
+      state.markTaggingDirty();
     }
 
     return { deleted, updated };
@@ -1521,7 +1401,6 @@ const api: DataWorkerApi = {
     for (const label of normalisedIncoming) {
       labelMap.set(label.id, label);
     }
-    state.tagging.labels = Array.from(labelMap.values());
 
     const nextTags: Record<number, TagRecord> =
       strategy === 'merge' ? { ...state.tagging.tags } : {};
@@ -1580,10 +1459,13 @@ const api: DataWorkerApi = {
       mutated = mutated || changed;
     }
 
-    state.tagging.tags = nextTags;
+    state.updateTagging((tagging) => {
+      tagging.labels = Array.from(labelMap.values());
+      tagging.tags = nextTags;
+    });
 
     if (mutated || normalisedIncoming.length > 0) {
-      markTaggingDirty();
+      state.markTaggingDirty();
     }
 
     return {
@@ -1638,7 +1520,9 @@ const api: DataWorkerApi = {
       columns: request.columns
     };
 
-    state.dataset.fuzzyIndexSnapshot = snapshot;
+    state.updateDataset((dataset) => {
+      dataset.fuzzyIndexSnapshot = snapshot;
+    });
 
     if (
       state.dataset.fuzzyIndexStore &&
@@ -1650,13 +1534,15 @@ const api: DataWorkerApi = {
     return snapshot;
   },
   async clearFuzzyIndexSnapshot(): Promise<void> {
-    state.dataset.fuzzyIndexSnapshot = null;
+    state.updateDataset((dataset) => {
+      dataset.fuzzyIndexSnapshot = null;
+    });
     if (state.dataset.fuzzyIndexStore) {
       await state.dataset.fuzzyIndexStore.clear();
     }
   },
   async persistTags(): Promise<void> {
-    await persistTaggingNow();
+    await state.persistTaggingNow();
   }
 };
 
