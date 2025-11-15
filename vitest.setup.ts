@@ -24,3 +24,21 @@ if (typeof globalThis.navigator === 'undefined') {
     writable: true
   });
 }
+
+if (typeof globalThis.PromiseRejectionEvent === 'undefined') {
+  class PolyfilledPromiseRejectionEvent extends Event implements PromiseRejectionEvent {
+    readonly promise: Promise<unknown>;
+    readonly reason: unknown;
+
+    constructor(type: string, init?: PromiseRejectionEventInit) {
+      super(type, init);
+      this.promise = init?.promise ?? Promise.resolve(undefined);
+      this.reason = init?.reason ?? undefined;
+    }
+  }
+
+  const globalWithPolyfill = globalThis as typeof globalThis & {
+    PromiseRejectionEvent: typeof PolyfilledPromiseRejectionEvent;
+  };
+  globalWithPolyfill.PromiseRejectionEvent = PolyfilledPromiseRejectionEvent;
+}
