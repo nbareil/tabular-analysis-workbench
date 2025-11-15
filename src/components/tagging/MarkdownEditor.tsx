@@ -1,9 +1,5 @@
-import { useMemo } from 'react';
-import CodeMirror from '@uiw/react-codemirror';
-import { markdown } from '@codemirror/lang-markdown';
-import { oneDark } from '@codemirror/theme-one-dark';
-import { EditorView, placeholder as placeholderExtension, keymap } from '@codemirror/view';
-import { indentWithTab } from '@codemirror/commands';
+import { useCallback, useEffect, useRef } from 'react';
+import type { KeyboardEvent } from 'react';
 
 interface MarkdownEditorProps {
   value: string;
@@ -14,33 +10,6 @@ interface MarkdownEditorProps {
   onSubmitShortcut?: () => void;
 }
 
-const editorTheme = EditorView.theme(
-  {
-    '&': {
-      backgroundColor: 'transparent',
-      border: '1px solid #0f172a',
-      borderRadius: '0.375rem',
-      fontFamily: 'var(--data-font-family, ui-monospace)',
-      fontSize: '0.875rem'
-    },
-    '&.cm-editor.cm-focused': {
-      outline: '2px solid rgba(148, 163, 184, 0.4)',
-      outlineOffset: '1px'
-    },
-    '.cm-content': {
-      padding: '0.5rem 0.75rem',
-      minHeight: '14rem'
-    },
-    '.cm-scroller': {
-      lineHeight: '1.5'
-    },
-    '.cm-placeholder': {
-      color: 'rgba(148, 163, 184, 0.9)'
-    }
-  },
-  { dark: true }
-);
-
 const MarkdownEditor = ({
   value,
   onChange,
@@ -49,47 +18,46 @@ const MarkdownEditor = ({
   autoFocus,
   onSubmitShortcut
 }: MarkdownEditorProps): JSX.Element => {
-  const extensions = useMemo(() => {
-    const base = [markdown(), EditorView.lineWrapping, keymap.of([indentWithTab]), editorTheme];
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
-    if (placeholder) {
-      base.push(placeholderExtension(placeholder));
+  useEffect(() => {
+    if (!autoFocus) {
+      return;
     }
 
-    if (onSubmitShortcut) {
-      base.push(
-        keymap.of([
-          {
-            key: 'Mod-Enter',
-            run: () => {
-              onSubmitShortcut();
-              return true;
-            }
-          }
-        ])
-      );
+    const element = textAreaRef.current;
+    if (element) {
+      element.focus();
+      element.setSelectionRange(element.value.length, element.value.length);
     }
+  }, [autoFocus]);
 
-    return base;
-  }, [onSubmitShortcut, placeholder]);
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (!onSubmitShortcut) {
+        return;
+      }
+
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        onSubmitShortcut();
+      }
+    },
+    [onSubmitShortcut]
+  );
 
   return (
-    <CodeMirror
+    <textarea
+      ref={textAreaRef}
       aria-label="Markdown note editor"
       value={value}
-      height="14rem"
-      minHeight="14rem"
-      editable={!disabled}
-      basicSetup={{
-        lineNumbers: false,
-        foldGutter: false,
-        highlightActiveLine: false,
-        highlightActiveLineGutter: false
-      }}
+      disabled={disabled}
+      placeholder={placeholder}
       autoFocus={autoFocus}
-      onChange={(next) => onChange(next)}
-      extensions={extensions}
-      theme={oneDark}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={handleKeyDown}
+      className="h-56 w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-50 outline-none focus-visible:border-slate-600 focus-visible:ring-2 focus-visible:ring-slate-500/40"
+      style={{ resize: 'vertical' }}
     />
   );
 };

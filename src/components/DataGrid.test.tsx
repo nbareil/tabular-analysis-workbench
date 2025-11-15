@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
 
 import type { FilterState } from '@state/sessionStore';
-import type { ColumnState } from 'ag-grid-community';
+import type { ColumnState, GridApi } from 'ag-grid-community';
 import type { ICellRendererParams } from 'ag-grid-community';
 import type { TagCellValue } from '@utils/tagCells';
 
@@ -10,7 +10,8 @@ import {
   MarkdownTooltip,
   evaluateFilterMenuMetadata,
   buildSortStateFromColumnState,
-  getNextRowIndex
+  getNextRowIndex,
+  toggleRowSelection
 } from './DataGrid';
 
 describe('evaluateFilterMenuMetadata', () => {
@@ -250,5 +251,45 @@ describe('getNextRowIndex', () => {
         direction: 'down'
       })
     ).toBeNull();
+  });
+});
+
+describe('toggleRowSelection', () => {
+  const createGridApi = (
+    rowNode: Partial<{
+      setSelected: (value: boolean, clearSelection?: boolean, source?: string) => void;
+      isSelected: () => boolean;
+    }> | null
+  ): GridApi =>
+    ({
+      getRowNode: vi.fn(() => rowNode)
+    } as unknown as GridApi);
+
+  it('deselects the row when it is already selected', () => {
+    const setSelected = vi.fn();
+    const isSelected = vi.fn(() => true);
+    const gridApi = createGridApi({ setSelected, isSelected });
+
+    const result = toggleRowSelection(gridApi, 42);
+
+    expect(result).toBe(true);
+    expect(setSelected).toHaveBeenCalledWith(false, false, 'api');
+  });
+
+  it('selects the row when it is currently unselected', () => {
+    const setSelected = vi.fn();
+    const isSelected = vi.fn(() => false);
+    const gridApi = createGridApi({ setSelected, isSelected });
+
+    const result = toggleRowSelection(gridApi, 7);
+
+    expect(result).toBe(true);
+    expect(setSelected).toHaveBeenCalledWith(true, false, 'api');
+  });
+
+  it('returns false when the row does not exist', () => {
+    const gridApi = createGridApi(null);
+
+    expect(toggleRowSelection(gridApi, 10)).toBe(false);
   });
 });

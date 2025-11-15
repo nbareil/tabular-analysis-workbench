@@ -128,6 +128,22 @@ export const getNextRowIndex = ({
   return nextIndex;
 };
 
+export const toggleRowSelection = (gridApi: GridApi | null, rowId: number | null): boolean => {
+  if (!gridApi || rowId == null) {
+    return false;
+  }
+
+  const rowNode = gridApi.getRowNode(String(rowId));
+  if (!rowNode || typeof rowNode.setSelected !== 'function') {
+    return false;
+  }
+
+  const currentlySelected =
+    typeof rowNode.isSelected === 'function' ? rowNode.isSelected() : false;
+  rowNode.setSelected(!currentlySelected, false, 'api');
+  return true;
+};
+
 const TagCellRenderer = ({
 value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element => {
@@ -216,6 +232,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const [tagMutationPending, setTagMutationPending] = useState(false);
   const [keyboardFocusedRowId, setKeyboardFocusedRowId] = useState<number | null>(null);
+  const keyboardFocusedRowIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!columns.length) {
@@ -746,7 +763,11 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         return;
       }
 
-      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+      const key = event.key;
+      const isArrowKey = key === 'ArrowDown' || key === 'ArrowUp';
+      const isSpaceKey = key === ' ' || key === 'Spacebar';
+
+      if (!isArrowKey && !isSpaceKey) {
         return;
       }
 
@@ -759,6 +780,14 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         return;
       }
 
+      if (isSpaceKey) {
+        const toggled = toggleRowSelection(gridApi, keyboardFocusedRowIdRef.current);
+        if (toggled) {
+          event.preventDefault();
+        }
+        return;
+      }
+
       const rowCount = gridApi.getDisplayedRowCount();
       if (rowCount <= 0) {
         return;
@@ -766,7 +795,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
       const selectedNodes = gridApi.getSelectedNodes();
       const anchorNode = selectedNodes[selectedNodes.length - 1];
-      const direction = event.key === 'ArrowDown' ? 'down' : 'up';
+      const direction = key === 'ArrowDown' ? 'down' : 'up';
       const targetIndex = getNextRowIndex({
         rowCount,
         currentIndex: anchorNode?.rowIndex ?? null,
@@ -817,6 +846,10 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       container.removeEventListener('keydown', handleKeyDown);
     };
   }, [columnApi, columnDefs, gridApi]);
+
+  useEffect(() => {
+    keyboardFocusedRowIdRef.current = keyboardFocusedRowId;
+  }, [keyboardFocusedRowId]);
 
   useEffect(() => {
     if (!gridApi) {
