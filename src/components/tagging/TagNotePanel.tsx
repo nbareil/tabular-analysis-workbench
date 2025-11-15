@@ -4,6 +4,7 @@ import { useTagStore } from '@state/tagStore';
 import TagPalette from './TagPalette';
 import MarkdownEditor from './MarkdownEditor';
 import { renderMarkdownToSafeHtml } from '@utils/markdown';
+import { shallow } from 'zustand/shallow';
 
 interface TagNotePanelProps {
   open: boolean;
@@ -26,7 +27,15 @@ const TagNotePanel = ({
   onClose,
   saving = false
 }: TagNotePanelProps): JSX.Element | null => {
-  const { labels, status, error, load } = useTagStore();
+  const { labels, status, error } = useTagStore(
+    (state) => ({
+      labels: state.labels,
+      status: state.status,
+      error: state.error
+    }),
+    shallow
+  );
+  const load = useTagStore((state) => state.load);
   const [note, setNote] = useState(initialNote);
   const [selectedLabelId, setSelectedLabelId] = useState<string | null>(initialLabelId);
 

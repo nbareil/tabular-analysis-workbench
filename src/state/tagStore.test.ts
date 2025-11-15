@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
 
 import type { DeleteLabelResponse, TagRowsResponse } from '@workers/types';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { useTagStore } from './tagStore';
+import { shallow } from 'zustand/shallow';
 
 vi.mock('@workers/dataWorkerProxy', () => ({
   getDataWorker: vi.fn()
@@ -94,5 +96,25 @@ describe('useTagStore', () => {
       note: 'persisted note',
       updatedAt: 50
     });
+  });
+
+  it('does not trigger selector updates for unrelated store changes', () => {
+    const renders: number[] = [];
+    const selector = (state: ReturnType<typeof useTagStore.getState>) => ({
+      labels: state.labels,
+      status: state.status
+    });
+
+    const { unmount } = renderHook(() => {
+      renders.push(1);
+      return useTagStore(selector, shallow);
+    });
+
+    act(() => {
+      useTagStore.setState({ error: 'boom' });
+    });
+
+    expect(renders).toHaveLength(1);
+    unmount();
   });
 });

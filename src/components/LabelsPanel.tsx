@@ -5,6 +5,7 @@ import { useFilterSync } from '@/hooks/useFilterSync';
 import { useTagStore } from '@state/tagStore';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
 import { parseTagExport } from '@utils/tagExport';
+import { shallow } from 'zustand/shallow';
 
 interface LabelsPanelProps {
   open: boolean;
@@ -17,7 +18,18 @@ const randomColor = (): string => {
 };
 
 const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null => {
-  const { labels, status, error, load, upsertLabel, deleteLabel, importTags } = useTagStore();
+  const { labels, status, error } = useTagStore(
+    (state) => ({
+      labels: state.labels,
+      status: state.status,
+      error: state.error
+    }),
+    shallow
+  );
+  const load = useTagStore((state) => state.load);
+  const upsertLabel = useTagStore((state) => state.upsertLabel);
+  const deleteLabel = useTagStore((state) => state.deleteLabel);
+  const importTags = useTagStore((state) => state.importTags);
   const { filters, applyFilters } = useFilterSync();
   const [labelName, setLabelName] = useState('');
   const [mergeStrategy, setMergeStrategy] = useState<'merge' | 'replace'>('merge');
