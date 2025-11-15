@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { proxy } from 'comlink';
 
@@ -22,8 +22,13 @@ import { buildFilterExpression } from '@utils/filterExpression';
 import { logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
 import { summariseLabelFilters } from '@utils/labelFilters';
-import { serializeToCsv, generateExportFilename } from '@utils/csvExport';
-import { saveJsonFile } from '@utils/fileAccess';
+import {
+  buildCsvBlob,
+  serializeToCsv,
+  generateExportFilename,
+  type CsvExportFormat
+} from '@utils/csvExport';
+import { saveBlobFile, saveJsonFile } from '@utils/fileAccess';
 import { buildTagExportFilename } from '@utils/tagExport';
 import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
 import { useSessionPersistence } from '@/hooks/useSessionPersistence';
@@ -38,6 +43,19 @@ const formatTime = (timestamp: number): string => {
     minute: '2-digit',
     second: '2-digit'
   }).format(new Date(timestamp));
+};
+
+const formatCellValue = (value: unknown): string => {
+  if (value == null) {
+    return '';
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value.toString();
+  }
+  return String(value);
 };
 
 interface AppShellProps {
@@ -81,6 +99,7 @@ const AppShell = ({
   const columnInference = useDataStore((state) => state.columnInference);
   const columnKeys = useDataStore((state) => state.columns.map((column) => column.key));
   const allColumns = useDataStore((state) => state.columns);
+  const groupingState = useDataStore((state) => state.grouping);
   const tagLabels = useTagStore((state) => state.labels);
   const tagRecords = useTagStore((state) => state.tags);
   const applyTagToRows = useTagStore((state) => state.applyTag);
@@ -98,6 +117,9 @@ const AppShell = ({
     note: string;
   } | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement | null>(null);
   const opfsCapability = capabilityReport.checks.find((entry) => entry.id === 'opfs');
   const opfsAvailable = Boolean(opfsCapability?.present);
   const sessionPersistence = useSessionPersistence(opfsAvailable);
@@ -136,6 +158,23 @@ const AppShell = ({
     document.documentElement.style.setProperty('--data-font-family', fontStack);
     document.documentElement.style.setProperty('--data-font-size', `${dataFontSize}px`);
   }, [dataFontFamily, dataFontSize]);
+
+  useEffect(() => {
+    if (!exportMenuOpen || typeof document === 'undefined') {
+      return;
+    }
+
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, [exportMenuOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -539,56 +578,111 @@ const AppShell = ({
     [clearSearchResult]
   );
 
-  const handleExportCsv = useCallback(async () => {
-    if (!fileHandle || matchedRows === null || matchedRows === 0) {
-      return;
-    }
-
-    try {
-      const worker = getDataWorker();
-      const allRows: GridRow[] = [];
-      let offset = 0;
-      const chunkSize = 10000;
-
-      while (offset < matchedRows) {
-        const limit = Math.min(chunkSize, matchedRows - offset);
-        const result = await worker.fetchRows({ offset, limit });
-        allRows.push(...result.rows);
-        offset += limit;
+  const handleExportRows = useCallback(
+    async (format: CsvExportFormat) => {
+      if (!fileHandle || matchedRows === null || matchedRows === 0) {
+        return;
       }
 
-      // Prepare CSV data
-      const headers = allColumns.map(col => col.headerName);
-      const csvRows = allRows.map(row =>
-        allColumns.map(col => (row[col.key] as string) ?? '')
-      );
+      setExportMenuOpen(false);
+      setExporting(true);
 
-      // Serialize to CSV
-      const csvContent = serializeToCsv(headers, csvRows);
+      try {
+        const worker = getDataWorker();
+        const allRows: GridRow[] = [];
+        let offset = 0;
+        const chunkSize = 10000;
 
-      // Generate filename
-      const filename = generateExportFilename(fileHandle.name);
+        while (offset < matchedRows) {
+          const limit = Math.min(chunkSize, matchedRows - offset);
+          const result = await worker.fetchRows({ offset, limit });
+          allRows.push(...result.rows);
+          offset += limit;
+        }
 
-      // Download
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Failed to export CSV', error);
-      reportAppError('Failed to export CSV', error, {
-        operation: 'export.csv',
-        context: { matchedRows }
-      });
-    }
-  }, [fileHandle, matchedRows, allColumns]);
+        const headers = allColumns.map((column) => column.headerName);
+        const csvRows = allRows.map((row) =>
+          allColumns.map((column) => formatCellValue(row[column.key]))
+        );
+        const csvContent = serializeToCsv(headers, csvRows);
+        const { blob, extension, mimeType } = await buildCsvBlob(csvContent, format);
+        const filename = generateExportFilename(fileHandle.name, extension);
+
+        await saveBlobFile({
+          suggestedName: filename,
+          blob,
+          description: format === 'csv.gz' ? 'Compressed CSV export' : 'CSV export',
+          mimeType,
+          extensions: [extension]
+        });
+      } catch (error) {
+        console.error('Failed to export CSV', error);
+        reportAppError('Failed to export CSV', error, {
+          operation: 'export.csv',
+          context: { matchedRows, format }
+        });
+      } finally {
+        setExporting(false);
+      }
+    },
+    [fileHandle, matchedRows, allColumns, reportAppError]
+  );
+
+  const handleExportGrouping = useCallback(
+    async (format: CsvExportFormat) => {
+      if (groupingState.status !== 'ready' || groupingState.rows.length === 0) {
+        return;
+      }
+
+      setExportMenuOpen(false);
+      setExporting(true);
+
+      try {
+        const groupHeaders = groupingState.groupBy;
+        const aggregateHeaders = Array.from(
+          groupingState.rows.reduce((set, row) => {
+            Object.keys(row.aggregates).forEach((alias) => set.add(alias));
+            return set;
+          }, new Set<string>())
+        );
+        const headers = [...groupHeaders, ...aggregateHeaders, 'rows'];
+        const csvRows = groupingState.rows.map((row) => {
+          const keyValues = Array.isArray(row.key) ? row.key : [row.key];
+          const aggregates = aggregateHeaders.map((alias) => row.aggregates[alias]);
+          return [
+            ...keyValues.map(formatCellValue),
+            ...aggregates.map(formatCellValue),
+            row.rowCount.toString()
+          ];
+        });
+
+        const csvContent = serializeToCsv(headers, csvRows);
+        const { blob, extension, mimeType } = await buildCsvBlob(csvContent, format);
+        const baseName = fileHandle?.name ?? 'grouping';
+        const filename = generateExportFilename(`${baseName}-groups`, extension);
+
+        await saveBlobFile({
+          suggestedName: filename,
+          blob,
+          description: 'Grouping export',
+          mimeType,
+          extensions: [extension]
+        });
+      } catch (error) {
+        console.error('Failed to export grouping data', error);
+        reportAppError('Failed to export grouping data', error, {
+          operation: 'export.grouping',
+          context: { format }
+        });
+      } finally {
+        setExporting(false);
+      }
+    },
+    [groupingState, fileHandle, reportAppError]
+  );
 
   const handleExportTags = useCallback(async () => {
+    setExportMenuOpen(false);
     try {
       const response = await exportTags();
       if (response) {
@@ -635,6 +729,11 @@ const AppShell = ({
   const capabilityWarnings = capabilityReport?.warnings ?? [];
   const showCapabilityWarnings =
     capabilityReport.ok && capabilityWarnings.length > 0 && !warningsDismissed;
+  const compressionSupported = typeof CompressionStream === 'function';
+  const canExportRows =
+    workerReady && Boolean(fileHandle) && matchedRows != null && matchedRows > 0;
+  const canExportGrouping =
+    workerReady && groupingState.status === 'ready' && groupingState.rows.length > 0;
 
   return (
     <div className="flex h-full flex-col bg-canvas text-slate-100">
@@ -717,22 +816,78 @@ const AppShell = ({
           >
             Labels
           </button>
-          <button
-            type="button"
-            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
-            onClick={handleExportCsv}
-            disabled={!workerReady || !fileHandle || matchedRows === null || matchedRows === 0}
-          >
-            Export CSV
-          </button>
-          <button
-            type="button"
-            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
-            onClick={handleExportTags}
-            disabled={!workerReady || !fileHandle}
-          >
-            Export Tags
-          </button>
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              type="button"
+              className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+              onClick={() => setExportMenuOpen((value) => !value)}
+              disabled={!workerReady || !fileHandle}
+              aria-haspopup="menu"
+              aria-expanded={exportMenuOpen}
+            >
+              Export ▾
+            </button>
+            {exportMenuOpen && (
+              <div className="absolute right-0 z-20 mt-1 w-64 rounded border border-slate-700 bg-slate-950 text-left shadow-xl">
+                <div className="border-b border-slate-800 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  Filtered rows
+                </div>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
+                  onClick={() => handleExportRows('csv')}
+                  disabled={!canExportRows || exporting}
+                >
+                  <span>.csv</span>
+                  {exporting && <span className="text-[10px] text-slate-400">Working…</span>}
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
+                  onClick={() => handleExportRows('csv.gz')}
+                  disabled={!canExportRows || !compressionSupported || exporting}
+                >
+                  <span>.csv.gz</span>
+                  {!compressionSupported && (
+                    <span className="text-[10px] text-amber-400">Compression unavailable</span>
+                  )}
+                </button>
+                <div className="border-b border-slate-800 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  Grouping
+                </div>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
+                  onClick={() => handleExportGrouping('csv')}
+                  disabled={!canExportGrouping || exporting}
+                >
+                  <span>.csv</span>
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
+                  onClick={() => handleExportGrouping('csv.gz')}
+                  disabled={!canExportGrouping || !compressionSupported || exporting}
+                >
+                  <span>.csv.gz</span>
+                  {!compressionSupported && (
+                    <span className="text-[10px] text-amber-400">Compression unavailable</span>
+                  )}
+                </button>
+                <div className="border-b border-slate-800 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  Annotations
+                </div>
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
+                  onClick={handleExportTags}
+                  disabled={!workerReady || !fileHandle}
+                >
+                  <span>Tags &amp; Notes (.json)</span>
+                </button>
+              </div>
+            )}
+          </div>
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"

@@ -29,29 +29,25 @@ const getSaveFilePicker = (): ShowSaveFilePicker | null => {
   return typeof candidate === 'function' ? candidate : null;
 };
 
-const supportsFileSystemSave = (): boolean => {
-  return getSaveFilePicker() !== null;
-};
-
 const supportsAnchors = (): boolean => {
   return typeof document !== 'undefined' && typeof document.createElement === 'function';
 };
 
-interface SaveJsonOptions {
+interface SaveBlobOptions {
   suggestedName: string;
-  contents: string;
+  blob: Blob;
   description?: string;
   mimeType?: string;
+  extensions?: string[];
 }
 
-export const saveJsonFile = async ({
+export const saveBlobFile = async ({
   suggestedName,
-  contents,
-  description = 'JSON file',
-  mimeType = 'application/json;charset=utf-8;'
-}: SaveJsonOptions): Promise<void> => {
-  const blob = new Blob([contents], { type: mimeType });
-
+  blob,
+  description = 'File',
+  mimeType = blob.type || 'application/octet-stream',
+  extensions
+}: SaveBlobOptions): Promise<void> => {
   const picker = getSaveFilePicker();
   if (picker) {
     const handle = await picker({
@@ -60,7 +56,7 @@ export const saveJsonFile = async ({
         {
           description,
           accept: {
-            [mimeType]: ['.json']
+            [mimeType]: extensions && extensions.length ? extensions : ['.bin']
           }
         }
       ]
@@ -84,4 +80,27 @@ export const saveJsonFile = async ({
   anchor.click();
   document.body.removeChild(anchor);
   URL.revokeObjectURL(url);
+};
+
+interface SaveJsonOptions {
+  suggestedName: string;
+  contents: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export const saveJsonFile = async ({
+  suggestedName,
+  contents,
+  description = 'JSON file',
+  mimeType = 'application/json;charset=utf-8;'
+}: SaveJsonOptions): Promise<void> => {
+  const blob = new Blob([contents], { type: mimeType });
+  await saveBlobFile({
+    suggestedName,
+    blob,
+    description,
+    mimeType,
+    extensions: ['.json']
+  });
 };

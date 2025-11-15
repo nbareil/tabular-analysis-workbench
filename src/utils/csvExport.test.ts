@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { serializeToCsv } from './csvExport';
+import { generateExportFilename, serializeToCsv } from './csvExport';
 
 describe('serializeToCsv', () => {
   it('serializes simple data correctly', () => {
@@ -44,5 +44,17 @@ describe('serializeToCsv', () => {
 
     const result = serializeToCsv(headers, rows);
     expect(result).toBe('"name","age"\n"Alice",""\n"Bob",""');
+  });
+});
+
+describe('generateExportFilename', () => {
+  it('defaults to a .csv extension', () => {
+    const result = generateExportFilename('records.csv');
+    expect(result.endsWith('.csv')).toBe(true);
+  });
+
+  it('appends a .csv.gz extension when requested', () => {
+    const result = generateExportFilename('records.csv', '.csv.gz');
+    expect(result.endsWith('.csv.gz')).toBe(true);
   });
 });
