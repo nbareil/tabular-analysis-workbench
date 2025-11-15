@@ -1,4 +1,5 @@
 import { evaluateFilterOnRows } from '../filterEngine';
+import { startPerformanceMeasure } from '../utils/performanceMarks';
 import type { DataWorkerStateController } from '../state/dataWorkerState';
 import type { MaterializedRow } from '../utils/materializeRowBatch';
 import type { ApplyFilterRequest, ApplyFilterResult } from '../workerApiTypes';
@@ -35,82 +36,87 @@ export const createFilterController = ({
     offset = 0,
     limit
   }: ApplyFilterRequest): Promise<ApplyFilterResult> => {
-    state.updateDataset((dataset) => {
-      dataset.filterExpression = expression;
-      dataset.filterRowIds = null;
-      dataset.sortedRowIds = null;
-    });
+    const filterMeasure = startPerformanceMeasure('worker-filter');
+    try {
+      state.updateDataset((dataset) => {
+        dataset.filterExpression = expression;
+        dataset.filterRowIds = null;
+        dataset.sortedRowIds = null;
+      });
 
-    const totalRows = state.dataset.totalRows;
-    if (!totalRows) {
-      return { rows: [], totalRows: 0, matchedRows: 0, expression };
-    }
+      const totalRows = state.dataset.totalRows;
+      if (!totalRows) {
+        return { rows: [], totalRows: 0, matchedRows: 0, expression };
+      }
 
-    if (!expression) {
+      if (!expression) {
+        const rows = await materializeViewWindow(offset, limit);
+        return {
+          rows,
+          totalRows,
+          matchedRows: totalRows,
+          expression
+        };
+      }
+
+      const batchStore = state.dataset.batchStore;
+      if (!batchStore) {
+        return {
+          rows: [],
+          totalRows,
+          matchedRows: 0,
+          expression
+        };
+      }
+
+      const matchedRowIds: number[] = [];
+      let fuzzyUsed: ApplyFilterResult['fuzzyUsed'];
+      const predicateMatchCounts: Record<string, number> = {};
+
+      for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
+        const result = evaluateFilterOnRows(
+          rows,
+          state.dataset.columnTypes,
+          expression,
+          {
+            tags: state.tagging.tags,
+            fuzzyIndex: state.dataset.fuzzyIndexSnapshot
+          },
+          {
+            collectPredicateMatch: (predicateId, count) => {
+              const current = predicateMatchCounts[predicateId] ?? 0;
+              predicateMatchCounts[predicateId] = current + count;
+            }
+          }
+        );
+
+        for (let idx = 0; idx < result.matches.length; idx += 1) {
+          if (result.matches[idx] === 1) {
+            matchedRowIds.push(rowStart + idx);
+          }
+        }
+
+        if (result.fuzzyUsed && !fuzzyUsed) {
+          fuzzyUsed = result.fuzzyUsed;
+        }
+      }
+
+      state.updateDataset((dataset) => {
+        dataset.filterRowIds = Uint32Array.from(matchedRowIds);
+      });
+
       const rows = await materializeViewWindow(offset, limit);
       return {
         rows,
         totalRows,
-        matchedRows: totalRows,
-        expression
-      };
-    }
-
-    const batchStore = state.dataset.batchStore;
-    if (!batchStore) {
-      return {
-        rows: [],
-        totalRows,
-        matchedRows: 0,
-        expression
-      };
-    }
-
-    const matchedRowIds: number[] = [];
-    let fuzzyUsed: ApplyFilterResult['fuzzyUsed'];
-    const predicateMatchCounts: Record<string, number> = {};
-
-    for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
-      const result = evaluateFilterOnRows(
-        rows,
-        state.dataset.columnTypes,
+        matchedRows: matchedRowIds.length,
         expression,
-        {
-          tags: state.tagging.tags,
-          fuzzyIndex: state.dataset.fuzzyIndexSnapshot
-        },
-        {
-          collectPredicateMatch: (predicateId, count) => {
-            const current = predicateMatchCounts[predicateId] ?? 0;
-            predicateMatchCounts[predicateId] = current + count;
-          }
-        }
-      );
-
-      for (let idx = 0; idx < result.matches.length; idx += 1) {
-        if (result.matches[idx] === 1) {
-          matchedRowIds.push(rowStart + idx);
-        }
-      }
-
-      if (result.fuzzyUsed && !fuzzyUsed) {
-        fuzzyUsed = result.fuzzyUsed;
-      }
+        fuzzyUsed,
+        predicateMatchCounts
+      };
+    } finally {
+      filterMeasure?.();
     }
-
-    state.updateDataset((dataset) => {
-      dataset.filterRowIds = Uint32Array.from(matchedRowIds);
-    });
-
-    const rows = await materializeViewWindow(offset, limit);
-    return {
-      rows,
-      totalRows,
-      matchedRows: matchedRowIds.length,
-      expression,
-      fuzzyUsed,
-      predicateMatchCounts
-    };
   };
 
   return {

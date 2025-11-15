@@ -8,6 +8,7 @@ import {
   FUZZY_INDEX_STORE_VERSION
 } from '../fuzzyIndexStore';
 import { createFuzzyFingerprint, fuzzySnapshotMatchesFingerprint } from '../fuzzyIndexUtils';
+import { startPerformanceMeasure } from '../utils/performanceMarks';
 import { logDebug } from '../../utils/debugLog';
 import type { DataWorkerStateController } from '../state/dataWorkerState';
 import type {
@@ -73,6 +74,7 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
       }
       logDebug(`data-worker][dataset:${datasetKey}`, event, payload);
     };
+    const ingestionMeasure = startPerformanceMeasure('csv-ingest');
 
     if (state.dataset.batchStore) {
       const clearStart = now();
@@ -255,8 +257,11 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
         checkpointInterval: targetCheckpointInterval
       });
       const parseStartTime = now();
+      const parseMeasure = startPerformanceMeasure('csv-parse');
+      let parseMetrics: Awaited<ReturnType<typeof parseDelimitedStream>> | undefined;
 
-      const parseMetrics = await parseDelimitedStream(
+      try {
+        parseMetrics = await parseDelimitedStream(
         source,
         {
           onHeader: async (header) => {
@@ -369,6 +374,9 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
         },
         parserOptions
       );
+      } finally {
+        parseMeasure?.();
+      }
 
       debugLog('parseDelimitedStream completed', {
         durationMs: roundMs(now() - parseStartTime),
@@ -386,6 +394,7 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
       let fuzzySnapshotMs = 0;
 
       if (fuzzyIndexBuilder) {
+        const fuzzyMeasure = startPerformanceMeasure('fuzzy-build');
         const buildStart = now();
         const columnSnapshots = fuzzyIndexBuilder.buildSnapshots();
         const snapshotDuration = now() - buildStart;
@@ -415,6 +424,7 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
         state.updateDataset((dataset) => {
           dataset.fuzzyIndexSnapshot = fuzzySnapshot;
         });
+        fuzzyMeasure?.();
       }
 
       if (callbacks.onComplete) {
@@ -490,6 +500,8 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
       }
 
       throw error;
+    } finally {
+      ingestionMeasure?.();
     }
   };
 

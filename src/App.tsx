@@ -14,6 +14,7 @@ import ColumnsPanel from '@components/ColumnsPanel';
 import LabelsPanel from '@components/LabelsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
 import TagNotePanel from '@components/tagging/TagNotePanel';
+import LargeDatasetWarning from '@components/LargeDatasetWarning';
 import CapabilityGate from '@components/CapabilityGate';
 import CapabilityWarningBanner from '@components/CapabilityWarningBanner';
 import DiagnosticsToast from '@components/DiagnosticsToast';
@@ -57,6 +58,8 @@ const formatCellValue = (value: unknown): string => {
   }
   return String(value);
 };
+
+const LARGE_DATASET_WARNING_BYTES = 600 * 1024 * 1024;
 
 interface AppShellProps {
   capabilityReport: CapabilityReport;
@@ -726,6 +729,10 @@ const AppShell = ({
     clearErrorDetails();
   }, [clearErrorDetails, errorDetails]);
 
+  const estimatedMemoryBytes =
+    stats && typeof stats.bytesParsed === 'number'
+      ? Math.round(stats.bytesParsed * 1.25)
+      : null;
   const capabilityWarnings = capabilityReport?.warnings ?? [];
   const showCapabilityWarnings =
     capabilityReport.ok && capabilityWarnings.length > 0 && !warningsDismissed;
@@ -905,6 +912,13 @@ const AppShell = ({
           </button>
         </div>
       </header>
+      {estimatedMemoryBytes != null && (
+        <LargeDatasetWarning
+          estimatedBytes={estimatedMemoryBytes}
+          thresholdBytes={LARGE_DATASET_WARNING_BYTES}
+          onOpenOptions={() => setOptionsOpen(true)}
+        />
+      )}
       <main className="flex flex-1 overflow-hidden">
         <aside
           className={`hidden border-r border-slate-800 lg:block ${
