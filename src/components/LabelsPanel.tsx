@@ -13,8 +13,51 @@ interface LabelsPanelProps {
 }
 
 const randomColor = (): string => {
-  const hue = Math.floor(Math.random() * 360);
-  return `hsl(${hue}, 70%, 60%)`;
+  const value = Math.floor(Math.random() * 0xffffff);
+  return `#${value.toString(16).padStart(6, '0')}`;
+};
+
+const normalizeColorForInput = (color: string | undefined): string => {
+  if (typeof color !== 'string') {
+    return '#8899ff';
+  }
+
+  const hexMatch = color.match(/^#([0-9a-fA-F]{6})$/);
+  if (hexMatch) {
+    return `#${hexMatch[1].toLowerCase()}`;
+  }
+
+  // Fallback for hsl() definitions: convert to hex-ish default to avoid invalid input values.
+  const hslMatch = color.match(
+    /hsl\(\s*(\d{1,3})\s*,\s*(\d{1,3})%\s*,\s*(\d{1,3})%\s*\)/
+  );
+  if (hslMatch) {
+    const [h, s, l] = hslMatch.slice(1).map(Number);
+    const toRgb = (hue: number, saturation: number, lightness: number) => {
+      const sNorm = saturation / 100;
+      const lNorm = lightness / 100;
+      const c = (1 - Math.abs(2 * lNorm - 1)) * sNorm;
+      const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+      const m = lNorm - c / 2;
+      let r = 0,
+        g = 0,
+        b = 0;
+      if (hue < 60) [r, g, b] = [c, x, 0];
+      else if (hue < 120) [r, g, b] = [x, c, 0];
+      else if (hue < 180) [r, g, b] = [0, c, x];
+      else if (hue < 240) [r, g, b] = [0, x, c];
+      else if (hue < 300) [r, g, b] = [x, 0, c];
+      else [r, g, b] = [c, 0, x];
+      const toHex = (value: number) =>
+        Math.round((value + m) * 255)
+          .toString(16)
+          .padStart(2, '0');
+      return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+    };
+    return toRgb(h, s, l);
+  }
+
+  return '#8899ff';
 };
 
 const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null => {
@@ -32,6 +75,7 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
   const importTags = useTagStore((state) => state.importTags);
   const { filters, applyFilters } = useFilterSync();
   const [labelName, setLabelName] = useState('');
+  const [labelColor, setLabelColor] = useState<string>(randomColor());
   const [mergeStrategy, setMergeStrategy] = useState<'merge' | 'replace'>('merge');
   const [importing, setImporting] = useState(false);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
@@ -129,13 +173,28 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
 
     await upsertLabel({
       name: labelName.trim(),
-      color: randomColor()
+      color: labelColor
     });
     setLabelName('');
+    setLabelColor(randomColor());
   };
 
   const handleDelete = (id: string) => {
     void deleteLabel(id);
+  };
+
+  const handleColorChange = (labelId: string, nextColor: string) => {
+    const match = labels.find((label) => label.id === labelId);
+    if (!match) {
+      return;
+    }
+    void upsertLabel({
+      id: labelId,
+      name: match.name,
+      color: nextColor,
+      description: match.description,
+      createdAt: match.createdAt
+    });
   };
 
   const handleImport = async () => {
@@ -227,6 +286,15 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
                   onChange={(event) => setLabelName(event.target.value)}
                 />
               </label>
+              <label className="flex flex-col gap-1 text-xs uppercase tracking-wide text-slate-400">
+                Color
+                <input
+                  type="color"
+                  value={labelColor}
+                  className="h-10 w-16 cursor-pointer rounded border border-slate-700 bg-slate-950 p-1"
+                  onChange={(event) => setLabelColor(event.target.value)}
+                />
+              </label>
               <button
                 type="button"
                 className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
@@ -280,10 +348,12 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-3">
-                      <span
-                        className="h-4 w-4 rounded-full"
-                        style={{ backgroundColor: label.color }}
-                        aria-hidden
+                      <input
+                        type="color"
+                        className="h-6 w-10 cursor-pointer rounded border border-slate-700 bg-slate-950 p-0.5"
+                        value={normalizeColorForInput(label.color)}
+                        onChange={(event) => handleColorChange(label.id, event.target.value)}
+                        aria-label={`Pick color for ${label.name}`}
                       />
                       <div>
                         <p className="font-medium text-slate-100">{label.name}</p>
