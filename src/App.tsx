@@ -707,7 +707,7 @@ const AppShell = ({
         await saveJsonFile({
           suggestedName,
           contents: json,
-          description: 'Tag and note annotations'
+          description: 'Label and note annotations'
         });
       }
     } catch (error) {
@@ -900,7 +900,7 @@ const AppShell = ({
                   onClick={handleExportTags}
                   disabled={!workerReady || !fileHandle}
                 >
-                  <span>Tags &amp; Notes (.json)</span>
+                  <span>Labels &amp; Notes (.json)</span>
                 </button>
               </div>
             )}

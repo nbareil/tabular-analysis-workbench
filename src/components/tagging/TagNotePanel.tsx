@@ -149,7 +149,7 @@ const TagNotePanel = ({
         <div className="flex-1 overflow-y-auto px-4 py-4">
           <section className="space-y-3">
             <div>
-              <p className="text-sm font-semibold">Tag palette</p>
+              <p className="text-sm font-semibold">Label palette</p>
               <p className="text-xs text-slate-400">
                 Apply one or more labels to this row. Labels sync with the Labels panel.
               </p>

@@ -306,7 +306,7 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
             </div>
             <div className="space-y-2">
               <label className="flex flex-col gap-1 text-xs uppercase tracking-wide text-slate-400">
-                Import tags
+                Import labels & notes
                 <select
                   value={mergeStrategy}
                   onChange={(e) => setMergeStrategy(e.target.value as 'merge' | 'replace')}
