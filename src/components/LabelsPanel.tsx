@@ -322,7 +322,7 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
                 onClick={handleImport}
                 disabled={importing}
               >
-                {importing ? 'Importing…' : 'Import Tags'}
+                {importing ? 'Importing…' : 'Import Labels & Notes'}
               </button>
               {importFeedback && (
                 <p className="text-xs text-emerald-400">{importFeedback}</p>
