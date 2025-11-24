@@ -15,9 +15,8 @@ const createSnapshot = (): TaggingSnapshot => ({
   ],
   tags: {
     5: {
-      labelId: 'label-1',
+      labelIds: ['label-1'],
       note: 'check login event',
-      color: '#ff0000',
       updatedAt: 3
     }
   }
@@ -58,8 +57,19 @@ describe('parseTagExport', () => {
 
   it('supports legacy snapshot-only exports', () => {
     const snapshot = createSnapshot();
-    const parsed = parseTagExport(snapshot);
-    expect(parsed.snapshot).toEqual(snapshot);
+    // simulate legacy shape with single labelId
+    const legacy = {
+      ...snapshot,
+      tags: {
+        5: {
+          labelId: 'label-1',
+          note: 'check login event',
+          updatedAt: 3
+        }
+      }
+    };
+    const parsed = parseTagExport(legacy);
+    expect(parsed.snapshot.tags[5]?.labelIds).toEqual(['label-1']);
     expect(parsed.metadata).toBeNull();
   });
 

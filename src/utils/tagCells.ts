@@ -1,10 +1,14 @@
 import type { LabelDefinition, TagRecord } from '@workers/types';
 
+export interface TagLabelView {
+  id: string;
+  name: string;
+  color?: string;
+}
+
 export interface TagCellValue {
   rowId: number;
-  labelId: string | null;
-  labelName?: string;
-  color?: string;
+  labels: TagLabelView[];
   note?: string;
   updatedAt: number;
 }
@@ -27,23 +31,26 @@ export const buildTagCellValue = (
     return null;
   }
 
-  const label = record.labelId ? labels.get(record.labelId) : undefined;
+  const resolvedLabels: TagLabelView[] = [];
+  for (const labelId of record.labelIds ?? []) {
+    const match = labels.get(labelId);
+    if (match) {
+      resolvedLabels.push({
+        id: match.id,
+        name: match.name,
+        color: match.color
+      });
+    }
+  }
   const note = hasText(record.note) ? record.note.trim() : undefined;
 
-  if (!label && record.labelId != null && !note) {
-    // Label referenced is missing and there is no note to render; treat as empty.
-    return null;
-  }
-
-  if (label?.id == null && !note) {
+  if (resolvedLabels.length === 0 && !note) {
     return null;
   }
 
   return {
     rowId,
-    labelId: record.labelId ?? null,
-    labelName: label?.name,
-    color: record.color || label?.color,
+    labels: resolvedLabels,
     note,
     updatedAt: record.updatedAt
   };

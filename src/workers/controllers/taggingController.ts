@@ -13,6 +13,7 @@ import type {
   TagRecord
 } from '../types';
 import { TAG_EXPORT_VERSION } from '../types';
+import { normaliseLabelIds } from '../taggingHelpers';
 
 const DEFAULT_LABEL_COLOR = '#8899ff';
 
@@ -82,12 +83,20 @@ export const createTaggingController = (
     tags: state.tagging.tags
   });
 
-  const tagRows = async ({ rowIds, labelId, note }: TagRowsRequest): Promise<TagRowsResponse> => {
+  const tagRows = async ({
+    rowIds,
+    labelIds,
+    note,
+    mode = 'replace'
+  }: TagRowsRequest): Promise<TagRowsResponse> => {
     const timestamp = Date.now();
-    const resolvedLabelId = labelId ?? null;
-    const label = resolvedLabelId
-      ? state.tagging.labels.find((entry) => entry.id === resolvedLabelId)
-      : undefined;
+    const validLabelIds = new Set(state.tagging.labels.map((entry) => entry.id));
+    const resolvedLabelIds =
+      labelIds === undefined
+        ? undefined
+        : labelIds === null
+          ? []
+          : normaliseLabelIds(labelIds).filter((id) => validLabelIds.has(id));
     const updated: TagRowsResponse['updated'] = {};
     let mutated = false;
 
@@ -100,11 +109,12 @@ export const createTaggingController = (
         const existing = tagging.tags[rowId];
         const record = buildTagRecord({
           existing,
-          label,
-          labelId: resolvedLabelId,
+          labelIds: resolvedLabelIds,
           note,
+          mode,
           timestamp
         });
+        record.labelIds = record.labelIds.filter((id) => validLabelIds.has(id));
 
         if (isTagRecordEmpty(record)) {
           if (existing) {
@@ -114,9 +124,9 @@ export const createTaggingController = (
         } else {
           const changed =
             !existing ||
-            existing.labelId !== record.labelId ||
             existing.note !== record.note ||
-            existing.color !== record.color;
+            existing.labelIds.length !== record.labelIds.length ||
+            existing.labelIds.some((id, index) => id !== record.labelIds[index]);
           tagging.tags[rowId] = record;
           mutated = mutated || changed;
         }
@@ -149,7 +159,7 @@ export const createTaggingController = (
         }
 
         updated[rowId] = {
-          labelId: null,
+          labelIds: [],
           updatedAt: timestamp
         };
       }
@@ -192,23 +202,6 @@ export const createTaggingController = (
       } else {
         tagging.labels.push(nextLabel);
       }
-
-      for (const [key, record] of Object.entries(tagging.tags)) {
-        if (record.labelId !== nextLabel.id) {
-          continue;
-        }
-
-        const rowId = Number(key);
-        if (!Number.isFinite(rowId) || rowId < 0) {
-          continue;
-        }
-
-        tagging.tags[rowId] = {
-          ...record,
-          color: nextLabel.color,
-          updatedAt: timestamp
-        };
-      }
     });
 
     state.markTaggingDirty();
@@ -227,16 +220,16 @@ export const createTaggingController = (
       deleted = tagging.labels.length < before;
 
       for (const [rowId, record] of Object.entries(tagging.tags)) {
-        if (record.labelId !== labelId) {
-          continue;
-        }
-
         const numericRowId = Number(rowId);
         if (!Number.isFinite(numericRowId) || numericRowId < 0) {
           continue;
         }
 
-        const nextRecord = cascadeLabelDeletion(record, timestamp);
+        if (!record.labelIds.includes(labelId)) {
+          continue;
+        }
+
+        const nextRecord = cascadeLabelDeletion(record, labelId, timestamp);
         if (isTagRecordEmpty(nextRecord)) {
           delete tagging.tags[numericRowId];
         } else {
@@ -310,15 +303,12 @@ export const createTaggingController = (
         continue;
       }
 
-      const incomingLabelId =
-        typeof record.labelId === 'string' && record.labelId.trim().length > 0
-          ? record.labelId.trim()
-          : null;
-      if (incomingLabelId && !labelMap.has(incomingLabelId)) {
-        continue;
-      }
-
-      const label = incomingLabelId ? labelMap.get(incomingLabelId) : undefined;
+      const incomingLabelIds =
+        Array.isArray(record.labelIds) && record.labelIds.length > 0
+          ? normaliseLabelIds(record.labelIds).filter((id) => labelMap.has(id))
+          : typeof (record as any).labelId === 'string' && (record as any).labelId.trim().length > 0
+            ? normaliseLabelIds([(record as any).labelId]).filter((id) => labelMap.has(id))
+            : [];
       const note = typeof record.note === 'string' ? record.note : undefined;
       const recordTimestamp =
         typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
@@ -327,8 +317,7 @@ export const createTaggingController = (
       const existing = mergeStrategy === 'merge' ? nextTags[rowId] : undefined;
       const nextRecord = buildTagRecord({
         existing,
-        label,
-        labelId: incomingLabelId,
+        labelIds: incomingLabelIds,
         note,
         timestamp: recordTimestamp
       });
@@ -344,9 +333,9 @@ export const createTaggingController = (
       const previous = nextTags[rowId];
       const changed =
         !previous ||
-        previous.labelId !== nextRecord.labelId ||
         previous.note !== nextRecord.note ||
-        previous.color !== nextRecord.color;
+        previous.labelIds.length !== nextRecord.labelIds.length ||
+        previous.labelIds.some((id, index) => id !== nextRecord.labelIds[index]);
 
       nextTags[rowId] = nextRecord;
       mutated = mutated || changed;

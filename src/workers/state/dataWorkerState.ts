@@ -9,6 +9,7 @@ import type {
   TagRecord
 } from '../types';
 import type { RowBatchStore } from '../rowBatchStore';
+import { normaliseLabelIds } from '../taggingHelpers';
 
 const DEFAULT_OPTIONS = {
   enableDuckDb: false,
@@ -193,7 +194,40 @@ class DataWorkerState implements DataWorkerStateController {
       this._tagging.store = store;
       const snapshot = await store.load();
       this._tagging.labels = snapshot?.labels ?? [];
-      this._tagging.tags = snapshot?.tags ?? {};
+      const allowedLabelIds = new Set((snapshot?.labels ?? []).map((label) => label.id));
+      const tags: Record<number, TagRecord> = {};
+      const incomingTags = snapshot?.tags ?? {};
+
+      for (const [rowKey, record] of Object.entries(incomingTags)) {
+        const rowId = Number(rowKey);
+        if (!Number.isFinite(rowId) || rowId < 0 || !record) {
+          continue;
+        }
+
+        const labelIds =
+          Array.isArray((record as any).labelIds) && (record as any).labelIds.length > 0
+            ? normaliseLabelIds((record as any).labelIds)
+            : typeof (record as any).labelId === 'string'
+              ? normaliseLabelIds([(record as any).labelId])
+              : [];
+        const filteredLabelIds = labelIds.filter((id) => allowedLabelIds.has(id));
+        const canonical: TagRecord = {
+          labelIds: filteredLabelIds,
+          updatedAt:
+            typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
+              ? record.updatedAt
+              : Date.now()
+        };
+        if (typeof record.note === 'string' && record.note.length > 0) {
+          canonical.note = record.note;
+        }
+
+        if (canonical.labelIds.length > 0 || canonical.note) {
+          tags[rowId] = canonical;
+        }
+      }
+
+      this._tagging.tags = tags;
       this._tagging.dirty = false;
     } catch (error) {
       console.warn('[data-worker][tagging] Failed to hydrate tagging store', error);

@@ -26,14 +26,14 @@ describe('TagPalette', () => {
   it('renders labels and reports selection', () => {
     const handleSelect = vi.fn();
     render(
-      <TagPalette labels={mockLabels} selectedLabelId={null} onSelect={handleSelect} />
+      <TagPalette labels={mockLabels} selectedLabelIds={[]} onChange={handleSelect} />
     );
 
     fireEvent.click(screen.getByRole('button', { name: /alpha/i }));
-    expect(handleSelect).toHaveBeenCalledWith('alpha');
+    expect(handleSelect).toHaveBeenCalledWith(['alpha']);
 
     fireEvent.click(screen.getByRole('button', { name: /no label/i }));
-    expect(handleSelect).toHaveBeenLastCalledWith(null);
+    expect(handleSelect).toHaveBeenLastCalledWith([]);
   });
 
   it('respects the disabled state', () => {
@@ -41,8 +41,8 @@ describe('TagPalette', () => {
     render(
       <TagPalette
         labels={mockLabels}
-        selectedLabelId="beta"
-        onSelect={handleSelect}
+        selectedLabelIds={['beta']}
+        onChange={handleSelect}
         disabled
       />
     );

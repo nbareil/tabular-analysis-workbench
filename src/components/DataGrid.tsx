@@ -148,8 +148,6 @@ export const toggleRowSelection = (gridApi: GridApi | null, rowId: number | null
 const TagCellRenderer = ({
   value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element => {
-  const theme = useAppStore((state) => state.theme);
-
   if (!value) {
     return (
       <span className="flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-400">
@@ -162,21 +160,28 @@ const TagCellRenderer = ({
     );
   }
 
-  const { color, labelName, note } = value;
-  const text = labelName ?? (note ? 'No label' : 'Tagged');
+  const note = value.note;
+  const primaryLabel = value.labels[0];
+  const extraCount = Math.max(0, value.labels.length - 1);
+  const text = primaryLabel?.name ?? (note ? 'No label' : 'Tagged');
 
   return (
     <span className="flex items-center gap-2 truncate text-xs text-slate-900 dark:text-slate-100">
       <span
         className="h-2.5 w-2.5 shrink-0 rounded-full"
         style={
-          color
-            ? { backgroundColor: color }
+          primaryLabel?.color
+            ? { backgroundColor: primaryLabel.color }
             : { border: '1px solid rgb(71 85 105)', backgroundColor: 'transparent' }
         }
         aria-hidden
       />
       <span className="truncate">{text}</span>
+      {extraCount > 0 ? (
+        <span className="text-[10px] uppercase tracking-wide text-slate-600 dark:text-slate-400">
+          +{extraCount} more
+        </span>
+      ) : null}
       {note ? (
         <span className="text-[10px] uppercase tracking-wide text-slate-600 dark:text-slate-400">
           Note
@@ -193,15 +198,15 @@ export const MarkdownTooltip = ({
     return null;
   }
 
-  const { labelName, note } = value;
+  const { labels, note } = value;
 
   if (note) {
     const html = renderMarkdownToSafeHtml(note);
     return <div dangerouslySetInnerHTML={{ __html: html }} />;
   }
 
-  if (labelName) {
-    return <div>{labelName}</div>;
+  if (labels.length > 0) {
+    return <div>{labels.map((label) => label.name).join(', ')}</div>;
   }
 
   return null;
@@ -360,8 +365,8 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const tagColumnDef = useMemo<ColDef>(
     () => ({
       colId: TAG_COLUMN_ID,
-      headerName: 'Label',
-      headerTooltip: 'Row label',
+      headerName: 'Labels',
+      headerTooltip: 'Row labels',
       pinned: 'left',
       lockPosition: true,
       headerCheckboxSelection: true,
@@ -908,9 +913,14 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
       if (isTagColumn) {
         const tagValue = (rawValue as TagCellValue | null) ?? null;
-        const name = tagValue?.labelName;
-        displayValue = name && name.trim().length > 0 ? name : 'No label';
-        filterValue = tagValue?.labelId ?? TAG_NO_LABEL_FILTER_VALUE;
+        const labelNames = tagValue?.labels.map((label) => label.name).filter(Boolean) ?? [];
+        displayValue =
+          labelNames.length > 0
+            ? labelNames.join(', ')
+            : tagValue?.note
+              ? 'No label'
+              : 'No label';
+        filterValue = tagValue?.labels[0]?.id ?? TAG_NO_LABEL_FILTER_VALUE;
       } else {
         const valueString = typeof rawValue === 'string' ? rawValue : String(rawValue);
         displayValue = valueString;
@@ -1064,7 +1074,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         if (labelId === null) {
           await clearTagFromRows(rowIds);
         } else {
-          await applyTagToRows({ rowIds, labelId });
+          await applyTagToRows({ rowIds, labelIds: [labelId], mode: 'append' });
         }
       } catch (error) {
         console.error('Failed to update labels', error);
@@ -1132,9 +1142,8 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     const isLabelColumn = contextMenu.columnId === TAG_COLUMN_ID;
     const activeRecord =
       isLabelColumn && contextMenu.rowId != null ? tagRecords[contextMenu.rowId] : undefined;
-    const activeLabelId = activeRecord?.labelId ?? null;
-    const hasTagOrNote =
-      Boolean(activeRecord?.labelId) || Boolean(activeRecord?.note);
+    const activeLabelIds = Array.isArray(activeRecord?.labelIds) ? activeRecord?.labelIds : [];
+    const hasTagOrNote = activeLabelIds.length > 0 || Boolean(activeRecord?.note);
     const isTagLoading = isLabelColumn && (tagStatus === 'loading' || tagStatus === 'idle');
     const selectedRowIds = getSelectedRowIds();
     const selectionIncludesContext =
@@ -1200,7 +1209,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
               </div>
             ) : null}
             {tagLabels.map((label) => {
-              const isActive = activeLabelId === label.id;
+              const isActive = activeLabelIds.includes(label.id);
               return (
                 <button
                   key={label.id}
@@ -1240,7 +1249,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
                   void handleApplyLabel(null);
                 }}
               >
-                Clear label
+                Clear labels & notes
               </button>
             ) : null}
           </div>

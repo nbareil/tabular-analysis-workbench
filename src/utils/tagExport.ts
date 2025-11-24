@@ -39,13 +39,16 @@ const isTagRecord = (value: unknown): value is TagRecord => {
     return false;
   }
 
-  const { labelId, note, color, updatedAt } = value as Partial<TagRecord>;
-  const labelValid = labelId === null || typeof labelId === 'string';
+  const { labelIds, note, updatedAt } = value as Partial<TagRecord>;
+  const legacyLabelId = (value as any).labelId;
+  const labelValid =
+    (Array.isArray(labelIds) && labelIds.every((id) => typeof id === 'string')) ||
+    legacyLabelId === null ||
+    typeof legacyLabelId === 'string';
   const noteValid = note === undefined || typeof note === 'string';
-  const colorValid = color === undefined || typeof color === 'string';
   const timestampValid = typeof updatedAt === 'number' && Number.isFinite(updatedAt);
 
-  return labelValid && noteValid && colorValid && timestampValid;
+  return labelValid && noteValid && timestampValid;
 };
 
 const isTaggingSnapshot = (value: unknown): value is TaggingSnapshot => {
@@ -99,10 +102,68 @@ export const buildTagExportFilename = (
   return `${stem}-annotations-${formattedTimestamp}.json`;
 };
 
+const normaliseLabelIds = (value: unknown): string[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const unique = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (trimmed) {
+      unique.add(trimmed);
+    }
+  }
+
+  return Array.from(unique.values());
+};
+
+const toTagRecord = (value: any): TagRecord => {
+  const labelIds =
+    Array.isArray(value?.labelIds) && value.labelIds.length > 0
+      ? normaliseLabelIds(value.labelIds)
+      : value?.labelId
+        ? normaliseLabelIds([value.labelId])
+        : [];
+
+  const record: TagRecord = {
+    labelIds,
+    updatedAt:
+      typeof value?.updatedAt === 'number' && Number.isFinite(value.updatedAt)
+        ? value.updatedAt
+        : Date.now()
+  };
+
+  if (typeof value?.note === 'string') {
+    record.note = value.note;
+  }
+
+  return record;
+};
+
+const toTaggingSnapshot = (value: TaggingSnapshot): TaggingSnapshot => {
+  const tags: Record<number, TagRecord> = {};
+  for (const [rowKey, record] of Object.entries(value.tags)) {
+    const rowId = Number(rowKey);
+    if (!Number.isFinite(rowId) || rowId < 0 || !record) {
+      continue;
+    }
+    tags[rowId] = toTagRecord(record);
+  }
+
+  return {
+    labels: value.labels,
+    tags
+  };
+};
+
 export const parseTagExport = (input: unknown): ParsedTagExport => {
   if (isTaggingSnapshot(input)) {
     return {
-      snapshot: input,
+      snapshot: toTaggingSnapshot(input),
       metadata: null
     };
   }
@@ -117,7 +178,7 @@ export const parseTagExport = (input: unknown): ParsedTagExport => {
     }
 
     return {
-      snapshot: envelope.payload,
+      snapshot: toTaggingSnapshot(envelope.payload),
       metadata: {
         version: envelope.version,
         exportedAt:

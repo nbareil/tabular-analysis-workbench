@@ -26,9 +26,8 @@ interface LabelDefinition {
 }
 
 interface TagRecord {
-  labelId: string | null; // null clears tags without deleting notes
+  labelIds: string[];     // zero or more labels assigned to the row
   note?: string;          // markdown stored raw, sanitised on render
-  color?: string;         // cached from label for quick rendering
   updatedAt: number;      // epoch ms
 }
 
@@ -71,8 +70,8 @@ Existing RPC endpoints are extended/implemented as follows (all live in `DataWor
 | Method | Behaviour | Notes |
 |--------|-----------|-------|
 | `loadTags()` | Read OPFS envelopes, fall back to empty snapshot if files are missing or OPFS unavailable. | Should gate on capability detection to avoid throwing in unsupported browsers. |
-| `tagRows({ rowIds, labelId, note })` | Update or create `TagRecord` for each `rowId`. Returns `{ updated }` map for optimistic UI updates. | When `note` omitted, retain prior note; when `labelId` null, only clear label field. |
-| `clearTag(rowIds)` | Remove tag + note for each row. Returns `{ updated }` entries with `labelId: null`. | Used for "Clear tag" UX and for label deletion cascading. |
+| `tagRows({ rowIds, labelIds, note, mode })` | Update or create `TagRecord` for each `rowId`. Returns `{ updated }` map for optimistic UI updates. | `mode` defaults to `replace`; `append` unions incoming labels; `remove` subtracts them. When `note` is omitted, retain the prior note. |
+| `clearTag(rowIds)` | Remove tag + note for each row. Returns `{ updated }` entries with `labelIds: []`. | Used for "Clear tag" UX and for label deletion cascading. |
 | `updateLabel({ label })` | Upsert label, normalising timestamps and ensuring color defaults. Returns canonical `LabelDefinition`. | When color absent, auto-generate via palette helper. |
 | `deleteLabel({ labelId })` | Delete label and clear any rows referencing it. Returns `{ deleted: boolean }`. | Emits updates for affected rows so UI badge counts stay accurate. |
 | `exportTags()` | Return `TaggingSnapshot` plus `exportedAt` timestamp for download helpers. | UI serialises to JSON blob and triggers save dialog. |
@@ -114,23 +113,23 @@ Future enhancements:
 
 ### Tagging Rows
 1. Analysts select rows via the pinned label column (checkboxes w/ header select respect filters) or Cmd/Ctrl-click multi-select.
-2. Caller supplies the deduped list of `RowId`s and selected `labelId`.
-3. Worker maps each row to `{ labelId, note, color, updatedAt }`.
+2. Caller supplies the deduped list of `RowId`s and the selected `labelIds` (one or many).
+3. Worker maps each row to `{ labelIds, note, updatedAt }`.
 4. Response's `updated` map merges into UI store, triggering grid highlight + status bar counts plus context-menu feedback showing the batch size.
 5. Persistence scheduler flushes the dataset-scoped snapshot to OPFS.
 
 ### Adding / Editing Notes
-- Notes share the same `tagRows` request body (`note` field). UI should pass existing `labelId` to avoid stripping labels.
+- Notes share the same `tagRows` request body (`note` field). UI should pass the full `labelIds` set (and `mode: 'replace'`) to avoid stripping labels.
 - Markdown is stored raw; renderer must sanitise with DOMPurify before injecting into DOM (tracked via csv-explorer-91da).
 - Analysts can open the inline note editor from the grid label column context menu; changes persist via the worker and propagate back through `useTagStore`.
 
 ### Clearing Tags
-- Either call `clearTag` (bulk) or `tagRows` with `labelId: null`.
+- Either call `clearTag` (bulk) or `tagRows` with `labelIds: []`.
 - Worker deletes entries from `state.tagging.tags` and returns tombstones so cache can drop them.
 
 ### Deleting Labels
 1. UI confirms destructive action.
-2. `worker.deleteLabel` removes the label and cascades row updates to `labelId: null`.
+2. `worker.deleteLabel` removes the label and cascades row updates to `labelIds: []`.
 3. Response drives UI updates and surfaces number of affected rows in a toast.
 
 ### Export / Import

@@ -29,7 +29,7 @@ describe('ingestionPipeline', () => {
       ];
       tagging.tags = {
         1: {
-          labelId: 'label',
+          labelIds: ['label'],
           updatedAt: Date.now()
         }
       };

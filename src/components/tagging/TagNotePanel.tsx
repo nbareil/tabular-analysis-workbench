@@ -9,10 +9,10 @@ import { shallow } from 'zustand/shallow';
 interface TagNotePanelProps {
   open: boolean;
   rowId: number | null;
-  initialLabelId: string | null;
+  initialLabelIds: string[];
   initialNote: string;
-  onSave: (note: string, labelId: string | null) => void | Promise<void>;
-  onClear: (labelId: string | null) => void | Promise<void>;
+  onSave: (note: string, labelIds: string[]) => void | Promise<void>;
+  onClear: (labelIds: string[]) => void | Promise<void>;
   onClose: () => void;
   saving?: boolean;
 }
@@ -20,7 +20,7 @@ interface TagNotePanelProps {
 const TagNotePanel = ({
   open,
   rowId,
-  initialLabelId,
+  initialLabelIds,
   initialNote,
   onSave,
   onClear,
@@ -37,7 +37,7 @@ const TagNotePanel = ({
   );
   const load = useTagStore((state) => state.load);
   const [note, setNote] = useState(initialNote);
-  const [selectedLabelId, setSelectedLabelId] = useState<string | null>(initialLabelId);
+  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>(initialLabelIds);
 
   const activeRowRef = useRef<number | null>(rowId ?? null);
 
@@ -51,13 +51,13 @@ const TagNotePanel = ({
     if (rowChanged) {
       activeRowRef.current = rowId ?? null;
       setNote(initialNote);
-      setSelectedLabelId(initialLabelId);
+      setSelectedLabelIds(initialLabelIds);
     }
 
     if (status === 'idle') {
       void load();
     }
-  }, [initialLabelId, initialNote, load, open, rowId, status]);
+  }, [initialLabelIds, initialNote, load, open, rowId, status]);
 
   useEffect(() => {
     if (!open) {
@@ -77,23 +77,24 @@ const TagNotePanel = ({
   }, [onClose, open, saving]);
 
   const previewHtml = useMemo(() => renderMarkdownToSafeHtml(note), [note]);
-  const selectedLabel = useMemo(() => {
-    if (!selectedLabelId) {
-      return null;
+  const selectedLabels = useMemo(() => {
+    if (!selectedLabelIds.length) {
+      return [];
     }
-    return labels.find((label) => label.id === selectedLabelId) ?? null;
-  }, [labels, selectedLabelId]);
+    const ids = new Set(selectedLabelIds);
+    return labels.filter((label) => ids.has(label.id));
+  }, [labels, selectedLabelIds]);
 
   if (!open) {
     return null;
   }
 
   const handleSave = () => {
-    onSave(note.trim(), selectedLabelId);
+    onSave(note.trim(), selectedLabelIds);
   };
 
   const handleClear = () => {
-    onClear(selectedLabelId);
+    onClear(selectedLabelIds);
   };
 
   const handleOverlayClick = () => {
@@ -113,17 +114,26 @@ const TagNotePanel = ({
               Row {rowId != null ? `#${rowId}` : 'selection'}
             </p>
             <p className="text-xs text-slate-400">
-              {selectedLabel ? (
-                <span className="inline-flex items-center gap-2">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: selectedLabel.color }}
-                    aria-hidden
-                  />
-                  {selectedLabel.name}
+              {selectedLabels.length > 0 ? (
+                <span className="inline-flex flex-wrap items-center gap-2">
+                  {selectedLabels.slice(0, 3).map((label) => (
+                    <span key={label.id} className="inline-flex items-center gap-1">
+                      <span
+                        className="h-2.5 w-2.5 rounded-full"
+                        style={{ backgroundColor: label.color }}
+                        aria-hidden
+                      />
+                      {label.name}
+                    </span>
+                  ))}
+                  {selectedLabels.length > 3 ? (
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      +{selectedLabels.length - 3} more
+                    </span>
+                  ) : null}
                 </span>
               ) : (
-                'No label selected'
+                'No labels selected'
               )}
             </p>
           </div>
@@ -141,7 +151,7 @@ const TagNotePanel = ({
             <div>
               <p className="text-sm font-semibold">Tag palette</p>
               <p className="text-xs text-slate-400">
-                Apply a label to this row. Labels sync with the Labels panel.
+                Apply one or more labels to this row. Labels sync with the Labels panel.
               </p>
             </div>
             {status === 'loading' && (
@@ -152,8 +162,8 @@ const TagNotePanel = ({
             )}
             <TagPalette
               labels={labels}
-              selectedLabelId={selectedLabelId}
-              onSelect={setSelectedLabelId}
+              selectedLabelIds={selectedLabelIds}
+              onChange={setSelectedLabelIds}
               disabled={saving || status === 'loading'}
             />
           </section>

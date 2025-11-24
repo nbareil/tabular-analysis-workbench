@@ -21,13 +21,13 @@ describe('taggingController', () => {
     const controller = createTaggingController(state);
     const response = await controller.tagRows({
       rowIds: [1, 2],
-      labelId: 'alpha',
+      labelIds: ['alpha'],
       note: 'test'
     });
 
     expect(Object.keys(response.updated)).toHaveLength(2);
     expect(state.tagging.tags[1]).toMatchObject({
-      labelId: 'alpha',
+      labelIds: ['alpha'],
       note: 'test'
     });
     expect(state.tagging.dirty).toBe(true);
@@ -47,7 +47,7 @@ describe('taggingController', () => {
       ];
       tagging.tags = {
         1: {
-          labelId: 'alpha',
+          labelIds: ['alpha'],
           updatedAt: Date.now()
         }
       };

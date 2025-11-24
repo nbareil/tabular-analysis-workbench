@@ -50,8 +50,7 @@ describe('dataWorkerState', () => {
     const state = createDataWorkerState();
     const store = createMockTaggingStore();
     const tagRecord: TagRecord = {
-      labelId: 'abc',
-      color: '#fff',
+      labelIds: ['abc'],
       updatedAt: Date.now()
     };
 

@@ -14,69 +14,67 @@ const baseLabel: LabelDefinition = {
 describe('taggingHelpers', () => {
   it('preserves existing note when note argument is omitted', () => {
     const existing: TagRecord = {
-      labelId: baseLabel.id,
+      labelIds: [baseLabel.id],
       note: 'keep me',
-      color: baseLabel.color,
       updatedAt: 10
     };
 
     const record = buildTagRecord({
       existing,
-      label: baseLabel,
-      labelId: baseLabel.id,
+      labelIds: [baseLabel.id],
       timestamp: 20
     });
 
     expect(record.note).toBe('keep me');
-    expect(record.color).toBe(baseLabel.color);
+    expect(record.labelIds).toEqual([baseLabel.id]);
   });
 
   it('clears note when caller passes an empty string', () => {
     const existing: TagRecord = {
-      labelId: baseLabel.id,
+      labelIds: [baseLabel.id],
       note: 'remove me',
       updatedAt: 5
     };
 
     const record = buildTagRecord({
       existing,
-      label: baseLabel,
-      labelId: baseLabel.id,
+      labelIds: [baseLabel.id],
       note: '',
       timestamp: 10
     });
 
     expect(record.note).toBeUndefined();
+    expect(record.labelIds).toEqual([baseLabel.id]);
   });
 
-  it('omits color when labelId resolves to null', () => {
+  it('appends labels when mode is append', () => {
     const record = buildTagRecord({
-      label: undefined,
-      labelId: null,
+      existing: { labelIds: ['existing'], updatedAt: 1 },
+      labelIds: [baseLabel.id],
+      mode: 'append',
       timestamp: 2
     });
 
-    expect(record.labelId).toBeNull();
-    expect(record.color).toBeUndefined();
+    expect(record.labelIds).toEqual(['existing', baseLabel.id]);
   });
 
   it('cascades label deletion while retaining note content', () => {
     const record: TagRecord = {
-      labelId: baseLabel.id,
+      labelIds: [baseLabel.id, 'keep'],
       note: 'annotated',
       updatedAt: 1
     };
 
-    const cascaded = cascadeLabelDeletion(record, 50);
+    const cascaded = cascadeLabelDeletion(record, baseLabel.id, 50);
 
-    expect(cascaded.labelId).toBeNull();
+    expect(cascaded.labelIds).toEqual(['keep']);
     expect(cascaded.note).toBe('annotated');
     expect(cascaded.updatedAt).toBe(50);
   });
 
   it('identifies empty records without label or note', () => {
     const record = buildTagRecord({
-      labelId: null,
+      labelIds: [],
       timestamp: 99
     });
 

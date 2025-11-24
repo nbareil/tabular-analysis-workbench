@@ -1,42 +1,76 @@
-import type { LabelDefinition, TagRecord } from './types';
-
-interface BuildTagRecordOptions {
-  existing?: TagRecord;
-  label?: LabelDefinition;
-  labelId: string | null;
-  note?: string;
-  timestamp: number;
-}
+import type { TagRecord } from './types';
 
 const hasText = (value: unknown): value is string => {
   return typeof value === 'string' && value.length > 0;
 };
 
-/**
- * Builds a TagRecord that preserves existing notes when the caller omits them
- * and carries label colors forward for quick rendering.
- */
+const uniqueLabelIds = (ids: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
+};
+
+export const normaliseLabelIds = (raw: string[] | null | undefined): string[] => {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const cleaned = raw
+    .map((value) => (typeof value === 'string' ? value.trim() : ''))
+    .filter((value) => value.length > 0);
+  return uniqueLabelIds(cleaned);
+};
+
 export const buildTagRecord = ({
   existing,
-  label,
-  labelId,
+  labelIds,
   note,
+  mode,
   timestamp
-}: BuildTagRecordOptions): TagRecord => {
+}: {
+  existing?: TagRecord;
+  labelIds?: string[] | null;
+  note?: string;
+  mode?: 'replace' | 'append' | 'remove';
+  timestamp: number;
+}): TagRecord => {
+  const existingLabelIds = normaliseLabelIds(existing?.labelIds ?? []);
+  let nextLabelIds: string[];
+
+  if (labelIds === undefined) {
+    nextLabelIds = existingLabelIds;
+  } else if (labelIds === null) {
+    nextLabelIds = [];
+  } else {
+    const incoming = normaliseLabelIds(labelIds);
+    switch (mode) {
+      case 'append':
+        nextLabelIds = uniqueLabelIds([...existingLabelIds, ...incoming]);
+        break;
+      case 'remove':
+        nextLabelIds = existingLabelIds.filter((id) => !incoming.includes(id));
+        break;
+      case 'replace':
+      default:
+        nextLabelIds = incoming;
+        break;
+    }
+  }
+
   const record: TagRecord = {
-    labelId,
+    labelIds: nextLabelIds,
     updatedAt: timestamp
   };
 
   const nextNote = note === undefined ? existing?.note : note;
   if (hasText(nextNote)) {
     record.note = nextNote;
-  }
-
-  if (labelId && label?.color) {
-    record.color = label.color;
-  } else if (labelId && existing?.color) {
-    record.color = existing.color;
   }
 
   return record;
@@ -47,10 +81,11 @@ export const buildTagRecord = ({
  */
 export const cascadeLabelDeletion = (
   record: TagRecord,
+  deletedLabelId: string,
   timestamp: number
 ): TagRecord => {
   const next: TagRecord = {
-    labelId: null,
+    labelIds: normaliseLabelIds(record.labelIds).filter((id) => id !== deletedLabelId),
     updatedAt: timestamp
   };
 
@@ -66,5 +101,5 @@ export const cascadeLabelDeletion = (
  * labels and notes are cleared.
  */
 export const isTagRecordEmpty = (record: TagRecord): boolean => {
-  return record.labelId == null && !hasText(record.note);
+  return record.labelIds.length === 0 && !hasText(record.note);
 };

@@ -20,7 +20,7 @@ const sampleLabels: LabelDefinition[] = [
 
 const sampleTags: Record<number, TagRecord> = {
   42: {
-    labelId: 'label-1',
+    labelIds: ['label-1'],
     note: 'Check authentication timeline',
     updatedAt: 2
   }

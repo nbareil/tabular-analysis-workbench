@@ -22,7 +22,7 @@ describe('buildTagCellValue', () => {
     const labels = new Map<string, LabelDefinition>([[baseLabel.id, baseLabel]]);
     const tags: Record<number, TagRecord> = {
       8: {
-        labelId: 'alpha',
+        labelIds: ['alpha'],
         updatedAt: 20
       }
     };
@@ -31,9 +31,7 @@ describe('buildTagCellValue', () => {
 
     expect(result).toEqual({
       rowId: 8,
-      labelId: 'alpha',
-      labelName: 'Alpha',
-      color: '#ff9922',
+      labels: [{ id: 'alpha', name: 'Alpha', color: '#ff9922' }],
       note: undefined,
       updatedAt: 20
     });
@@ -43,7 +41,7 @@ describe('buildTagCellValue', () => {
     const labels = new Map<string, LabelDefinition>();
     const tags: Record<number, TagRecord> = {
       3: {
-        labelId: 'orphaned',
+        labelIds: ['orphaned'],
         updatedAt: 42
       }
     };
@@ -56,7 +54,7 @@ describe('buildTagCellValue', () => {
     const labels = new Map<string, LabelDefinition>();
     const tags: Record<number, TagRecord> = {
       9: {
-        labelId: null,
+        labelIds: [],
         note: '  needs review ',
         updatedAt: 90
       }
@@ -65,9 +63,7 @@ describe('buildTagCellValue', () => {
     const result = buildTagCellValue(9, tags, labels);
     expect(result).toEqual({
       rowId: 9,
-      labelId: null,
-      labelName: undefined,
-      color: undefined,
+      labels: [],
       note: 'needs review',
       updatedAt: 90
     });

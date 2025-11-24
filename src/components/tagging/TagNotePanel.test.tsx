@@ -58,25 +58,25 @@ const sampleLabels: LabelDefinition[] = [
 ];
 
 describe('TagNotePanel', () => {
-beforeEach(async () => {
-  await act(async () => {
-    useTagStore.setState({
-      labels: sampleLabels,
-      status: 'ready',
-      error: null
+  beforeEach(async () => {
+    await act(async () => {
+      useTagStore.setState({
+        labels: sampleLabels,
+        status: 'ready',
+        error: null
+      });
     });
   });
-});
 
-afterEach(async () => {
-  await act(async () => {
-    useTagStore.setState({
-      labels: storeSnapshot.labels,
-      status: storeSnapshot.status,
-      error: storeSnapshot.error
+  afterEach(async () => {
+    await act(async () => {
+      useTagStore.setState({
+        labels: storeSnapshot.labels,
+        status: storeSnapshot.status,
+        error: storeSnapshot.error
+      });
     });
   });
-});
 
   it('lets users edit markdown notes and choose labels', async () => {
     const handleSave = vi.fn();
@@ -85,7 +85,7 @@ afterEach(async () => {
         <TagNotePanel
           open
           rowId={42}
-          initialLabelId={null}
+          initialLabelIds={[]}
           initialNote="**bold**"
           onSave={handleSave}
           onClear={vi.fn()}
@@ -102,7 +102,7 @@ afterEach(async () => {
       fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     });
 
-    expect(handleSave).toHaveBeenCalledWith('**bold** status', 'critical');
+    expect(handleSave).toHaveBeenCalledWith('**bold** status', ['critical']);
     expect(screen.getByTestId('note-preview').innerHTML).toContain('<strong>bold</strong>');
   });
 
@@ -113,7 +113,7 @@ afterEach(async () => {
         <TagNotePanel
           open
           rowId={99}
-          initialLabelId="info"
+          initialLabelIds={['info']}
           initialNote="Note content"
           onSave={vi.fn()}
           onClear={handleClear}
@@ -125,6 +125,6 @@ afterEach(async () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /clear note/i }));
     });
-    expect(handleClear).toHaveBeenCalledWith('info');
+    expect(handleClear).toHaveBeenCalledWith(['info']);
   });
 });

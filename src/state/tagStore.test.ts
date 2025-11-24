@@ -27,7 +27,7 @@ describe('useTagStore', () => {
     const response: TagRowsResponse = {
       updated: {
         42: {
-          labelId: null,
+          labelIds: [],
           updatedAt: 20
         }
       }
@@ -39,15 +39,14 @@ describe('useTagStore', () => {
     useTagStore.setState({
       tags: {
         42: {
-          labelId: 'existing',
-          color: '#000',
+          labelIds: ['existing'],
           updatedAt: 10
         }
       },
       status: 'ready'
     });
 
-    await useTagStore.getState().applyTag({ rowIds: [42], labelId: null });
+    await useTagStore.getState().applyTag({ rowIds: [42], labelIds: null });
 
     expect(useTagStore.getState().tags[42]).toBeUndefined();
   });
@@ -57,7 +56,7 @@ describe('useTagStore', () => {
       deleted: true,
       updated: {
         7: {
-          labelId: null,
+          labelIds: [],
           note: 'persisted note',
           updatedAt: 50
         }
@@ -80,7 +79,7 @@ describe('useTagStore', () => {
       ],
       tags: {
         7: {
-          labelId: 'label-1',
+          labelIds: ['label-1'],
           note: 'persisted note',
           updatedAt: 10
         }
@@ -92,7 +91,7 @@ describe('useTagStore', () => {
     expect(deleted).toBe(true);
     expect(useTagStore.getState().labels).toHaveLength(0);
     expect(useTagStore.getState().tags[7]).toEqual({
-      labelId: null,
+      labelIds: [],
       note: 'persisted note',
       updatedAt: 50
     });

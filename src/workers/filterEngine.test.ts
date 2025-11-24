@@ -374,11 +374,11 @@ describe('filterEngine', () => {
 
     const tags: Record<number, TagRecord> = {
       0: {
-        labelId: 'label-1',
+        labelIds: ['label-1'],
         updatedAt: 10
       },
       2: {
-        labelId: null,
+        labelIds: [],
         note: 'needs review',
         updatedAt: 20
       }

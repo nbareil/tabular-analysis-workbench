@@ -126,9 +126,8 @@ export interface LabelDefinition {
 }
 
 export interface TagRecord {
-  labelId: string | null;
+  labelIds: string[];
   note?: string;
-  color?: string;
   updatedAt: number;
 }
 
@@ -149,8 +148,9 @@ export const TAG_NO_LABEL_FILTER_VALUE = '__tag:none';
 
 export interface TagRowsRequest {
   rowIds: number[];
-  labelId: string | null;
+  labelIds?: string[] | null;
   note?: string;
+  mode?: 'replace' | 'append' | 'remove';
 }
 
 export interface TagRowsResponse {

@@ -7,7 +7,7 @@ import type {
   RowBatch,
   TagRecord
 } from './types';
-import { TAG_COLUMN_ID } from './types';
+import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from './types';
 import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
 import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import { normalizeString } from './utils/stringUtils';
@@ -171,12 +171,12 @@ const evaluateTagPredicate = (
   const operator = predicate.operator;
 
   if (operator !== 'eq' && operator !== 'neq') {
-  return { matches: result };
+    return { matches: result };
   }
 
   const target =
-    typeof predicate.value === 'string'
-      ? predicate.value
+    predicate.value === TAG_NO_LABEL_FILTER_VALUE
+      ? null
       : predicate.value === null
         ? null
         : String(predicate.value ?? '');
@@ -191,17 +191,17 @@ const evaluateTagPredicate = (
     }
 
     const record = tags[rowId];
-    const labelId = record?.labelId ?? null;
-    const isMatch = target === null ? labelId == null : labelId === target;
+    const labelIds = Array.isArray(record?.labelIds) ? record.labelIds : [];
+    const isMatch = target === null ? labelIds.length === 0 : labelIds.includes(target);
 
     if (operator === 'eq') {
       result[index] = isMatch ? 1 : 0;
     } else {
       result[index] = isMatch ? 0 : 1;
     }
-    }
+  }
 
-    return { matches: result };
+  return { matches: result };
 };
 
 const evaluatePredicate = (

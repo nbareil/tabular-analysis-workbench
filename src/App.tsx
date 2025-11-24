@@ -116,7 +116,7 @@ const AppShell = ({
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [noteEditor, setNoteEditor] = useState<{
     rowId: number;
-    labelId: string | null;
+    labelIds: string[];
     note: string;
   } | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
@@ -423,7 +423,7 @@ const AppShell = ({
       const record = tagRecords[rowId] ?? null;
       setNoteEditor({
         rowId,
-        labelId: record?.labelId ?? null,
+        labelIds: Array.isArray(record?.labelIds) ? record.labelIds : [],
         note: record?.note ?? ''
       });
     },
@@ -431,13 +431,18 @@ const AppShell = ({
   );
 
   const handleSaveNote = useCallback(
-    async (note: string, labelId: string | null) => {
+    async (note: string, labelIds: string[]) => {
       if (!noteEditor) {
         return;
       }
       setNoteSaving(true);
       try {
-        await applyTagToRows({ rowIds: [noteEditor.rowId], labelId, note });
+        await applyTagToRows({
+          rowIds: [noteEditor.rowId],
+          labelIds,
+          note,
+          mode: 'replace'
+        });
         setNoteEditor(null);
       } catch (error) {
         console.error('Failed to save note', error);
@@ -449,13 +454,18 @@ const AppShell = ({
   );
 
   const handleClearNote = useCallback(
-    async (labelId: string | null) => {
+    async (labelIds: string[]) => {
       if (!noteEditor) {
         return;
       }
       setNoteSaving(true);
       try {
-        await applyTagToRows({ rowIds: [noteEditor.rowId], labelId, note: '' });
+        await applyTagToRows({
+          rowIds: [noteEditor.rowId],
+          labelIds,
+          note: '',
+          mode: 'replace'
+        });
         setNoteEditor(null);
       } catch (error) {
         console.error('Failed to clear note', error);
@@ -967,7 +977,7 @@ const AppShell = ({
       <TagNotePanel
         open={noteEditor != null}
         rowId={noteEditor?.rowId ?? null}
-        initialLabelId={noteEditor?.labelId ?? null}
+        initialLabelIds={noteEditor?.labelIds ?? []}
         initialNote={noteEditor?.note ?? ''}
         onSave={handleSaveNote}
         onClear={handleClearNote}

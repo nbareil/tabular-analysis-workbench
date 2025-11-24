@@ -128,7 +128,7 @@ describe('MarkdownTooltip', () => {
   it('renders markdown note as HTML', () => {
     const mockValue: TagCellValue = {
       rowId: 1,
-      labelId: null,
+      labels: [],
       note: '**bold** text and *italic* text',
       updatedAt: Date.now()
     };
@@ -145,7 +145,7 @@ describe('MarkdownTooltip', () => {
   it('sanitizes malicious HTML in notes to prevent XSS', () => {
     const mockValue: TagCellValue = {
       rowId: 1,
-      labelId: null,
+      labels: [],
       note: 'Safe text <script>alert("XSS")</script> more text',
       updatedAt: Date.now()
     };
@@ -164,8 +164,7 @@ describe('MarkdownTooltip', () => {
   it('renders label name when note is not present', () => {
     const mockValue: TagCellValue = {
       rowId: 1,
-      labelId: 'label-1',
-      labelName: 'Important Label',
+      labels: [{ id: 'label-1', name: 'Important Label' }],
       updatedAt: Date.now()
     };
 
@@ -187,7 +186,7 @@ describe('MarkdownTooltip', () => {
   it('returns null when value has neither note nor labelName', () => {
     const mockValue: TagCellValue = {
       rowId: 1,
-      labelId: null,
+      labels: [],
       updatedAt: Date.now()
     };
 

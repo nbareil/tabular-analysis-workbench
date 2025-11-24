@@ -72,10 +72,14 @@ export const useTagStore = create<TagState>((set, get) => ({
             continue;
           }
 
-          if (record.labelId == null && !record.note) {
+          const labels = Array.isArray(record.labelIds) ? record.labelIds : [];
+          if (labels.length === 0 && !record.note) {
             delete nextTags[numericRowId];
           } else {
-            nextTags[numericRowId] = record;
+            nextTags[numericRowId] = {
+              ...record,
+              labelIds: labels
+            };
           }
         }
 
@@ -166,10 +170,14 @@ export const useTagStore = create<TagState>((set, get) => ({
             continue;
           }
 
-          if (record.labelId == null && !record.note) {
+          const labels = Array.isArray(record.labelIds) ? record.labelIds : [];
+          if (labels.length === 0 && !record.note) {
             delete nextTags[numericRowId];
           } else {
-            nextTags[numericRowId] = record;
+            nextTags[numericRowId] = {
+              ...record,
+              labelIds: labels
+            };
           }
         }
 
