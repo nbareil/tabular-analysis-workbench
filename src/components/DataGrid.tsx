@@ -23,7 +23,7 @@ import type { FilterState, SessionSnapshot } from '@state/sessionStore';
 import { useSessionStore } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { logDebug } from '@utils/debugLog';
-import { buildTagCellValue, type TagCellValue } from '@utils/tagCells';
+import { buildTagCellValue, type TagCellValue, type TagLabelView } from '@utils/tagCells';
 import { renderMarkdownToSafeHtml } from '@utils/markdown';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
@@ -206,7 +206,7 @@ export const MarkdownTooltip = ({
   }
 
   if (labels.length > 0) {
-    return <div>{labels.map((label) => label.name).join(', ')}</div>;
+    return <div>{labels.map((label: TagLabelView) => label.name).join(', ')}</div>;
   }
 
   return null;
