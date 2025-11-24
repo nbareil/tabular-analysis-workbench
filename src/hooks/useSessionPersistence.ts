@@ -21,16 +21,30 @@ const requestReadPermission = async (
     return null;
   }
 
-  const current = await handle.queryPermission({ mode: 'read' });
-  if (current === 'granted' || current === 'denied') {
+  try {
+    const current = await handle.queryPermission({ mode: 'read' });
+    if (current === 'granted' || current === 'denied') {
+      return current;
+    }
+
+    const userActivation = (navigator as Navigator & {
+      userActivation?: { isActive: boolean };
+    }).userActivation;
+
+    if (typeof handle.requestPermission === 'function' && userActivation?.isActive) {
+      try {
+        return await handle.requestPermission({ mode: 'read' });
+      } catch (error) {
+        console.warn('[session] requestPermission failed', error);
+        return 'prompt';
+      }
+    }
+
     return current;
+  } catch (error) {
+    console.warn('[session] Failed to check file permission', error);
+    return 'prompt';
   }
-
-  if (typeof handle.requestPermission === 'function') {
-    return handle.requestPermission({ mode: 'read' });
-  }
-
-  return current;
 };
 
 export const useSessionPersistence = (
