@@ -146,37 +146,44 @@ export const toggleRowSelection = (gridApi: GridApi | null, rowId: number | null
 };
 
 const TagCellRenderer = ({
-value
+  value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element => {
-if (!value) {
-return (
-<span className="flex items-center gap-2 text-[11px] text-slate-500">
-<span className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-600" aria-hidden />
-Add label
-</span>
-);
-}
+  const theme = useAppStore((state) => state.theme);
 
-const { color, labelName, note } = value;
-const text = labelName ?? (note ? 'No label' : 'Tagged');
+  if (!value) {
+    return (
+      <span className="flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+        <span
+          className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-400 dark:border-slate-600"
+          aria-hidden
+        />
+        Add label
+      </span>
+    );
+  }
 
-return (
-<span className="flex items-center gap-2 truncate text-xs text-slate-100">
-<span
-className="h-2.5 w-2.5 shrink-0 rounded-full"
-style={
-color
-? { backgroundColor: color }
-: { border: '1px solid rgb(71 85 105)', backgroundColor: 'transparent' }
-}
-aria-hidden
-/>
-<span className="truncate">{text}</span>
-{note ? (
-<span className="text-[10px] uppercase tracking-wide text-slate-400">Note</span>
-) : null}
-</span>
-);
+  const { color, labelName, note } = value;
+  const text = labelName ?? (note ? 'No label' : 'Tagged');
+
+  return (
+    <span className="flex items-center gap-2 truncate text-xs text-slate-900 dark:text-slate-100">
+      <span
+        className="h-2.5 w-2.5 shrink-0 rounded-full"
+        style={
+          color
+            ? { backgroundColor: color }
+            : { border: '1px solid rgb(71 85 105)', backgroundColor: 'transparent' }
+        }
+        aria-hidden
+      />
+      <span className="truncate">{text}</span>
+      {note ? (
+        <span className="text-[10px] uppercase tracking-wide text-slate-600 dark:text-slate-400">
+          Note
+        </span>
+      ) : null}
+    </span>
+  );
 };
 
 export const MarkdownTooltip = ({
