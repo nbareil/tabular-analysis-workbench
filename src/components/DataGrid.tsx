@@ -158,6 +158,49 @@ export const getNextRowIndex = ({
   return nextIndex;
 };
 
+export const getEmptyStateMessage = ({
+  status,
+  totalRows,
+  matchedRows
+}: {
+  status: LoaderStatus;
+  totalRows: number;
+  matchedRows: number | null;
+}): string => {
+  if (status === 'loading') {
+    return 'Loading rows…';
+  }
+
+  if (totalRows > 0 && matchedRows === 0) {
+    return 'No rows match the current filters or search.';
+  }
+
+  return 'Select a CSV or TSV file to begin.';
+};
+
+export const shouldShowInitialPlaceholder = ({
+  status,
+  totalRows,
+  columnCount
+}: {
+  status: LoaderStatus;
+  totalRows: number;
+  columnCount: number;
+}): boolean => status !== 'loading' && totalRows === 0 && columnCount === 0;
+
+export const shouldShowEmptyOverlay = ({
+  status,
+  totalRows,
+  matchedRows,
+  columnCount
+}: {
+  status: LoaderStatus;
+  totalRows: number;
+  matchedRows: number | null;
+  columnCount: number;
+}): boolean =>
+  status !== 'loading' && totalRows > 0 && matchedRows === 0 && columnCount > 0;
+
 export const toggleRowSelection = (gridApi: GridApi | null, rowId: number | null): boolean => {
   if (!gridApi || rowId == null) {
     return false;
@@ -274,6 +317,12 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const [tagMutationPending, setTagMutationPending] = useState(false);
   const [keyboardFocusedRowId, setKeyboardFocusedRowId] = useState<number | null>(null);
   const keyboardFocusedRowIdRef = useRef<number | null>(null);
+  const lastRenderSnapshotRef = useRef<string | null>(null);
+  const viewStateRef = useRef({
+    status,
+    matchedRows,
+    totalRows
+  });
 
   useEffect(() => {
     if (!columns.length) {
@@ -373,6 +422,14 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   }, [labelLookup, tagRecords]);
 
   useEffect(() => {
+    viewStateRef.current = {
+      status,
+      matchedRows,
+      totalRows
+    };
+  }, [matchedRows, status, totalRows]);
+
+  useEffect(() => {
     if (status === 'ready' && tagStatus === 'idle') {
       void loadTags();
     }
@@ -464,13 +521,27 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       return;
     }
 
+    if (
+      typeof (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed === 'function' &&
+      (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed?.()
+    ) {
+      if (import.meta.env.DEV) {
+        logDebug('grid', 'skipping datasource update because grid is destroyed');
+      }
+      return;
+    }
+
     const datasource: IDatasource = {
       getRows: async (params: IGetRowsParams) => {
         try {
           if (import.meta.env.DEV) {
+            const currentView = viewStateRef.current;
             logDebug('grid', 'getRows request', {
               startRow: params.startRow,
-              endRow: params.endRow
+              endRow: params.endRow,
+              status: currentView.status,
+              matchedRows: currentView.matchedRows,
+              totalRows: currentView.totalRows
             });
           }
 
@@ -513,7 +584,14 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       return;
     }
 
-    if (gridApi && typeof gridApi.refreshInfiniteCache === 'function') {
+    if (
+      gridApi &&
+      typeof gridApi.refreshInfiniteCache === 'function' &&
+      !(
+        typeof (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed === 'function' &&
+        (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed?.()
+      )
+    ) {
       if (import.meta.env.DEV) {
         logDebug('grid', 'refreshing infinite cache after ready status');
       }
@@ -537,6 +615,10 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       initialRowsRequestedRef.current ||
       !gridApi ||
       typeof gridApi.refreshInfiniteCache !== 'function' ||
+      (
+        typeof (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed === 'function' &&
+        (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed?.()
+      ) ||
       totalRows <= 0
     ) {
       return;
@@ -691,7 +773,46 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   }, [columns, gridApi, status, totalRows, viewVersion]);
 
   const themeClass = theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz';
-  const showPlaceholder = status !== 'loading' && (matchedRows ?? 0) === 0;
+  const showPlaceholder = shouldShowInitialPlaceholder({
+    status,
+    totalRows,
+    columnCount: columns.length
+  });
+  const showEmptyOverlay = shouldShowEmptyOverlay({
+    status,
+    totalRows,
+    matchedRows,
+    columnCount: columns.length
+  });
+  const emptyStateMessage = getEmptyStateMessage({
+    status,
+    totalRows,
+    matchedRows
+  });
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
+    const snapshot = JSON.stringify({
+      status,
+      matchedRows,
+      totalRows,
+      viewVersion,
+      showPlaceholder,
+      showEmptyOverlay,
+      emptyStateMessage,
+      columnCount: columns.length,
+      gridReady: Boolean(gridApi)
+    });
+    if (snapshot === lastRenderSnapshotRef.current) {
+      return;
+    }
+    lastRenderSnapshotRef.current = snapshot;
+    console.info(`[grid] render state ${snapshot}`);
+  }, [columns.length, emptyStateMessage, gridApi, matchedRows, showEmptyOverlay, showPlaceholder, status, totalRows, viewVersion]);
+
   const menuMetadata = useMemo(() => {
     if (!contextMenu) {
       return null;
@@ -1275,44 +1396,51 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     >
       {showPlaceholder ? (
         <div className="flex h-full items-center justify-center text-sm text-slate-500">
-          Select a CSV or TSV file to begin.
+          {emptyStateMessage}
         </div>
       ) : (
-        <AgGridReact<GridRow>
-          columnDefs={columnDefs}
-          defaultColDef={defaultColDef}
-          suppressContextMenu
-          rowSelection="multiple"
-          rowMultiSelectWithClick
-          animateRows
-          rowModelType="infinite"
-          cacheBlockSize={500}
-          maxBlocksInCache={2}
-          getRowId={(params) => (params.data ? String(params.data.__rowId) : '')}
-          tooltipShowDelay={0}
-          getRowClass={(params) =>
-            typeof params.data?.__rowId === 'number' &&
-            Number.isFinite(params.data.__rowId) &&
-            params.data.__rowId === keyboardFocusedRowId
-              ? 'ag-row-keyboard-active'
-              : undefined
-          }
-          onCellContextMenu={handleCellContextMenu}
-          onSortChanged={handleSortChanged}
-          onSelectionChanged={(event: SelectionChangedEvent) => {
-            const nodes = event.api?.getSelectedNodes?.() ?? [];
-            const anchor = nodes[nodes.length - 1];
-            const rowId =
-              typeof anchor?.data?.__rowId === 'number' && Number.isFinite(anchor.data.__rowId)
-                ? anchor.data.__rowId
-                : null;
-            setKeyboardFocusedRowId(rowId);
-          }}
-          onGridReady={(event: GridReadyEvent) => {
-            setGridApi(event.api);
-            setColumnApi(event.columnApi);
-          }}
-        />
+        <div className="relative h-full w-full">
+          <AgGridReact<GridRow>
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
+            suppressContextMenu
+            rowSelection="multiple"
+            rowMultiSelectWithClick
+            animateRows
+            rowModelType="infinite"
+            cacheBlockSize={500}
+            maxBlocksInCache={2}
+            getRowId={(params) => (params.data ? String(params.data.__rowId) : '')}
+            tooltipShowDelay={0}
+            getRowClass={(params) =>
+              typeof params.data?.__rowId === 'number' &&
+              Number.isFinite(params.data.__rowId) &&
+              params.data.__rowId === keyboardFocusedRowId
+                ? 'ag-row-keyboard-active'
+                : undefined
+            }
+            onCellContextMenu={handleCellContextMenu}
+            onSortChanged={handleSortChanged}
+            onSelectionChanged={(event: SelectionChangedEvent) => {
+              const nodes = event.api?.getSelectedNodes?.() ?? [];
+              const anchor = nodes[nodes.length - 1];
+              const rowId =
+                typeof anchor?.data?.__rowId === 'number' && Number.isFinite(anchor.data.__rowId)
+                  ? anchor.data.__rowId
+                  : null;
+              setKeyboardFocusedRowId(rowId);
+            }}
+            onGridReady={(event: GridReadyEvent) => {
+              setGridApi(event.api);
+              setColumnApi(event.columnApi);
+            }}
+          />
+          {showEmptyOverlay ? (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/60 text-sm text-slate-300">
+              {emptyStateMessage}
+            </div>
+          ) : null}
+        </div>
       )}
       {renderContextMenu()}
     </div>

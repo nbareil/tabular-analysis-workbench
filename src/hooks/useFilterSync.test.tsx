@@ -18,7 +18,7 @@ vi.mock('@workers/dataWorkerProxy', () => {
 });
 
 const TestHarness = (): null => {
-  useFilterSync();
+  useFilterSync({ bootstrap: true });
   return null;
 };
 
@@ -92,6 +92,30 @@ describe('useFilterSync', () => {
         limit: 0
       })
     );
+  });
+
+  it('does not auto-bootstrap filters when bootstrap is disabled', async () => {
+    await act(async () => {
+      useSessionStore.setState((state) => ({
+        ...state,
+        filters: [baseFilter]
+      }));
+      useDataStore.setState((state) => ({
+        ...state,
+        status: 'ready',
+        totalRows: 100
+      }));
+    });
+
+    const PassiveHarness = (): null => {
+      useFilterSync();
+      return null;
+    };
+
+    render(<PassiveHarness />);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockApplyFilter).not.toHaveBeenCalled();
   });
 
   it('defers bootstrap until the worker reports ready rows', async () => {

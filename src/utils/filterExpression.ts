@@ -6,8 +6,49 @@ import {
 } from '@workers/types';
 import type { FilterState } from '@state/sessionStore';
 
+const isBlankValue = (value: unknown): boolean => {
+  if (value == null) {
+    return true;
+  }
+  if (typeof value === 'string') {
+    return value.trim().length === 0;
+  }
+  return false;
+};
+
+export const isFilterComplete = (filter: FilterState): boolean => {
+  if (filter.enabled === false) {
+    return false;
+  }
+
+  if (!filter.column || !filter.operator) {
+    return false;
+  }
+
+  if (filter.column === TAG_COLUMN_ID) {
+    return !isBlankValue(filter.value);
+  }
+
+  switch (filter.operator) {
+    case 'between':
+    case 'range':
+      return !isBlankValue(filter.value) || !isBlankValue(filter.value2);
+    case 'eq':
+    case 'neq':
+    case 'contains':
+    case 'startsWith':
+    case 'matches':
+    case 'notMatches':
+    case 'gt':
+    case 'lt':
+      return !isBlankValue(filter.value);
+    default:
+      return !isBlankValue(filter.value);
+  }
+};
+
 export const buildFilterExpression = (filters: FilterState[]): FilterNode | null => {
-  const activeFilters = filters.filter((filter) => filter.enabled !== false);
+  const activeFilters = filters.filter(isFilterComplete);
   if (!activeFilters.length) {
     return null;
   }

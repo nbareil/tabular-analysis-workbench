@@ -34,6 +34,7 @@ import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
 import { useSessionPersistence } from '@/hooks/useSessionPersistence';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useGlobalSearchSync } from '@/hooks/useGlobalSearchSync';
+import { useAutoFileLoader } from '@/hooks/useAutoFileLoader';
 import { formatBytes } from '@utils/formatBytes';
 import { reportAppError } from '@utils/diagnostics';
 import { useDiagnosticsReporter } from '@/hooks/useDiagnosticsReporter';
@@ -77,6 +78,7 @@ const AppShell = ({
   const [workerReady, setWorkerReady] = useState(false);
   const fileHandle = useSessionStore((state) => state.fileHandle);
   const filters = useSessionStore((state) => state.filters);
+  const sorts = useSessionStore((state) => state.sorts);
   const searchCaseSensitive = useSessionStore((state) => state.searchCaseSensitive);
   const setSearchCaseSensitive = useSessionStore((state) => state.setSearchCaseSensitive);
   const interfaceFontFamily = useSessionStore((state) => state.interfaceFontFamily);
@@ -97,6 +99,8 @@ const AppShell = ({
   const clearErrorDetails = useDataStore((state) => state.clearError);
   const matchedRows = useDataStore((state) => state.matchedRows);
   const totalRows = useDataStore((state) => state.totalRows);
+  const filterMatchedRows = useDataStore((state) => state.filterMatchedRows);
+  const searchMatchedRows = useDataStore((state) => state.searchMatchedRows);
   const stats = useDataStore((state) => state.stats);
   const columns = useDataStore((state) => state.columns);
   const columnInference = useDataStore((state) => state.columnInference);
@@ -106,7 +110,7 @@ const AppShell = ({
   const tagRecords = useTagStore((state) => state.tags);
   const applyTagToRows = useTagStore((state) => state.applyTag);
   const exportTags = useTagStore((state) => state.exportTags);
-  const { applyFilters } = useFilterSync();
+  const { applyFilters } = useFilterSync({ bootstrap: true });
   const [searchTerm, setSearchTerm] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -134,8 +138,57 @@ const AppShell = ({
     lastSavedAt: persistenceLastSavedAt,
     reconnectFile: reconnectPersistedFile
   } = sessionPersistence;
+  const lastViewSnapshotRef = useRef<string | null>(null);
 
   useDiagnosticsReporter();
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
+    const snapshot = JSON.stringify({
+      workerReady,
+      fileName: fileHandle?.name ?? null,
+      loaderStatus,
+      matchedRows,
+      totalRows,
+      filterMatchedRows,
+      searchMatchedRows,
+      columnCount: columns.length,
+      filterCount: filters.length,
+      filters: filters.map((filter) => ({
+        id: filter.id,
+        column: filter.column,
+        operator: filter.operator,
+        enabled: filter.enabled !== false,
+        value: filter.value,
+        value2: filter.value2
+      })),
+      sortCount: sorts.length,
+      sorts,
+      restoringSession: persistenceRestoring,
+      reconnectingSession: persistenceReconnecting
+    });
+    if (snapshot === lastViewSnapshotRef.current) {
+      return;
+    }
+    lastViewSnapshotRef.current = snapshot;
+    console.info(`[app] view snapshot ${snapshot}`);
+  }, [
+    columns.length,
+    fileHandle,
+    filterMatchedRows,
+    filters,
+    loaderStatus,
+    matchedRows,
+    persistenceReconnecting,
+    persistenceRestoring,
+    searchMatchedRows,
+    sorts,
+    totalRows,
+    workerReady
+  ]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -222,92 +275,87 @@ const AppShell = ({
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadFile = async () => {
-      if (!fileHandle) {
-        return;
-      }
+  const loadSelectedFile = useCallback(
+    async (handle: FileSystemFileHandle) => {
+      let callbackReportedError = false;
 
       if (import.meta.env.DEV) {
         console.info('[app] Triggering loadFile for handle', {
-          name: fileHandle.name
+          name: handle.name
         });
       }
 
       setSearchTerm('');
       clearSearchResult();
-
-      startLoading(fileHandle.name ?? 'Unknown file');
+      startLoading(handle.name ?? 'Unknown file');
 
       try {
         const worker = getDataWorker();
         await worker.loadFile(
-          { handle: fileHandle },
+          { handle },
           proxy({
             onStart: async ({ columns }) => {
               if (import.meta.env.DEV) {
                 logDebug('app', 'Worker onStart', { columnCount: columns.length, columns });
               }
-              if (!cancelled) {
-                setHeader(columns);
-              }
+              setHeader(columns);
             },
             onProgress: async (progress) => {
               if (import.meta.env.DEV) {
                 logDebug('app', 'Worker onProgress', { ...progress });
               }
-              if (!cancelled) {
-                reportProgress(progress);
-              }
+              reportProgress(progress);
             },
             onComplete: async (summary) => {
               if (import.meta.env.DEV) {
                 console.info('[app] Worker onComplete', summary);
               }
-              if (!cancelled) {
-                complete(summary);
-                // Initialize column layout: hide columns that are entirely null/empty
-                const columnKeys = Object.keys(summary.columnTypes);
-                initializeColumnLayout(columnKeys, summary.columnInference, summary.rowsParsed);
-                // Load tags to populate DataGrid tag column
-                void useTagStore.getState().load();
-              }
+              complete(summary);
+              const columnKeys = Object.keys(summary.columnTypes);
+              initializeColumnLayout(columnKeys, summary.columnInference, summary.rowsParsed);
+              void useTagStore.getState().load();
             },
             onError: async (error) => {
+              callbackReportedError = true;
               if (import.meta.env.DEV) {
                 console.error('[app] Worker onError', error);
               }
-              if (!cancelled) {
-                reportAppError(error.message ?? 'Failed to load file', error, {
-                  operation: 'worker.loadFile',
-                  context: { fileName: fileHandle.name }
-                });
-              }
+              reportAppError(error.message ?? 'Failed to load file', error, {
+                operation: 'worker.loadFile',
+                context: { fileName: handle.name }
+              });
             }
           })
         );
       } catch (error) {
-        if (!cancelled) {
+        if (!callbackReportedError) {
           reportAppError(
             error instanceof Error ? error.message : String(error),
             error,
             {
               operation: 'worker.loadFile',
-              context: { fileName: fileHandle.name }
+              context: { fileName: handle.name }
             }
           );
         }
+        throw error;
       }
-    };
+    },
+    [
+      clearSearchResult,
+      complete,
+      initializeColumnLayout,
+      reportProgress,
+      setHeader,
+      startLoading
+    ]
+  );
 
-    void loadFile();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [complete, fileHandle, reportProgress, setHeader, startLoading]);
+  useAutoFileLoader({
+    workerReady,
+    fileHandle,
+    loadFile: loadSelectedFile
+  });
 
   useEffect(() => {
     useTagStore.getState().reset();

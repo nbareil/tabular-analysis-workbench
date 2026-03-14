@@ -13,6 +13,9 @@ import {
   evaluateFilterMenuMetadata,
   buildSortStateFromColumnState,
   getNextRowIndex,
+  getEmptyStateMessage,
+  shouldShowEmptyOverlay,
+  shouldShowInitialPlaceholder,
   toggleRowSelection
 } from './DataGrid';
 
@@ -260,6 +263,68 @@ describe('getNextRowIndex', () => {
         direction: 'down'
       })
     ).toBeNull();
+  });
+});
+
+describe('getEmptyStateMessage', () => {
+  it('explains zero rows as an active view-state result when data is loaded', () => {
+    expect(
+      getEmptyStateMessage({
+        status: 'ready',
+        totalRows: 42,
+        matchedRows: 0
+      })
+    ).toBe('No rows match the current filters or search.');
+  });
+
+  it('uses the file picker prompt before any dataset is loaded', () => {
+    expect(
+      getEmptyStateMessage({
+        status: 'idle',
+        totalRows: 0,
+        matchedRows: 0
+      })
+    ).toBe('Select a CSV or TSV file to begin.');
+  });
+});
+
+describe('empty state visibility helpers', () => {
+  it('shows the initial placeholder only before any dataset is loaded', () => {
+    expect(
+      shouldShowInitialPlaceholder({
+        status: 'idle',
+        totalRows: 0,
+        columnCount: 0
+      })
+    ).toBe(true);
+
+    expect(
+      shouldShowInitialPlaceholder({
+        status: 'ready',
+        totalRows: 42,
+        columnCount: 3
+      })
+    ).toBe(false);
+  });
+
+  it('keeps the grid mounted and uses an overlay for zero matched rows', () => {
+    expect(
+      shouldShowEmptyOverlay({
+        status: 'ready',
+        totalRows: 42,
+        matchedRows: 0,
+        columnCount: 3
+      })
+    ).toBe(true);
+
+    expect(
+      shouldShowEmptyOverlay({
+        status: 'ready',
+        totalRows: 0,
+        matchedRows: 0,
+        columnCount: 0
+      })
+    ).toBe(false);
   });
 });
 

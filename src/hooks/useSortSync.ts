@@ -4,6 +4,7 @@ import { useDataStore } from '@state/dataStore';
 import { useSessionStore, type SessionSnapshot } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { reportAppError } from '@utils/diagnostics';
+import { logDebug } from '@utils/debugLog';
 
 type SortState = SessionSnapshot['sorts'][number];
 
@@ -36,6 +37,7 @@ export const useSortSync = (): UseSortSyncResult => {
   const setMatchedRowCount = useDataStore((state) => state.setMatchedRowCount);
   const bumpViewVersion = useDataStore((state) => state.bumpViewVersion);
   const totalRows = useDataStore((state) => state.totalRows);
+  const loaderStatus = useDataStore((state) => state.status);
   const bootstrapAppliedRef = useRef(false);
 
   const applySortsInternal = useCallback(
@@ -43,6 +45,14 @@ export const useSortSync = (): UseSortSyncResult => {
       const { persist = true, progressive = false, visibleRows = 1000 } = options;
 
       try {
+        if (import.meta.env.DEV) {
+          logDebug('sorts', 'applySorts requested', {
+            sortCount: nextSorts.length,
+            sorts: nextSorts,
+            progressive,
+            visibleRows
+          });
+        }
         const worker = getDataWorker();
         const response = await worker.applySorts({
           sorts: nextSorts,
@@ -51,6 +61,14 @@ export const useSortSync = (): UseSortSyncResult => {
           progressive,
           visibleRows
         });
+
+        if (import.meta.env.DEV) {
+          logDebug('sorts', 'applySorts response', {
+            matchedRows: response.matchedRows ?? null,
+            totalRows: response.totalRows,
+            sorts: response.sorts
+          });
+        }
 
         setMatchedRowCount(response.matchedRows ?? null);
         bumpViewVersion();
@@ -92,7 +110,14 @@ export const useSortSync = (): UseSortSyncResult => {
       return;
     }
 
-    if (totalRows === 0) {
+    if (loaderStatus !== 'ready' || totalRows === 0) {
+      if (import.meta.env.DEV) {
+        logDebug('sorts', 'bootstrap deferred', {
+          loaderStatus,
+          totalRows,
+          sortCount: sorts.length
+        });
+      }
       bootstrapAppliedRef.current = false;
       return;
     }
@@ -101,12 +126,18 @@ export const useSortSync = (): UseSortSyncResult => {
       return;
     }
 
+    if (import.meta.env.DEV) {
+      logDebug('sorts', 'bootstrapping persisted sorts', {
+        totalRows,
+        sorts
+      });
+    }
     void applySortsInternal(sorts, { persist: false }).then((validSorts) => {
       if (!sortsEqual(validSorts, sorts)) {
         setSorts(validSorts);
       }
     });
-  }, [applySortsInternal, setSorts, sorts, totalRows]);
+  }, [applySortsInternal, loaderStatus, setSorts, sorts, totalRows]);
 
   return { sorts, applySorts, clearSorts };
 };

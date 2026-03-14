@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildFilterExpression } from './filterExpression';
+import { buildFilterExpression, isFilterComplete } from './filterExpression';
 import type { FilterExpression, FilterPredicate } from '@workers/types';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
 
@@ -158,7 +158,7 @@ describe('buildFilterExpression', () => {
     expect(((expression as FilterExpression).predicates[1] as FilterPredicate).value).toBe('2023-01-01');
   });
 
-  it('handles malformed filter without required fields', () => {
+  it('drops malformed filters without required fields', () => {
     const expression = buildFilterExpression([
       {
         id: '1',
@@ -167,12 +167,32 @@ describe('buildFilterExpression', () => {
       } as any // missing column
     ]);
 
-    expect(expression).not.toBeNull();
-    if (!expression) {
-      throw new Error('expression should not be null');
-    }
-    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).column).toBeUndefined();
-    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).operator).toBe('eq');
-    expect(((expression as FilterExpression).predicates[0] as FilterPredicate).value).toBe('test');
+    expect(expression).toBeNull();
+  });
+
+  it('drops incomplete between filters with no bounds', () => {
+    const expression = buildFilterExpression([
+      {
+        id: '1',
+        column: 'Timestamp',
+        operator: 'between',
+        value: '',
+        value2: undefined
+      }
+    ]);
+
+    expect(expression).toBeNull();
+  });
+
+  it('treats partially filled range filters as complete', () => {
+    expect(
+      isFilterComplete({
+        id: '1',
+        column: 'Timestamp',
+        operator: 'between',
+        value: '',
+        value2: 123
+      })
+    ).toBe(true);
   });
 });
