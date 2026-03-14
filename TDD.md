@@ -2,7 +2,7 @@
 
 ## 1. Purpose & Scope
 - Provide a detailed implementation plan for the browser-native timeline explorer described in PRD v1.2.
-- Cover CSV/TSV ingestion, interactive exploration (filtering, grouping, tagging, fuzzy search), and session persistence within modern Chromium.
+- Cover CSV/TSV ingestion, interactive exploration (filtering, grouping, tagging, exact-value suggestions), and session persistence within modern Chromium.
 - Explicitly exclude remote file acquisition, multi-tab collaboration, and non-Chromium support (captured as future enhancements in PRD section 12).
 
 ## 2. Requirements Traceability
@@ -14,7 +14,7 @@
 | Filtering/sorting/grouping (goal section 3 objective 5) | section 7.4, section 7.5, section 6.2 | Worker-side query engine |
 | Tagging and annotation (goal section 3 objective 6) | section 7.7, section 8 | OPFS-backed tag map plus UI |
 | Persistent sessions (goal section 3 objective 7) | section 7.6, section 6.4 | OPFS layout, auto-save scheduler |
-| Fuzzy fallback search (goal section 3 objective 8) | section 7.6, section 6.3 | Damerau-Levenshtein worker module |
+| Exact no-match suggestions (goal section 3 objective 8) | section 7.6, section 6.3 | Worker-side suggestion pass |
 | Data integrity (goal section 3 objective 9) | section 12 | Read-only file handles, export copies |
 
 ## 3. Solution Overview
@@ -27,14 +27,14 @@
 
 ### 3.2 Runtime contexts and threading
 - Main thread: handles UI rendering, user events, session orchestration, and OPFS scheduling.
-- Data worker: long-lived worker implementing parser, indexing, query execution, fuzzy search, and grouping.
+- Data worker: long-lived worker implementing parser, indexing, query execution, search, and grouping.
 - Export worker (optional): spawned on demand for large export jobs to prevent UI stalls and reuses parser utilities.
 - Message channels: Each worker communicates via MessageChannel ports managed by Comlink to structure requests and propagate transferable ArrayBuffers.
 
 ### 3.3 External dependencies and polyfills
 - ag-grid-community for virtualized grid and grouping UI.
 - comlink for worker RPC.
-- fastest-levenshtein or custom Damerau-Levenshtein implementation for fuzzy search.
+- fastest-levenshtein or custom Damerau-Levenshtein implementation for exact-value suggestions.
 - No third-party network services; all dependencies bundled.
 
 ## 4. High-Level Architecture
@@ -43,7 +43,7 @@
 | React UI (main)   | <--------------------------> | Data Worker            |
 | - App shell       |                              | - Stream parser        |
 | - Grid + panels   |                              | - Row index cache      |
-| - Command palette |                              | - Query/fuzzy engines  |
+| - Command palette |                              | - Query/search engines |
 +---------+---------+                              +-----------+------------+
           |                                                     |
           |                              OPFS (File System Access API)
@@ -64,10 +64,10 @@
 
 ### 5.2 UI layer
 - Layout: Top bar (file picker, global search, export, theme), left sidebar (column controls), main grid, bottom status bar.
-- State management: Zustand slices hold view state (selected rows, filter forms, fuzzy mode) decoupled from persisted session state to simplify serialization boundaries.
+- State management: Zustand slices hold view state (selected rows, filter forms, search state) decoupled from persisted session state to simplify serialization boundaries.
 - Grid implementation: AG Grid infinite row model configured with a custom data source adapter that requests row windows from the worker. Column definitions incorporate metadata (type, inferred format, aggregations).
 - Grid context menu: right-clicking any populated cell surfaces **Filter in** / **Filter out** actions that append or update filter predicates using shared filter-sync utilities so worker pipelines stay consistent with the filter builder; the default browser menu is suppressed to keep interactions within the app shell.
-- Dialogs and panels: Modular React components for filter builder, note editor (markdown with preview), and fuzzy search banner. Filter builder enumerates predicate operators including regex-specific **matches** / **not matches** entries and exposes a per-predicate **Case sensitive** checkbox (default off). For datetime columns, the operator defaults to 'between' with text inputs for manual ISO date/time entry. Smart parsing interprets partial inputs: start times default to beginning of period (e.g., "2024-02" → 2024-02-01T00:00), end times to end of period (e.g., "2024-02" → 2024-02-29T23:59 for leap years). Entering start time in 'between' filters auto-fills end time with the end of the same period. All datetime values are handled in UTC for consistency with grid display and filtering logic.
+- Dialogs and panels: Modular React components for filter builder, note editor (markdown with preview), and the exact-value suggestion banner. Filter builder enumerates predicate operators including regex-specific **matches** / **not matches** entries and exposes a per-predicate **Case sensitive** checkbox (default off). For datetime columns, the operator defaults to 'between' with text inputs for manual ISO date/time entry. Smart parsing interprets partial inputs: start times default to beginning of period (e.g., "2024-02" → 2024-02-01T00:00), end times to end of period (e.g., "2024-02" → 2024-02-29T23:59 for leap years). Entering start time in 'between' filters auto-fills end time with the end of the same period. All datetime values are handled in UTC for consistency with grid display and filtering logic.
 - Top bar ships a Columns dialog exposing column visibility toggles synced with session layout; sidebar collapse toggle maximises workspace.
 - Filter sidebar includes collapse toggle to increase horizontal workspace; state synced in session store.
 - Global search control pairs the query input with a **Case sensitive** toggle that persists in session storage; searches run insensitive by default and recompute automatically when the toggle changes.
@@ -78,7 +78,6 @@
   - Parser: orchestrates stream decoding, delimiter detection, row batching, and type inference.
   - RowIndex: maintains byte-offset index, OPFS cache sync, and random-access fetch helpers.
   - QueryEngine: executes filter, sort, and group operations using typed column vectors inside the worker.
-  - FuzzyEngine: manages per-column token dictionaries, trigram indexes, and Levenshtein scoring fallback.
   - AnnotationStore: in-memory view of tag and note map synchronized with OPFS.
 - Supported commands include loadFile, applyFilter, updateTag, exportRequest, each returning structured responses with success or error metadata.
 
@@ -115,12 +114,12 @@
 6. Context menu shortcuts on grid cells generate equality or inequality predicates and dispatch them through the same filter-sync helper, ensuring filter builder state and worker expression remain in lockstep.
 7. Global search requests include the persisted case-sensitivity flag so worker-side string comparisons normalise appropriately.
 
-### 6.3 Fuzzy fallback flow (PRD section 3.3.a)
-1. User applies filter; worker executes and returns zero matches flag.
-2. UI displays "No exact matches" banner and requests fuzzy suggestions.
-3. Worker queries per-column fuzzy index using Damerau-Levenshtein thresholds.
-4. Worker returns ranked matches (token, distance, sample row ids) and preview row batches limited to 200 rows.
-5. UI shows chips for distance levels and "Back to exact". Selecting fuzzy mode updates filter state to include fuzzy flag persisted per filter.
+### 6.3 Exact suggestion flow (PRD section 3.3.a)
+1. User applies an equality filter; worker executes the exact match path.
+2. If the result count is zero, UI displays the "No exact matches" banner.
+3. Worker scans the filtered column values and ranks nearby exact replacements with Damerau-Levenshtein thresholds.
+4. Worker returns up to 5 suggestions without changing the active result set.
+5. UI lets the user replace the filter value with one of the suggested exact values.
 
 ### 6.4 Tagging and note persistence
 1. UI dispatches updateTag or updateNote with row id and payload.
@@ -167,14 +166,13 @@
 - For simple groupings (single column with count, sum, min, max, avg) use worker-managed hash map storing aggregates in typed arrays.
 - Grouping runs inside the worker over the active filtered row set, using hash maps to accumulate aggregates before streaming the materialized results back to the pivot component.
 
-### 7.6 Fuzzy search implementation
-- Build per-column dictionary of unique tokens (lowercased, NFC) limited to 50,000 entries or 32 MB memory, whichever comes first.
-- Maintain trigram index mapping trigram to token ids stored as compact Uint32Array lists.
-- Fuzzy search pipeline:
-  1. Candidate generation via trigram overlap.
+### 7.6 Exact-value suggestion implementation
+- Suggestions only run for string equality predicates that return zero rows.
+- Suggestion pipeline:
+  1. Scan distinct exact values for the requested column.
   2. Score candidates using Damerau-Levenshtein distance with early exit when distance exceeds threshold.
-  3. Return top N candidates (default 5) with example rows retrieved by scanning column indexes.
-- Cache fuzzy results per filter to support toggling without recomputation.
+  3. Return top N suggestions (default 5) ranked by distance, frequency, and value order.
+- Suggestions are advisory only; the worker never widens the active result set automatically.
 
 ### 7.7 Tagging and annotations
 - Row id stable across operations; tags stored as Record<RowId, { tag: string; note?: string; updatedAt: number }> in worker memory.
@@ -214,7 +212,6 @@ interface FilterPredicate {
   value: unknown;
   value2?: unknown;
   caseSensitive?: boolean;
-  fuzzy?: boolean;
 }
 
 interface FilterExpression {
@@ -237,7 +234,6 @@ interface SessionState {
   filters: FilterExpression | null;
   sorts: { column: string; direction: 'asc' | 'desc' }[];
   groups: string[];
-  fuzzyOverrides: Record<string, boolean>;
   tagPalette: Record<string, string>;
   lastSavedAt: number;
 }
@@ -258,17 +254,16 @@ interface AnnotationRecord {
   /indexes
     row_index.bin          // Uint32Array byte offsets
     schema.json            // ColumnMeta array
-    fuzzy_index.json       // Token dictionary metadata (optional)
   /annotations
     tags.json              // Record<RowId, AnnotationRecord>
 ```
 - Files written using atomic replace pattern (write to temp, move).
-- Total storage capped (approx 200 MB) with LRU cleanup triggered on session load/save. Cleanup prefers transient caches (row-cache, fuzzy-index, row-index) before annotations/sessions and must never delete the active `sessions/latest.json`.
+- Total storage capped (approx 200 MB) with LRU cleanup triggered on session load/save. Cleanup prefers transient caches (row-cache, row-index) before annotations/sessions and must never delete the active `sessions/latest.json`.
 
 ## 9. UI and UX Implementation Details
 - Theme system: CSS variables for color tokens; default dark palette aligning with forensic tooling.
 - Responsive behavior: Layout optimized for widths 1280 px and above; sidebar collapses for smaller viewports; keyboard shortcuts accessible via command palette.
-- Filter builder: Visual tree editor with predicate rows; fuzzy toggle appears when supported by column type.
+- Filter builder: Visual tree editor with predicate rows and exact operator semantics.
 - Grid context menu: surfaces Filter in/out commands bound to currently focused cell, pre-filling column/value pairs and debouncing duplicate predicates while suppressing the native browser context menu. Regex-capable predicates expose matches / not matches semantics in dropdowns.
 - Annotation panel: Slide-over with markdown editor (CodeMirror) and preview.
 - Status bar metrics: real-time rows parsed, active filters, memory usage estimate provided by worker.
@@ -277,10 +272,10 @@ interface AnnotationRecord {
 - Target parse throughput >= 80 MB/s using 1 MB chunk size and streaming decoder.
 - Maintain memory budget:
   - Row batches limited to 50,000 rows (about 10 MB) and released after rendering.
-  - Column dictionaries truncated for very high cardinality; fuzzy search warns when truncated.
+  - Suggestion scans only run on zero-match exact equality filters.
 - Worker backpressure: UI pauses grid requests if worker signals isBusy to prevent runaway queue.
-- Profiling hooks using performance.mark and performance.measure around parse, filter, and fuzzy flows; exposed via developer console.
-- Large dataset guardrails: display warning if estimated memory > 600 MB; allow user to adjust batch size or disable fuzzy.
+- Profiling hooks using performance.mark and performance.measure around parse, filter, and suggestion flows; exposed via developer console.
+- Large dataset guardrails: display warning if estimated memory > 600 MB and allow the user to adjust batch size.
 
 ## 11. Error Handling and Resilience
 - Wrap OPFS calls in try/catch to surface permission issues with actionable UI prompts.
@@ -298,9 +293,9 @@ interface AnnotationRecord {
 - Avoid storing sensitive data in localStorage beyond non-identifying preferences.
 
 ## 13. Testing Strategy
-- Unit tests (Vitest): parser state machine, type inference, filter operations, fuzzy distance boundaries, annotation reducers.
+- Unit tests (Vitest): parser state machine, type inference, filter operations, suggestion ranking boundaries, annotation reducers.
 - Worker integration tests: run worker in web worker test harness to validate streaming parse, filter combinations, persistence serialization.
-- UI component tests: React Testing Library for filter builder, tag editor, fuzzy banner logic.
+- UI component tests: React Testing Library for filter builder, tag editor, and exact-value suggestion banner logic.
 - End-to-end tests (Playwright Chromium): cover file load (using synthetic CSV via File API), filter interactions, tagging, session restore, export flows.
 - Performance harness: headless script generating 2 GB synthetic dataset to benchmark parse time, filter latency, memory consumption (run manually on Chromium).
 - Accessibility audits: axe-core integration ensuring keyboard navigation and contrast compliance.
@@ -322,4 +317,4 @@ interface AnnotationRecord {
 - Decide whether repeated filter/search workloads need additional indexing once real-world dataset characteristics are known.
 - Finalize annotation UX (inline versus side panel) after user testing; current plan implements side panel with quick-edit tooltip.
 - Clarify whether filtered view should limit note JSON export (pending product decision; current design exports all annotations with filter metadata flag).
-- Evaluate need for additional worker dedicated to fuzzy search if profiling reveals contention.
+- Evaluate need for additional worker dedicated to export or very large grouping workloads if profiling reveals contention.

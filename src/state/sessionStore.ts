@@ -16,10 +16,6 @@ export interface FilterState {
   value2?: unknown;
   rawValue?: string;
   rawValue2?: string;
-  fuzzy?: boolean;
-  fuzzyExplicit?: boolean;
-  fuzzyDistance?: number;
-  fuzzyDistanceExplicit?: boolean;
   caseSensitive?: boolean;
   enabled?: boolean;
 }

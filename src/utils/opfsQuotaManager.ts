@@ -1,7 +1,7 @@
 import { supportsOpfs } from './capabilities';
 
 const DEFAULT_BUDGET_BYTES = 200 * 1024 * 1024; // ~200 MB
-const DEFAULT_DIRECTORIES = ['row-cache', 'fuzzy-index', 'row-index', 'annotations', 'sessions'];
+const DEFAULT_DIRECTORIES = ['row-cache', 'row-index', 'annotations', 'sessions'];
 
 type DirectoryIterator = AsyncIterableIterator<[string, FileSystemHandle]>;
 

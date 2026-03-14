@@ -1,14 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { createDataWorkerApi } from './dataWorker.worker';
+import { createDatasetFingerprint } from './datasetFingerprint';
 import type { LoadCompleteSummary } from './workerApiTypes';
-import type { FuzzyIndexSnapshot, FuzzyIndexFingerprint } from './fuzzyIndexStore';
-import { FUZZY_INDEX_STORE_VERSION } from './fuzzyIndexStore';
 import type { FilterNode } from './types';
-import { createFuzzyFingerprint, fuzzySnapshotMatchesFingerprint } from './fuzzyIndexUtils';
 import { createMockFileHandle } from './test/mockFileHandle';
 
-describe('createFuzzyFingerprint', () => {
+describe('createDatasetFingerprint', () => {
   it('derives fingerprint metadata from file properties', () => {
     const file = {
       name: 'events.csv',
@@ -20,7 +18,7 @@ describe('createFuzzyFingerprint', () => {
       name: 'fallback.csv'
     } as FileSystemFileHandle;
 
-    const fingerprint = createFuzzyFingerprint(file, handle);
+    const fingerprint = createDatasetFingerprint(file, handle);
 
     expect(fingerprint).toEqual({
       fileName: 'events.csv',
@@ -40,62 +38,10 @@ describe('createFuzzyFingerprint', () => {
       name: 'session.tsv'
     } as FileSystemFileHandle;
 
-    const fingerprint = createFuzzyFingerprint(file, handle);
+    const fingerprint = createDatasetFingerprint(file, handle);
     expect(fingerprint.fileName).toBe('session.tsv');
     expect(fingerprint.fileSize).toBe(0);
     expect(fingerprint.lastModified).toBe(0);
-  });
-});
-
-describe('fuzzySnapshotMatchesFingerprint', () => {
-  const buildSnapshot = (fingerprint: FuzzyIndexFingerprint, bytesParsed: number): FuzzyIndexSnapshot => ({
-    version: FUZZY_INDEX_STORE_VERSION,
-    createdAt: Date.now(),
-    rowCount: 100,
-    bytesParsed,
-    tokenLimit: 50000,
-    trigramSize: 3,
-    fingerprint,
-    columns: []
-  });
-
-  it('returns true when fingerprint and file size align', () => {
-    const fingerprint: FuzzyIndexFingerprint = {
-      fileName: 'records.csv',
-      fileSize: 4096,
-      lastModified: 1234
-    };
-
-    const snapshot = buildSnapshot(fingerprint, 4096);
-    expect(fuzzySnapshotMatchesFingerprint(snapshot, fingerprint)).toBe(true);
-  });
-
-  it('returns false when fingerprint metadata differs', () => {
-    const fingerprint: FuzzyIndexFingerprint = {
-      fileName: 'records.csv',
-      fileSize: 4096,
-      lastModified: 1234
-    };
-    const snapshot = buildSnapshot(
-      {
-        ...fingerprint,
-        fileName: 'other.csv'
-      },
-      4096
-    );
-
-    expect(fuzzySnapshotMatchesFingerprint(snapshot, fingerprint)).toBe(false);
-  });
-
-  it('returns false when parsed bytes do not match file size', () => {
-    const fingerprint: FuzzyIndexFingerprint = {
-      fileName: 'records.csv',
-      fileSize: 4096,
-      lastModified: 1234
-    };
-    const snapshot = buildSnapshot(fingerprint, 1024);
-
-    expect(fuzzySnapshotMatchesFingerprint(snapshot, fingerprint)).toBe(false);
   });
 });
 
@@ -166,6 +112,26 @@ describe('dataWorkerApi integration harness', () => {
     const filteredWindow = await worker.fetchRows({ offset: 0, limit: 10 });
     expect(filteredWindow.matchedRows).toBe(2);
     expect(filteredWindow.rows.map((row) => row.name)).toEqual(['Alice', 'Carol']);
+  });
+
+  it('returns did-you-mean suggestions for zero-match equality filters', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle('message\nlogin success\npayment complete\n');
+    await worker.loadFile({ handle }, {});
+
+    const expression: FilterNode = {
+      column: 'message',
+      operator: 'eq',
+      value: 'login sucess',
+      id: 'message-eq'
+    };
+
+    const result = await worker.applyFilter({ expression, offset: 0, limit: 10 });
+    expect(result.matchedRows).toBe(0);
+    expect(result.rows).toEqual([]);
+    expect(result.didYouMean?.suggestions).toContain('login success');
   });
 
   it('pages search results through fetchRows and keeps sorting functional', async () => {

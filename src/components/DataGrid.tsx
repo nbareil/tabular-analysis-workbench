@@ -99,12 +99,42 @@ interface FilterContextMenuState {
   rowId: number | null;
 }
 
-const AUTO_WIDTH_PERCENTILE = 0.8;
 const AUTO_WIDTH_MAX_SAMPLE_ROWS = 1_000;
 const AUTO_WIDTH_BLOCK_SIZE = 250;
 const CELL_HORIZONTAL_PADDING_PX = 32;
-const MIN_COLUMN_WIDTH = 120;
+const MIN_COLUMN_WIDTH = 80;
 const MAX_COLUMN_WIDTH = 520;
+
+export const computeMedianWidth = (samples: number[]): number => {
+  if (!samples.length) {
+    return MIN_COLUMN_WIDTH;
+  }
+
+  const sorted = [...samples].sort((a, b) => a - b);
+  const middleIndex = Math.floor(sorted.length / 2);
+
+  if (sorted.length % 2 === 1) {
+    return sorted[middleIndex] ?? MIN_COLUMN_WIDTH;
+  }
+
+  const left = sorted[middleIndex - 1] ?? MIN_COLUMN_WIDTH;
+  const right = sorted[middleIndex] ?? MIN_COLUMN_WIDTH;
+  return (left + right) / 2;
+};
+
+export const computeAutoColumnWidth = ({
+  valueSamples,
+  headerWidth
+}: {
+  valueSamples: number[];
+  headerWidth: number;
+}): number => {
+  const medianValueWidth = valueSamples.length
+    ? computeMedianWidth(valueSamples)
+    : MIN_COLUMN_WIDTH;
+  const measuredWidth = Math.max(headerWidth, medianValueWidth);
+  return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, Math.ceil(measuredWidth)));
+};
 
 export const getNextRowIndex = ({
   rowCount,
@@ -423,8 +453,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
   const defaultColDef = useMemo(
     () => ({
-      flex: 1,
-      minWidth: 140,
+      minWidth: MIN_COLUMN_WIDTH,
       resizable: true
     }),
     []
@@ -602,6 +631,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
         const measureCache = new Map<string, number>();
         const columnWidthSamples: Record<string, number[]> = {};
+        const headerWidths: Record<string, number> = {};
 
         const measureText = (text: string): number => {
           const cached = measureCache.get(text);
@@ -627,29 +657,17 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
         for (const column of columns) {
           const headerText = column.headerName || column.key;
-          columnWidthSamples[column.key]!.push(measureText(headerText));
+          headerWidths[column.key] = measureText(headerText);
         }
 
         const nextWidths: Record<string, number> = {};
 
         for (const column of columns) {
           const samples = columnWidthSamples[column.key] ?? [];
-          if (!samples.length) {
-            nextWidths[column.key] = MIN_COLUMN_WIDTH;
-            continue;
-          }
-
-          samples.sort((a, b) => a - b);
-          const percentileIndex = Math.max(
-            0,
-            Math.floor((samples.length - 1) * AUTO_WIDTH_PERCENTILE)
-          );
-          const percentileWidth = samples[percentileIndex] ?? MIN_COLUMN_WIDTH;
-          const boundedWidth = Math.min(
-            MAX_COLUMN_WIDTH,
-            Math.max(MIN_COLUMN_WIDTH, Math.ceil(percentileWidth))
-          );
-          nextWidths[column.key] = boundedWidth;
+          nextWidths[column.key] = computeAutoColumnWidth({
+            valueSamples: samples,
+            headerWidth: headerWidths[column.key] ?? MIN_COLUMN_WIDTH
+          });
         }
 
         if (cancelled) {

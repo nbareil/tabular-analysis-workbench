@@ -1,5 +1,5 @@
 import { logDebug } from '../utils/debugLog';
-import type { FuzzyIndexFingerprint } from './fuzzyIndexStore';
+import type { DatasetFingerprint } from './datasetFingerprint';
 import type { TaggingSnapshot } from './types';
 
 const TAG_DIRECTORY = 'annotations';
@@ -32,7 +32,7 @@ const sanitizeSegment = (value: string): string => {
     .slice(0, 64);
 };
 
-export const buildTaggingStoreKey = (fingerprint: FuzzyIndexFingerprint): string => {
+export const buildTaggingStoreKey = (fingerprint: DatasetFingerprint): string => {
   const baseName =
     typeof fingerprint.fileName === 'string' && fingerprint.fileName.trim().length > 0
       ? fingerprint.fileName
@@ -79,7 +79,7 @@ export class TaggingStore {
     this.storeKey = storeKey;
   }
 
-  static async create(fingerprint: FuzzyIndexFingerprint | null): Promise<TaggingStore> {
+  static async create(fingerprint: DatasetFingerprint | null): Promise<TaggingStore> {
     if (!supportsOpfs() || !fingerprint) {
       return new TaggingStore(null, null, null, null, null);
     }

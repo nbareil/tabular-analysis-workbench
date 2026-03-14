@@ -22,7 +22,7 @@ https://nbareil.github.io/tabular-analysis-workbench/
 | Capability | Description |
 | --- | --- |
 | Streaming ingestion | Streams files up to ~2 GB with gzip support, chunked workers, and checkpointed byte offsets for random access. |
-| Filtering & search | Rich filter builder, regex operators, per-cell context menu shortcuts, and a fuzzy fallback path. |
+| Filtering & search | Rich filter builder, regex operators, per-cell context menu shortcuts, and exact-value suggestions when equality filters miss. |
 | Grouping & aggregations | Worker-powered pivoting and aggregations over the active filtered row set. |
 | Tagging & notes | Color-coded tags, markdown notes, and import/export flows persisted to the Origin Private File System (OPFS). |
 | Session persistence | Auto-saves filters, layouts, and annotation state to OPFS so sessions resume instantly. |
@@ -37,9 +37,8 @@ https://nbareil.github.io/tabular-analysis-workbench/
 - **Filters and grouping:** Combine equals/contains/range/regex predicates,
   toggle case sensitivity, and pivot over one or more columns with counts,
   min/max, sum, and average.
-- **Fuzzy fallback search:** Damerau–Levenshtein powered search activates when
-  exact filters return zero rows, with distance chips and “back to exact”
-  controls.
+- **Exact-value suggestions:** When an equality filter returns zero rows, the
+  worker suggests nearby exact values without changing the result set.
 - **Tagging & annotation workflow:** Apply labels, open the Tag/Note dialog, and
   synchronize markdown notes; exports honor OPFS storage limits and deliver JSON
   bundles ready for sharing.
@@ -94,8 +93,8 @@ npm run preview   # Serves dist/ for local smoke tests
   click) provide “Filter in/out” shortcuts.
 - Toggle case sensitivity, match mode (equals/contains/regex), or default time
   ranges for datetime fields.
-- Run a **Global Search** across visible columns; when no rows match, enable the
-  suggested fuzzy distance chips to widen the results.
+- Run a **Global Search** across visible columns. Exact equality filters show a
+  **Did you mean** banner when nearby exact values exist.
 
 ### Grouping & Aggregations
 - Open the **Pivot** panel to drag columns into rows/values, or trigger worker
@@ -112,7 +111,7 @@ npm run preview   # Serves dist/ for local smoke tests
 - Sessions auto-save every minute (and within ~5 seconds of edits) plus when you
   close the file picker. Reloading prompts you to re-authorize the last dataset
   so filters, tags, and layout return instantly.
-- The OPFS cache (sessions, indexes, annotations, row-cache) is capped at
+- The OPFS cache (sessions, row indexes, annotations, row-cache) is capped at
   roughly 200 MB. Oldest files are pruned on load/save to stay within quota.
 
 ### Exporting Results

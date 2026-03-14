@@ -8,6 +8,8 @@ import type { TagCellValue } from '@utils/tagCells';
 
 import {
   MarkdownTooltip,
+  computeAutoColumnWidth,
+  computeMedianWidth,
   evaluateFilterMenuMetadata,
   buildSortStateFromColumnState,
   getNextRowIndex,
@@ -30,23 +32,6 @@ describe('evaluateFilterMenuMetadata', () => {
     expect(metadata.eqIndex).toBe(0);
     expect(metadata.eqMatchesValue).toBe(true);
     expect(metadata.neqExists).toBe(false);
-  });
-
-  it('treats equality with the same exact value as matching even if legacy fuzzy flags are present', () => {
-    const filters: FilterState[] = [
-      {
-        id: 'eq-1',
-        column: 'name',
-        operator: 'eq',
-        value: 'Alice',
-        fuzzy: true
-      }
-    ];
-
-    const metadata = evaluateFilterMenuMetadata(filters, 'name', 'Alice');
-
-    expect(metadata.eqIndex).toBe(0);
-    expect(metadata.eqMatchesValue).toBe(true);
   });
 
   it('detects existing inequality predicate for the same value', () => {
@@ -100,6 +85,31 @@ describe('buildSortStateFromColumnState', () => {
     expect(buildSortStateFromColumnState(columnState)).toEqual([
       { column: 'status', direction: 'desc' }
     ]);
+  });
+});
+
+describe('auto width helpers', () => {
+  it('computes a true median for odd and even sample counts', () => {
+    expect(computeMedianWidth([60, 20, 40])).toBe(40);
+    expect(computeMedianWidth([20, 40, 60, 80])).toBe(50);
+  });
+
+  it('uses the larger of header width and median value width', () => {
+    expect(
+      computeAutoColumnWidth({
+        valueSamples: [40, 44, 48, 52, 400],
+        headerWidth: 96
+      })
+    ).toBe(96);
+  });
+
+  it('keeps narrow columns below the old 120px floor when measurements allow it', () => {
+    expect(
+      computeAutoColumnWidth({
+        valueSamples: [30, 34, 38, 42, 46],
+        headerWidth: 72
+      })
+    ).toBe(80);
   });
 });
 

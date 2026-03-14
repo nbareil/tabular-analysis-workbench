@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import type { ColumnInference, ColumnType, GroupingResult, RowBatch } from '@workers/types';
-import type { DidYouMeanInfo } from '@workers/filterEngine';
+import type { DidYouMeanInfo } from '@workers/didYouMean';
 import { logDebug } from '@utils/debugLog';
 import { formatBytes } from '@utils/formatBytes';
 

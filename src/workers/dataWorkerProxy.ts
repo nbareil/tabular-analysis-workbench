@@ -41,7 +41,5 @@ export type {
   ImportTagsRequest,
   LabelDefinition,
   LoadCompleteSummary,
-  PersistFuzzyIndexRequest,
-  FuzzyIndexSnapshot,
   GlobalSearchResult
 } from './workerApiTypes';

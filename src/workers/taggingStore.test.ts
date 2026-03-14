@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import type { FuzzyIndexFingerprint } from './fuzzyIndexStore';
+import type { DatasetFingerprint } from './datasetFingerprint';
 import { buildTaggingStoreKey } from './taggingStore';
 
 describe('buildTaggingStoreKey', () => {
   it('slugifies the file name and appends size + timestamp metadata', () => {
-    const fingerprint: FuzzyIndexFingerprint = {
+    const fingerprint: DatasetFingerprint = {
       fileName: 'Case File.csv',
       fileSize: 123_456,
       lastModified: 1_730_000_000_000
@@ -15,7 +15,7 @@ describe('buildTaggingStoreKey', () => {
   });
 
   it('falls back to dataset prefix when metadata is missing', () => {
-    const fingerprint: FuzzyIndexFingerprint = {
+    const fingerprint: DatasetFingerprint = {
       fileName: '',
       fileSize: NaN,
       lastModified: NaN

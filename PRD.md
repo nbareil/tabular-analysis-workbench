@@ -118,46 +118,35 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 
 ---
 
-## 3.3.a Fuzzy Search & Filtering (No-Match Fallback)
+## 3.3.a Exact-Value Suggestions (No-Match Fallback)
 
-**Goal:** Provide typo-tolerant search when an exact filter yields 0 results.
+**Goal:** Keep filters exact while still helping the user recover from typos.
 
 ### UX Behavior
-- If no exact matches:
-  - Display banner: “No exact matches for ‘login.sucess’. Showing fuzzy matches (≤ 2 edits).”
-  - Show chips for distance (≤1/≤2/≤3) and “Back to exact”.
-  - Present “Did you mean…” (top 5 tokens) from column dictionary.
-- Persist fuzzy state per filter; toggle via UI or `Alt + ~`.
+- If an exact equality filter returns 0 rows:
+  - Display banner: “No exact matches for ‘login.sucess’. Did you mean ‘login success’?”
+  - Present up to 5 exact replacement values as clickable suggestions.
+- No approximate-match mode, distance chips, or result-set expansion.
 
-### Matching Logic
-- **Metric:** Damerau–Levenshtein distance.  
-- **Normalization:** case-insensitive, trimmed, NFC.  
-- **Threshold:** ≤ 2 for len ≥ 5; ≤ 1 for len 3–4.  
-- **Tokenized:** per-token compare; match if any token within threshold.
+### Suggestion Logic
+- **Metric:** Damerau–Levenshtein distance.
+- **Normalization:** case-insensitive by default, trimmed, NFC.
+- **Threshold:** ≤ 2 for length ≥ 5; ≤ 1 for length 3–4.
+- Suggestions never mutate the active result set until the user picks one.
 
 ### Ranking
-1. Lower distance  
-2. Shorter field length  
-3. Original row order  
+1. Lower distance
+2. Higher occurrence count
+3. Alphabetical value order
 
 ### Performance
-- Fuzzy path ≤ 1.5× exact latency for first page.  
-- Limit to top K (≈ 5000) matches; UI indicates sample size.
+- Suggestion scan only runs after a zero-match exact equality filter.
+- Limit suggestions to the top 5 exact values.
 
 ### Architecture
-1. **Candidate Pruning** via 3-gram index.  
-2. **Distance Check** (Damerau–Levenshtein WASM/JS SIMD).  
-3. Lazy build per column; cache to OPFS:  
-   `/idx/{fileId}/{col}/grams-3.bin` + `dict.json`.
-
-### Config Defaults
-fuzzy.enabled = true
-fuzzy.maxDistance = 2
-fuzzy.maxResults = 5000
-fuzzy.ngramSize = 3
-
-yaml
-Copier le code
+1. Execute the exact filter normally.
+2. If it returns 0 rows, scan candidate exact values for the filtered column in the worker.
+3. Return ranked suggestions to the UI banner.
 
 ---
 
@@ -226,7 +215,6 @@ Typography: Inter + JetBrains Mono.
 | Export | ⌘/Ctrl + E |
 | Toggle dark mode | ⌘/Ctrl + D |
 | Toggle tags panel | ⌘/Ctrl + T |
-| Toggle fuzzy | Alt + ~ |
 
 ---
 
@@ -236,7 +224,6 @@ Typography: Inter + JetBrains Mono.
 |------|----------|-----------|
 | Session metadata | OPFS (JSON) | Persistent |
 | Row index | OPFS (binary) | Persistent |
-| Fuzzy index | OPFS (binary) | Persistent |
 | Tags / notes | OPFS (JSON) | Persistent |
 | Settings / theme | localStorage | Persistent |
 | Parsed rows | Memory (paged) | Ephemeral |
@@ -250,7 +237,7 @@ Typography: Inter + JetBrains Mono.
 | Browser memory limits | High | Stream + virtualize + paging |
 | OPFS API changes | Medium | Versioned adapter layer |
 | Gzip performance | Medium | Adjustable chunk size |
-| Large columns in fuzzy search | Medium | Skip fuzzy > 512 chars |
+| Large columns in suggestion scans | Medium | Only run suggestions for zero-match exact equality filters |
 | User data loss | Low | Auto-save sessions regularly |
 
 ---

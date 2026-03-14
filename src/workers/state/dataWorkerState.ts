@@ -1,5 +1,5 @@
 import { TaggingStore } from '../taggingStore';
-import type { FuzzyIndexStore, FuzzyIndexFingerprint, FuzzyIndexSnapshot } from '../fuzzyIndexStore';
+import type { DatasetFingerprint } from '../datasetFingerprint';
 import type {
   ColumnInference,
   ColumnType,
@@ -39,9 +39,6 @@ export interface DatasetState {
   totalRows: number;
   bytesParsed: number;
   fileHandle: FileSystemFileHandle | null;
-  fuzzyIndexStore: FuzzyIndexStore | null;
-  fuzzyIndexSnapshot: FuzzyIndexSnapshot | null;
-  fuzzyFingerprint: FuzzyIndexFingerprint | null;
   backgroundSortPromise: Promise<Uint32Array | void> | null;
   sortComplete: boolean;
 }
@@ -69,7 +66,7 @@ export interface DataWorkerStateController {
   resetTagging(): void;
   updateTagging<T = void>(mutator: (tagging: TaggingState) => T): T;
   clearTaggingPersistTimer(): void;
-  hydrateTaggingStore(fingerprint: FuzzyIndexFingerprint | null): Promise<void>;
+  hydrateTaggingStore(fingerprint: DatasetFingerprint | null): Promise<void>;
   markTaggingDirty(): void;
   persistTaggingNow(): Promise<void>;
 }
@@ -88,9 +85,6 @@ const createEmptyDatasetState = (): DatasetState => ({
   totalRows: 0,
   bytesParsed: 0,
   fileHandle: null,
-  fuzzyIndexStore: null,
-  fuzzyIndexSnapshot: null,
-  fuzzyFingerprint: null,
   backgroundSortPromise: null,
   sortComplete: true
 });
@@ -177,7 +171,7 @@ class DataWorkerState implements DataWorkerStateController {
     }
   }
 
-  async hydrateTaggingStore(fingerprint: FuzzyIndexFingerprint | null): Promise<void> {
+  async hydrateTaggingStore(fingerprint: DatasetFingerprint | null): Promise<void> {
     this.clearTaggingPersistTimer();
 
     if (!fingerprint) {

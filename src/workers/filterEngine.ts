@@ -8,26 +8,15 @@ import type {
   TagRecord
 } from './types';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from './types';
-import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
-import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import { normalizeString } from './utils/stringUtils';
-
-export interface DidYouMeanInfo {
-  column: string;
-  operator: FilterPredicate['operator'];
-  query: string;
-  suggestions: string[];
-}
 
 export interface FilterResult {
   matches: Uint8Array;
   matchedCount: number;
-  didYouMean?: DidYouMeanInfo;
 }
 
 export interface FilterEvaluationContext {
   tags?: Record<number, TagRecord>;
-  fuzzyIndex?: FuzzyIndexSnapshot | null;
 }
 
 const isExpression = (node: FilterNode): node is FilterExpression => 'op' in node;
@@ -44,111 +33,6 @@ const countMatches = (mask: Uint8Array): number => {
     }
   }
   return count;
-};
-
-const determineMaxDistance = (value: string): number => {
-  const trimmed = value.trim();
-  if (trimmed.length >= 5) {
-    return 2;
-  }
-  if (trimmed.length >= 3) {
-    return 1;
-  }
-  return 0;
-};
-
-const tokenizeFuzzyQuery = (value: string): string[] => {
-  const normalized = value.toLowerCase().normalize('NFC');
-  const tokens = normalized
-    .split(/[\s\p{P}]+/u)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 2);
-
-  if (tokens.length > 0) {
-    return tokens;
-  }
-
-  return normalized ? [normalized] : [];
-};
-
-const buildDidYouMeanSuggestions = ({
-  column,
-  query,
-  fuzzyIndex
-}: {
-  column: string;
-  query: string;
-  fuzzyIndex: FuzzyIndexSnapshot | null | undefined;
-}): string[] => {
-  if (!fuzzyIndex) {
-    return [];
-  }
-
-  const columnSnapshot = fuzzyIndex.columns.find((snapshot) => snapshot.key === column);
-  if (!columnSnapshot) {
-    return [];
-  }
-
-  const queryTokens = tokenizeFuzzyQuery(query);
-  if (!queryTokens.length) {
-    return [];
-  }
-
-  const builder = new FuzzyIndexBuilder({
-    trigramSize:
-      typeof fuzzyIndex.trigramSize === 'number' && Number.isFinite(fuzzyIndex.trigramSize)
-        ? fuzzyIndex.trigramSize
-        : 3
-  });
-  const tokenSuggestions = queryTokens.map((token) => {
-    const maxDistance = determineMaxDistance(token);
-    if (maxDistance <= 0) {
-      return [];
-    }
-
-    return builder
-      .searchColumn(columnSnapshot, token, maxDistance, 3)
-      .filter((match) => match.token !== token);
-  });
-
-  const normalizedQuery = normalizeString(query, false);
-  const ranked = new Map<string, number>();
-  const rememberSuggestion = (candidate: string, score: number) => {
-    const normalizedCandidate = normalizeString(candidate, false);
-    if (!normalizedCandidate || normalizedCandidate === normalizedQuery) {
-      return;
-    }
-    const existing = ranked.get(candidate);
-    if (existing == null || score < existing) {
-      ranked.set(candidate, score);
-    }
-  };
-
-  if (queryTokens.length > 1) {
-    const combinedSuggestion = queryTokens.map(
-      (token, index) => tokenSuggestions[index]?.[0]?.token ?? token
-    );
-    if (combinedSuggestion.some((token, index) => token !== queryTokens[index])) {
-      const score = combinedSuggestion.reduce(
-        (total, _token, index) => total + (tokenSuggestions[index]?.[0]?.distance ?? 0),
-        0
-      );
-      rememberSuggestion(combinedSuggestion.join(' '), score);
-    }
-  }
-
-  tokenSuggestions.forEach((matches, index) => {
-    matches.forEach((match, rank) => {
-      const candidateTokens = [...queryTokens];
-      candidateTokens[index] = match.token;
-      rememberSuggestion(candidateTokens.join(' '), match.distance + rank / 10);
-    });
-  });
-
-  return Array.from(ranked.entries())
-    .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
-    .slice(0, 5)
-    .map(([candidate]) => candidate);
 };
 
 const parseBooleanValue = (value: unknown): boolean | null => {
@@ -218,13 +102,11 @@ const createRegex = (pattern: string, caseSensitive?: boolean): RegExp | null =>
   }
 };
 
-
-
 const evaluateTagPredicate = (
   rows: Array<Record<string, unknown>>,
   predicate: FilterPredicate,
   context: FilterEvaluationContext
-): { matches: Uint8Array; fuzzyInfo?: DidYouMeanInfo } => {
+): { matches: Uint8Array } => {
   const result = new Uint8Array(rows.length);
   const operator = predicate.operator;
 
@@ -267,7 +149,7 @@ const evaluatePredicate = (
   columnTypes: Record<string, ColumnType>,
   predicate: FilterPredicate,
   context: FilterEvaluationContext
-): { matches: Uint8Array; fuzzyInfo?: DidYouMeanInfo } => {
+): { matches: Uint8Array } => {
   if (predicate.column === TAG_COLUMN_ID) {
     return evaluateTagPredicate(rows, predicate, context);
   }
@@ -279,36 +161,17 @@ const evaluatePredicate = (
 
   switch (columnType) {
     case 'string': {
-      const targetValue = typeof predicate.value === 'string' ? predicate.value : String(predicate.value ?? '');
+      const targetValue =
+        typeof predicate.value === 'string' ? predicate.value : String(predicate.value ?? '');
       const targetNormalised = normalizeString(targetValue, predicate.caseSensitive ?? false);
       const valuesNormalised = values.map((value) =>
         normalizeString(String(value ?? ''), predicate.caseSensitive ?? false)
       );
       if (predicate.operator === 'eq' || predicate.operator === 'neq') {
-        let hasExactMatches = false;
         for (let index = 0; index < rowCount; index += 1) {
           const exactMatch = valuesNormalised[index] === targetNormalised;
-          if (exactMatch) hasExactMatches = true;
-          result[index] = predicate.operator === 'eq' ? (exactMatch ? 1 : 0) : exactMatch ? 0 : 1;
-        }
-
-        if (!hasExactMatches && predicate.operator === 'eq') {
-          const suggestions = buildDidYouMeanSuggestions({
-            column: predicate.column,
-            query: targetValue.trim(),
-            fuzzyIndex: context.fuzzyIndex
-          });
-          if (suggestions.length > 0) {
-            return {
-              matches: result,
-              fuzzyInfo: {
-                column: predicate.column,
-                operator: predicate.operator,
-                query: targetValue.trim(),
-                suggestions
-              }
-            };
-          }
+          result[index] =
+            predicate.operator === 'eq' ? (exactMatch ? 1 : 0) : exactMatch ? 0 : 1;
         }
 
         return { matches: result };
@@ -393,9 +256,9 @@ const evaluatePredicate = (
           default:
             result[index] = 0;
         }
-        }
-        return { matches: result };
-        }
+      }
+      return { matches: result };
+    }
     case 'datetime': {
       const baseValue = parseDateValue(predicate.value);
       const baseValue2 = parseDateValue(predicate.value2);
@@ -441,9 +304,9 @@ const evaluatePredicate = (
           default:
             result[index] = 0;
         }
-        }
-        return { matches: result };
-        }
+      }
+      return { matches: result };
+    }
     case 'boolean': {
       const target = parseBooleanValue(predicate.value);
       if (target == null) {
@@ -499,7 +362,7 @@ const evaluateNode = (
   node: FilterNode,
   context: FilterEvaluationContext,
   options?: FilterEvaluationOptions
-): { matches: Uint8Array; fuzzyInfo?: DidYouMeanInfo } => {
+): { matches: Uint8Array } => {
   if (isExpression(node)) {
     if (!node.predicates.length) {
       return { matches: new Uint8Array(rows.length).fill(1) };
@@ -510,8 +373,7 @@ const evaluateNode = (
     for (let index = 1; index < node.predicates.length; index += 1) {
       const next = evaluateNode(rows, columnTypes, node.predicates[index]!, context, options);
       accumulator = {
-        matches: combineMasks(accumulator.matches, next.matches, node.op),
-        fuzzyInfo: accumulator.fuzzyInfo || next.fuzzyInfo
+        matches: combineMasks(accumulator.matches, next.matches, node.op)
       };
     }
 
@@ -542,7 +404,7 @@ const evaluateFilterInternal = (
   const result = evaluateNode(rows, columnTypes, expression, context, options);
   const matchedCount = countMatches(result.matches);
 
-  return { matches: result.matches, matchedCount, didYouMean: result.fuzzyInfo };
+  return { matches: result.matches, matchedCount };
 };
 
 export const evaluateFilterOnRows = (

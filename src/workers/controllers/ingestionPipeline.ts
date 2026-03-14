@@ -1,13 +1,8 @@
 import { parseDelimitedStream, type ParserOptions } from '../csvParser';
-import { FuzzyIndexBuilder } from '../fuzzyIndexBuilder';
+import { createDatasetFingerprint } from '../datasetFingerprint';
 import { detectCompression } from '../utils/detectCompression';
 import { RowBatchStore } from '../rowBatchStore';
 import { RowIndexStore } from '../rowIndexStore';
-import {
-  FuzzyIndexStore,
-  FUZZY_INDEX_STORE_VERSION
-} from '../fuzzyIndexStore';
-import { createFuzzyFingerprint, fuzzySnapshotMatchesFingerprint } from '../fuzzyIndexUtils';
 import { startPerformanceMeasure } from '../utils/performanceMarks';
 import { logDebug } from '../../utils/debugLog';
 import type { DataWorkerStateController } from '../state/dataWorkerState';
@@ -110,46 +105,7 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
       type: file.type
     });
 
-    const fuzzyFingerprint = createFuzzyFingerprint(file, handle);
-    const fuzzyStoreStart = now();
-    const fuzzyIndexStore = await FuzzyIndexStore.create(handle);
-    debugLog('FuzzyIndexStore.create completed', {
-      durationMs: roundMs(now() - fuzzyStoreStart)
-    });
-    state.updateDataset((dataset) => {
-      dataset.fuzzyIndexStore = fuzzyIndexStore;
-      dataset.fuzzyFingerprint = fuzzyFingerprint;
-    });
-
-    const cachedFuzzyIndex = await fuzzyIndexStore.load();
-    let fuzzyIndexBuilder: FuzzyIndexBuilder | undefined;
-
-    if (
-      cachedFuzzyIndex &&
-      fuzzySnapshotMatchesFingerprint(cachedFuzzyIndex, fuzzyFingerprint)
-    ) {
-      state.updateDataset((dataset) => {
-        dataset.fuzzyIndexSnapshot = cachedFuzzyIndex;
-      });
-      debugLog('Hydrated fuzzy index snapshot from cache', {
-        createdAt: cachedFuzzyIndex.createdAt,
-        columnCount: cachedFuzzyIndex.columns.length,
-        tokenLimit: cachedFuzzyIndex.tokenLimit
-      });
-    } else {
-      if (cachedFuzzyIndex) {
-        debugLog('Discarded stale fuzzy index snapshot', {
-          cachedFingerprint: cachedFuzzyIndex.fingerprint,
-          expectedFingerprint: fuzzyFingerprint
-        });
-        await fuzzyIndexStore.clear();
-      }
-
-      fuzzyIndexBuilder = new FuzzyIndexBuilder();
-      debugLog('Created new FuzzyIndexBuilder for parsing');
-    }
-
-    await state.hydrateTaggingStore(fuzzyFingerprint);
+    await state.hydrateTaggingStore(createDatasetFingerprint(file, handle));
 
     const compression = detectCompression({
       fileName: file.name ?? handle.name,
@@ -182,8 +138,7 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
       delimiter,
       batchSize,
       encoding,
-      checkpointInterval: targetCheckpointInterval,
-      fuzzyIndexBuilder
+      checkpointInterval: targetCheckpointInterval
     };
 
     const startTime = now();
@@ -258,122 +213,123 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
       });
       const parseStartTime = now();
       const parseMeasure = startPerformanceMeasure('csv-parse');
-      let parseMetrics: Awaited<ReturnType<typeof parseDelimitedStream>> | undefined;
 
       try {
-        parseMetrics = await parseDelimitedStream(
-        source,
-        {
-          onHeader: async (header) => {
-            state.updateDataset((dataset) => {
-              dataset.header = header;
-            });
-            if (callbacks.onStart) {
-              const callbackStart = now();
-              await callbacks.onStart({ columns: header });
-              const duration = now() - callbackStart;
-              debugLog('onStart callback completed', {
-                durationMs: roundMs(duration),
-                columnCount: header.length
+        await parseDelimitedStream(
+          source,
+          {
+            onHeader: async (header) => {
+              state.updateDataset((dataset) => {
+                dataset.header = header;
               });
-            } else {
-              debugLog('No onStart callback provided', { columnCount: header.length });
-            }
-          },
-          onBatch: async (batch) => {
-            finalRows = batch.stats.rowsParsed;
-            finalBytes = batch.stats.bytesParsed;
-            storedBatches += 1;
+              if (callbacks.onStart) {
+                const callbackStart = now();
+                await callbacks.onStart({ columns: header });
+                const duration = now() - callbackStart;
+                debugLog('onStart callback completed', {
+                  durationMs: roundMs(duration),
+                  columnCount: header.length
+                });
+              } else {
+                debugLog('No onStart callback provided', { columnCount: header.length });
+              }
+            },
+            onBatch: async (batch) => {
+              finalRows = batch.stats.rowsParsed;
+              finalBytes = batch.stats.bytesParsed;
+              storedBatches += 1;
 
-            const rowsInBatch = Math.max(0, finalRows - previousRowsParsed);
-            const bytesInBatch = Math.max(0, finalBytes - previousBytesParsed);
-            previousRowsParsed = finalRows;
-            previousBytesParsed = finalBytes;
+              const rowsInBatch = Math.max(0, finalRows - previousRowsParsed);
+              const bytesInBatch = Math.max(0, finalBytes - previousBytesParsed);
+              previousRowsParsed = finalRows;
+              previousBytesParsed = finalBytes;
 
-            const storeStart = now();
-            await batchStore.storeBatch(batch);
-            const storeDuration = now() - storeStart;
-            totalStoreDurationMs += storeDuration;
-            if (storeDuration > longestStoreDurationMs) {
-              longestStoreDurationMs = storeDuration;
-            }
-
-            const shouldLogBatch =
-              storeDuration >= slowBatchThreshold || storedBatches <= 5 || storedBatches % 50 === 0;
-
-            if (storeDuration >= slowBatchThreshold) {
-              slowStoreBatchCount += 1;
-            }
-
-            if (shouldLogBatch) {
-              debugLog('Stored batch', {
-                batchesStored: storedBatches,
-                rowsInBatch,
-                cumulativeRowsParsed: finalRows,
-                cumulativeBytesParsed: finalBytes,
-                storeDurationMs: roundMs(storeDuration),
-                slowStore: storeDuration >= slowBatchThreshold,
-                bytesInBatch
-              });
-            }
-
-            state.updateDataset((dataset) => {
-              dataset.columnTypes = {
-                ...dataset.columnTypes,
-                ...batch.columnTypes
-              } as Record<string, ColumnType>;
-              dataset.columnInference = {
-                ...dataset.columnInference,
-                ...batch.columnInference
-              } as Record<string, ColumnInference>;
-              dataset.totalRows = finalRows;
-              dataset.bytesParsed = finalBytes;
-            });
-
-            if (callbacks.onProgress) {
-              const payload = {
-                rowsParsed: finalRows,
-                bytesParsed: finalBytes,
-                batchesStored: storedBatches
-              };
-              const progressStart = now();
-              await callbacks.onProgress(payload);
-              const progressDuration = now() - progressStart;
-              totalProgressCallbackMs += progressDuration;
-              if (progressDuration > longestProgressCallbackMs) {
-                longestProgressCallbackMs = progressDuration;
+              const storeStart = now();
+              await batchStore.storeBatch(batch);
+              const storeDuration = now() - storeStart;
+              totalStoreDurationMs += storeDuration;
+              if (storeDuration > longestStoreDurationMs) {
+                longestStoreDurationMs = storeDuration;
               }
 
-              if (progressDuration >= slowBatchThreshold) {
-                debugLog('Slow onProgress callback detected', {
-                  durationMs: roundMs(progressDuration),
+              const shouldLogBatch =
+                storeDuration >= slowBatchThreshold ||
+                storedBatches <= 5 ||
+                storedBatches % 50 === 0;
+
+              if (storeDuration >= slowBatchThreshold) {
+                slowStoreBatchCount += 1;
+              }
+
+              if (shouldLogBatch) {
+                debugLog('Stored batch', {
+                  batchesStored: storedBatches,
+                  rowsInBatch,
+                  cumulativeRowsParsed: finalRows,
+                  cumulativeBytesParsed: finalBytes,
+                  storeDurationMs: roundMs(storeDuration),
+                  slowStore: storeDuration >= slowBatchThreshold,
+                  bytesInBatch
+                });
+              }
+
+              state.updateDataset((dataset) => {
+                dataset.columnTypes = {
+                  ...dataset.columnTypes,
+                  ...batch.columnTypes
+                } as Record<string, ColumnType>;
+                dataset.columnInference = {
+                  ...dataset.columnInference,
+                  ...batch.columnInference
+                } as Record<string, ColumnInference>;
+                dataset.totalRows = finalRows;
+                dataset.bytesParsed = finalBytes;
+              });
+
+              if (callbacks.onProgress) {
+                const payload = {
+                  rowsParsed: finalRows,
+                  bytesParsed: finalBytes,
                   batchesStored: storedBatches
+                };
+                const progressStart = now();
+                await callbacks.onProgress(payload);
+                const progressDuration = now() - progressStart;
+                totalProgressCallbackMs += progressDuration;
+                if (progressDuration > longestProgressCallbackMs) {
+                  longestProgressCallbackMs = progressDuration;
+                }
+
+                if (progressDuration >= slowBatchThreshold) {
+                  debugLog('Slow onProgress callback detected', {
+                    durationMs: roundMs(progressDuration),
+                    batchesStored: storedBatches
+                  });
+                }
+              }
+            },
+            onCheckpoint: async ({ rowIndex, byteOffset }) => {
+              const checkpointStart = now();
+              indexStore.record({ rowIndex, byteOffset });
+              const checkpointDuration = now() - checkpointStart;
+              checkpointCount += 1;
+              totalCheckpointMs += checkpointDuration;
+
+              if (checkpointDuration > longestCheckpointMs) {
+                longestCheckpointMs = checkpointDuration;
+              }
+
+              if (checkpointDuration >= slowBatchThreshold) {
+                debugLog('Slow checkpoint record detected', {
+                  rowIndex,
+                  byteOffset,
+                  checkpointDurationMs: roundMs(checkpointDuration)
                 });
               }
             }
           },
-          onCheckpoint: async ({ rowIndex, byteOffset }) => {
-            const checkpointStart = now();
-            indexStore.record({ rowIndex, byteOffset });
-            const checkpointDuration = now() - checkpointStart;
-            checkpointCount += 1;
-            totalCheckpointMs += checkpointDuration;
-
-            if (checkpointDuration > longestCheckpointMs) {
-              longestCheckpointMs = checkpointDuration;
-            }
-
-            if (checkpointDuration >= slowBatchThreshold) {
-              debugLog('Slow checkpoint record detected', {
-                rowIndex,
-                byteOffset,
-                checkpointDurationMs: roundMs(checkpointDuration)
-              });
-            }
-          }
-        },
-        parserOptions
-      );
+          parserOptions
+        );
       } finally {
         parseMeasure?.();
       }
@@ -390,43 +346,6 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
         dataset.bytesParsed = finalBytes;
       });
 
-      const fuzzyRowBuildMs = roundMs(parseMetrics?.fuzzyRowBuildMs ?? 0);
-      let fuzzySnapshotMs = 0;
-
-      if (fuzzyIndexBuilder) {
-        const fuzzyMeasure = startPerformanceMeasure('fuzzy-build');
-        const buildStart = now();
-        const columnSnapshots = fuzzyIndexBuilder.buildSnapshots();
-        const snapshotDuration = now() - buildStart;
-        fuzzySnapshotMs = roundMs(snapshotDuration);
-        debugLog('FuzzyIndexBuilder.buildSnapshots completed', {
-          durationMs: fuzzySnapshotMs,
-          columnCount: columnSnapshots.length
-        });
-
-        const fuzzySnapshot = {
-          version: FUZZY_INDEX_STORE_VERSION,
-          createdAt: Date.now(),
-          rowCount: finalRows,
-          bytesParsed: finalBytes,
-          tokenLimit: fuzzyIndexBuilder.getTokenLimit(),
-          trigramSize: fuzzyIndexBuilder.getTrigramSize(),
-          fingerprint: fuzzyFingerprint,
-          columns: columnSnapshots
-        };
-
-        const persistStart = now();
-        await fuzzyIndexStore.save(fuzzySnapshot);
-        debugLog('FuzzyIndexStore.save completed', {
-          durationMs: roundMs(now() - persistStart)
-        });
-
-        state.updateDataset((dataset) => {
-          dataset.fuzzyIndexSnapshot = fuzzySnapshot;
-        });
-        fuzzyMeasure?.();
-      }
-
       if (callbacks.onComplete) {
         const endTime = now();
         const summary: LoadCompleteSummary = {
@@ -434,11 +353,7 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
           bytesParsed: finalBytes,
           durationMs: endTime - startTime,
           columnTypes: state.dataset.columnTypes,
-          columnInference: state.dataset.columnInference,
-          metrics: {
-            fuzzyRowBuildMs,
-            fuzzySnapshotMs
-          }
+          columnInference: state.dataset.columnInference
         };
         const completeStart = now();
         await callbacks.onComplete(summary);
@@ -470,8 +385,6 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
         storedBatches,
         chunkCount,
         slowStoreBatchCount,
-        fuzzyRowBuildMs,
-        fuzzySnapshotMs,
         longestStoreBatchMs: roundMs(longestStoreDurationMs),
         averageStoreBatchMs:
           storedBatches > 0 ? roundMs(totalStoreDurationMs / storedBatches) : 0,

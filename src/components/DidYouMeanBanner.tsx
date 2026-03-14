@@ -3,7 +3,7 @@ import { useCallback, useMemo } from 'react';
 import { useDataStore } from '@state/dataStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import type { FilterState } from '@/state/sessionStore';
-import type { DidYouMeanInfo } from '@workers/filterEngine';
+import type { DidYouMeanInfo } from '@workers/didYouMean';
 
 const normaliseValue = (value: unknown): string => {
   if (typeof value === 'string') {
@@ -46,16 +46,11 @@ export const DidYouMeanBanner = (): JSX.Element | null => {
           return filter;
         }
 
-        const nextFilter: FilterState = {
+        return {
           ...filter,
           value: suggestion,
           enabled: true
         };
-        delete nextFilter.fuzzy;
-        delete nextFilter.fuzzyExplicit;
-        delete nextFilter.fuzzyDistance;
-        delete nextFilter.fuzzyDistanceExplicit;
-        return nextFilter;
       });
 
       void applyFilters(nextFilters);

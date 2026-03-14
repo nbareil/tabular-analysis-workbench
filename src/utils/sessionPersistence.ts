@@ -27,6 +27,7 @@ interface SessionEnvelope {
   version: number;
   updatedAt: number;
   handleKey: string | null;
+  fileName: string | null;
   snapshot: PersistableSnapshot;
 }
 
@@ -136,6 +137,7 @@ export const saveSessionSnapshot = async (
       version: SESSION_VERSION,
       updatedAt: Date.now(),
       handleKey: handleKey,
+      fileName: snapshot.fileHandle?.name ?? null,
       snapshot: toPersistableSnapshot(snapshot)
     };
 
@@ -153,6 +155,7 @@ export const saveSessionSnapshot = async (
 export interface LoadedSessionSnapshot {
   snapshot: SessionSnapshot;
   handleMissing: boolean;
+  fileName: string | null;
 }
 
 export const loadSessionSnapshot = async (): Promise<LoadedSessionSnapshot | null> => {
@@ -184,7 +187,8 @@ export const loadSessionSnapshot = async (): Promise<LoadedSessionSnapshot | nul
         ...envelope.snapshot,
         fileHandle: activeHandle ?? null
       },
-      handleMissing: Boolean(envelope.handleKey) && !activeHandle
+      handleMissing: Boolean(envelope.handleKey) && !activeHandle,
+      fileName: envelope.fileName ?? activeHandle?.name ?? null
     };
   } catch (error) {
     console.warn('[session] Failed to load snapshot', error);

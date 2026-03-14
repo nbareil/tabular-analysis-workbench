@@ -70,16 +70,14 @@ describe('buildFilterExpression', () => {
       column: 'name',
       operator: 'eq',
       value: 'Alice',
-      caseSensitive: false,
-      fuzzy: undefined
+      caseSensitive: false
     } satisfies Partial<FilterPredicate>);
     expect((expression as FilterExpression).predicates[1]).toMatchObject({
       id: '2',
       column: 'age',
       operator: 'gt',
       value: 25,
-      caseSensitive: false,
-      fuzzy: undefined
+      caseSensitive: false
     } satisfies Partial<FilterPredicate>);
   });
 
@@ -104,19 +102,17 @@ describe('buildFilterExpression', () => {
       operator: 'between',
       value: 20,
       value2: 30,
-      caseSensitive: false,
-      fuzzy: undefined
+      caseSensitive: false
     } satisfies Partial<FilterPredicate>);
   });
 
-  it('preserves fuzzy and caseSensitive flags', () => {
+  it('preserves caseSensitive flags', () => {
     const expression = buildFilterExpression([
       {
         id: '1',
         column: 'name',
         operator: 'contains',
         value: 'test',
-        fuzzy: true,
         caseSensitive: true
       }
     ]);
@@ -130,8 +126,7 @@ describe('buildFilterExpression', () => {
       column: 'name',
       operator: 'contains',
       value: 'test',
-      caseSensitive: true,
-      fuzzy: true
+      caseSensitive: true
     } satisfies Partial<FilterPredicate>);
   });
 
@@ -179,32 +174,5 @@ describe('buildFilterExpression', () => {
     expect(((expression as FilterExpression).predicates[0] as FilterPredicate).column).toBeUndefined();
     expect(((expression as FilterExpression).predicates[0] as FilterPredicate).operator).toBe('eq');
     expect(((expression as FilterExpression).predicates[0] as FilterPredicate).value).toBe('test');
-  });
-
-  it('serializes fuzzy distance overrides when explicitly enabled', () => {
-    const expression = buildFilterExpression([
-      {
-        id: 'fuzzy-1',
-        column: 'message',
-        operator: 'eq',
-        value: 'login sucess',
-        fuzzy: true,
-        fuzzyExplicit: true,
-        fuzzyDistance: 3,
-        fuzzyDistanceExplicit: true
-      }
-    ]);
-
-    expect(expression).not.toBeNull();
-    if (!expression) {
-      throw new Error('expression should not be null');
-    }
-    expect((expression as FilterExpression).predicates[0]).toMatchObject({
-      column: 'message',
-      operator: 'eq',
-      value: 'login sucess',
-      fuzzy: true,
-      fuzzyDistance: 3
-    } satisfies Partial<FilterPredicate>);
   });
 });

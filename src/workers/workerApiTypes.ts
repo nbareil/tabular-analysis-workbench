@@ -1,4 +1,5 @@
 import type { MaterializedRow } from './utils/materializeRowBatch';
+import type { DidYouMeanInfo } from './didYouMean';
 import type {
   ColumnInference,
   ColumnType,
@@ -18,8 +19,6 @@ import type {
   ImportTagsRequest
 } from './types';
 import type { RowIndexData } from './rowIndexStore';
-import type { FuzzyColumnSnapshot, FuzzyIndexSnapshot } from './fuzzyIndexStore';
-import type { DidYouMeanInfo } from './filterEngine';
 
 export interface WorkerInitOptions {
   chunkSize?: number;
@@ -41,10 +40,6 @@ export interface LoadCompleteSummary {
   durationMs: number;
   columnTypes: Record<string, ColumnType>;
   columnInference: Record<string, ColumnInference>;
-  metrics?: {
-    fuzzyRowBuildMs: number;
-    fuzzySnapshotMs: number;
-  };
 }
 
 export interface SearchRequest {
@@ -79,15 +74,6 @@ export interface SeekRowsRequest {
 export interface SeekRowsResult {
   entries: Array<{ rowIndex: number; byteOffset: number }>;
   checkpointInterval: number;
-}
-
-export interface PersistFuzzyIndexRequest {
-  createdAt?: number;
-  rowCount: number;
-  bytesParsed: number;
-  tokenLimit: number;
-  trigramSize: number;
-  columns: FuzzyColumnSnapshot[];
 }
 
 export interface ApplySortRequest {
@@ -152,11 +138,6 @@ export interface DataWorkerApi {
   deleteLabel: (request: DeleteLabelRequest) => Promise<DeleteLabelResponse>;
   exportTags: () => Promise<ExportTagsResponse>;
   importTags: (request: ImportTagsRequest) => Promise<TaggingSnapshot>;
-  getFuzzyIndexSnapshot: () => Promise<FuzzyIndexSnapshot | null>;
-  persistFuzzyIndexSnapshot: (
-    request: PersistFuzzyIndexRequest
-  ) => Promise<FuzzyIndexSnapshot | null>;
-  clearFuzzyIndexSnapshot: () => Promise<void>;
   persistTags: () => Promise<void>;
 }
 
@@ -173,5 +154,3 @@ export type {
   ImportTagsRequest,
   LabelDefinition
 } from './types';
-
-export type { FuzzyIndexSnapshot } from './fuzzyIndexStore';

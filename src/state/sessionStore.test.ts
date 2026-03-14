@@ -35,7 +35,6 @@ const buildSnapshot = (): SessionSnapshot => ({
       operator: 'eq',
       value: 'logon',
       rawValue: 'logon',
-      fuzzy: false,
       caseSensitive: false,
       enabled: true
     }

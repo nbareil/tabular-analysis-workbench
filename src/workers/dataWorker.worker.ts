@@ -5,14 +5,6 @@ import { RowIndexStore, findNearestCheckpoint } from './rowIndexStore';
 import { groupMaterializedRows, normaliseGroupColumns } from './groupEngine';
 import { RowBatchStore } from './rowBatchStore';
 import type { GroupingRequest, GroupingResult } from './types';
-import {
-  FuzzyIndexStore,
-  type FuzzyIndexSnapshot,
-  type FuzzyIndexFingerprint,
-  type FuzzyColumnSnapshot,
-  FUZZY_INDEX_STORE_VERSION
-} from './fuzzyIndexStore';
-import { createFuzzyFingerprint, fuzzySnapshotMatchesFingerprint } from './fuzzyIndexUtils';
 import { logDebug } from '../utils/debugLog';
 import { createDataWorkerState } from './state/dataWorkerState';
 import { createIngestionPipeline } from './controllers/ingestionPipeline';
@@ -26,7 +18,6 @@ import type {
   LoadFileCallbacks,
   SeekRowsRequest,
   SeekRowsResult,
-  PersistFuzzyIndexRequest,
   ApplySortRequest,
   ApplySortResult,
   ApplyFilterRequest,
@@ -62,8 +53,6 @@ export type {
   LabelDefinition,
   TagRecord
 } from './types';
-
-export type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
 
 
 export const createDataWorkerApi = (): DataWorkerApi => {
@@ -342,74 +331,6 @@ export const createDataWorkerApi = (): DataWorkerApi => {
     },
     async importTags(request: ImportTagsRequest): Promise<TaggingSnapshot> {
       return taggingController.importTags(request);
-    },
-    async getFuzzyIndexSnapshot(): Promise<FuzzyIndexSnapshot | null> {
-      return state.dataset.fuzzyIndexSnapshot;
-    },
-    async persistFuzzyIndexSnapshot(
-      request: PersistFuzzyIndexRequest
-    ): Promise<FuzzyIndexSnapshot | null> {
-      const fingerprint = state.dataset.fuzzyFingerprint;
-      if (!fingerprint) {
-        return null;
-      }
-
-      if (!Array.isArray(request.columns)) {
-        throw new Error('Fuzzy index snapshot requires a columns array.');
-      }
-
-      const rowCount =
-        typeof request.rowCount === 'number' && Number.isFinite(request.rowCount)
-          ? Math.max(0, Math.floor(request.rowCount))
-          : state.dataset.totalRows;
-      const bytesParsed =
-        typeof request.bytesParsed === 'number' && Number.isFinite(request.bytesParsed)
-          ? Math.max(0, Math.floor(request.bytesParsed))
-          : state.dataset.bytesParsed;
-      const tokenLimit =
-        typeof request.tokenLimit === 'number' && Number.isFinite(request.tokenLimit)
-          ? Math.max(0, Math.floor(request.tokenLimit))
-          : 0;
-      const trigramSize =
-        typeof request.trigramSize === 'number' && Number.isFinite(request.trigramSize)
-          ? Math.max(1, Math.floor(request.trigramSize))
-          : 3;
-      const createdAt =
-        typeof request.createdAt === 'number' && Number.isFinite(request.createdAt)
-          ? request.createdAt
-          : Date.now();
-
-      const snapshot: FuzzyIndexSnapshot = {
-        version: FUZZY_INDEX_STORE_VERSION,
-        createdAt,
-        rowCount,
-        bytesParsed,
-        tokenLimit,
-        trigramSize,
-        fingerprint,
-        columns: request.columns
-      };
-
-      state.updateDataset((dataset) => {
-        dataset.fuzzyIndexSnapshot = snapshot;
-      });
-
-      if (
-        state.dataset.fuzzyIndexStore &&
-        fuzzySnapshotMatchesFingerprint(snapshot, fingerprint)
-      ) {
-        await state.dataset.fuzzyIndexStore.save(snapshot);
-      }
-
-      return snapshot;
-    },
-    async clearFuzzyIndexSnapshot(): Promise<void> {
-      state.updateDataset((dataset) => {
-        dataset.fuzzyIndexSnapshot = null;
-      });
-      if (state.dataset.fuzzyIndexStore) {
-        await state.dataset.fuzzyIndexStore.clear();
-      }
     },
     async persistTags(): Promise<void> {
       await taggingController.persistTags();

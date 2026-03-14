@@ -5,7 +5,7 @@ import { DidYouMeanBanner } from './DidYouMeanBanner';
 import { useDataStore } from '@state/dataStore';
 import type { FilterState } from '@state/sessionStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
-import type { DidYouMeanInfo } from '@workers/filterEngine';
+import type { DidYouMeanInfo } from '@workers/didYouMean';
 
 vi.mock('@/hooks/useFilterSync');
 

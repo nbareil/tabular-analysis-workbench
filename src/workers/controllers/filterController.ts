@@ -1,4 +1,5 @@
 import { evaluateFilterOnRows } from '../filterEngine';
+import { suggestDidYouMean } from '../didYouMean';
 import { startPerformanceMeasure } from '../utils/performanceMarks';
 import type { DataWorkerStateController } from '../state/dataWorkerState';
 import type { MaterializedRow } from '../utils/materializeRowBatch';
@@ -85,8 +86,7 @@ export const createFilterController = ({
           state.dataset.columnTypes,
           expression,
           {
-            tags: state.tagging.tags,
-            fuzzyIndex: state.dataset.fuzzyIndexSnapshot
+            tags: state.tagging.tags
           },
           {
             collectPredicateMatch: (predicateId, count) => {
@@ -101,10 +101,14 @@ export const createFilterController = ({
             matchedRowIds.push(rowStart + idx);
           }
         }
+      }
 
-        if (result.didYouMean && !didYouMean) {
-          didYouMean = result.didYouMean;
-        }
+      if (!matchedRowIds.length) {
+        didYouMean = await suggestDidYouMean({
+          batchStore,
+          expression,
+          columnTypes: state.dataset.columnTypes
+        });
       }
 
       state.updateDataset((dataset) => {

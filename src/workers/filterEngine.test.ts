@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { evaluateFilter, collectMatchingRowIds } from './filterEngine';
-import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
-import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
 import type {
   BooleanColumnBatch,
   ColumnBatch,
@@ -158,30 +156,6 @@ const buildRowBatch = (
     columnTypes,
     columnInference,
     stats: { rowsParsed: rowCount, bytesParsed: 0, eof: true }
-  };
-};
-
-const buildFuzzyIndexSnapshot = (columnKey: string, values: string[]): FuzzyIndexSnapshot => {
-  const builder = new FuzzyIndexBuilder();
-  for (const value of values) {
-    builder.addRow([columnKey], [value]);
-  }
-
-  const columns = builder.buildSnapshots();
-
-  return {
-    version: 1,
-    createdAt: Date.now(),
-    rowCount: values.length,
-    bytesParsed: 0,
-    tokenLimit: builder.getTokenLimit(),
-    trigramSize: builder.getTrigramSize(),
-    fingerprint: {
-      fileName: 'test.csv',
-      fileSize: 0,
-      lastModified: 0
-    },
-    columns
   };
 };
 
@@ -419,146 +393,5 @@ describe('filterEngine', () => {
     );
 
     expect(Array.from(notLabel.matches)).toEqual([0, 1, 1]);
-  });
-
-  it('returns did-you-mean suggestions when equality has no exact matches', () => {
-    const batch = buildRowBatch(
-      {
-        message: stringColumn(['login success', 'payment complete'])
-      },
-      { message: 'string' }
-    );
-    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['login success', 'payment complete']);
-
-    const result = evaluateFilter(
-      batch,
-      {
-        column: 'message',
-        operator: 'eq',
-        value: 'login sucess'
-      },
-      { fuzzyIndex }
-    );
-
-    expect(Array.from(result.matches)).toEqual([0, 0]);
-    expect(result.didYouMean).toBeDefined();
-    expect(result.didYouMean?.column).toBe('message');
-    expect(result.didYouMean?.query).toBe('login sucess');
-    expect(result.didYouMean?.suggestions).toContain('login success');
-  });
-
-  it('does not change result sets when legacy fuzzy flags are still present', () => {
-    const batch = buildRowBatch(
-      {
-        message: stringColumn(['kitten'])
-      },
-      { message: 'string' }
-    );
-    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['kitten']);
-
-    const defaultResult = evaluateFilter(
-      batch,
-      {
-        column: 'message',
-        operator: 'eq',
-        value: 'kittne'
-      },
-      { fuzzyIndex }
-    );
-
-    expect(Array.from(defaultResult.matches)).toEqual([0]);
-    expect(defaultResult.didYouMean?.suggestions).toContain('kitten');
-
-    const legacyFuzzyResult = evaluateFilter(
-      batch,
-      {
-        column: 'message',
-        operator: 'eq',
-        value: 'kittne',
-        fuzzy: true,
-        fuzzyDistance: 3
-      },
-      { fuzzyIndex }
-    );
-
-    expect(Array.from(legacyFuzzyResult.matches)).toEqual([0]);
-    expect(legacyFuzzyResult.didYouMean?.suggestions).toContain('kitten');
-  });
-
-  it('does not emit suggestions when an exact equality match exists', () => {
-    const batch = buildRowBatch(
-      {
-        message: stringColumn(['login success'])
-      },
-      { message: 'string' }
-    );
-    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['login success']);
-
-    const result = evaluateFilter(
-      batch,
-      {
-        column: 'message',
-        operator: 'eq',
-        value: 'login success'
-      },
-      { fuzzyIndex }
-    );
-
-    expect(Array.from(result.matches)).toEqual([1]);
-    expect(result.didYouMean).toBeUndefined();
-  });
-
-  it('does not fuzzy-match row values when suggestions are unavailable', () => {
-    const batch = buildRowBatch(
-      {
-        message: stringColumn(['logni sucess'])
-      },
-      { message: 'string' }
-    );
-    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['placeholder']);
-    fuzzyIndex.columns = [
-      {
-        key: 'message',
-        truncated: true,
-        tokens: [],
-        trigramIndex: {}
-      }
-    ];
-
-    const result = evaluateFilter(
-      batch,
-      {
-        column: 'message',
-        operator: 'eq',
-        value: 'login success'
-      },
-      { fuzzyIndex }
-    );
-
-    expect(Array.from(result.matches)).toEqual([0]);
-    expect(result.didYouMean).toBeUndefined();
-  });
-
-  it('does not emit did-you-mean suggestions for neq predicates', () => {
-    const batch = buildRowBatch(
-      {
-        message: stringColumn(['login success', 'payment accepted'])
-      },
-      { message: 'string' }
-    );
-    const fuzzyIndex = buildFuzzyIndexSnapshot('message', ['login success', 'payment accepted']);
-
-    const result = evaluateFilter(
-      batch,
-      {
-        column: 'message',
-        operator: 'neq',
-        value: 'login sucess'
-      },
-      { fuzzyIndex }
-    );
-
-    expect(Array.from(result.matches)).toEqual([1, 1]);
-    expect(result.didYouMean).toBeUndefined();
   });
 });

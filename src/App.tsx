@@ -127,8 +127,12 @@ const AppShell = ({
   const sessionPersistence = useSessionPersistence(opfsAvailable);
   const {
     restoring: persistenceRestoring,
+    reconnecting: persistenceReconnecting,
+    canReconnect: persistenceCanReconnect,
+    reconnectFileName: persistenceReconnectFileName,
     error: persistenceError,
-    lastSavedAt: persistenceLastSavedAt
+    lastSavedAt: persistenceLastSavedAt,
+    reconnectFile: reconnectPersistedFile
   } = sessionPersistence;
 
   useDiagnosticsReporter();
@@ -391,6 +395,10 @@ const AppShell = ({
       return 'Restoring previous session…';
     }
 
+    if (persistenceReconnecting) {
+      return 'Reconnecting previous file…';
+    }
+
     let base: string;
     if (matchedRows != null && totalRows > 0) {
       base = `Showing ${matchedRows.toLocaleString()} of ${totalRows.toLocaleString()} rows`;
@@ -419,6 +427,7 @@ const AppShell = ({
     return base;
   }, [
     persistenceRestoring,
+    persistenceReconnecting,
     matchedRows,
     totalRows,
     loaderMessage,
@@ -428,6 +437,30 @@ const AppShell = ({
     persistenceError,
     persistenceLastSavedAt
   ]);
+
+  const handleReconnectPersistedFile = useCallback(async () => {
+    try {
+      await reconnectPersistedFile();
+    } catch (error) {
+      reportAppError(
+        error instanceof Error ? error.message : 'Failed to reconnect previous file',
+        error,
+        { operation: 'session.reconnect' }
+      );
+    }
+  }, [reconnectPersistedFile, reportAppError]);
+
+  const reconnectButtonLabel = useMemo(() => {
+    if (!persistenceReconnectFileName) {
+      return 'Reconnect file';
+    }
+
+    if (persistenceReconnectFileName.length <= 28) {
+      return `Reconnect ${persistenceReconnectFileName}`;
+    }
+
+    return `Reconnect ${persistenceReconnectFileName.slice(0, 25)}...`;
+  }, [persistenceReconnectFileName]);
 
   const openNoteEditor = useCallback(
     ({ rowId }: { rowId: number }) => {
@@ -725,6 +758,11 @@ const AppShell = ({
               Restoring session…
             </span>
           )}
+          {persistenceReconnecting && (
+            <span className="text-xs uppercase tracking-wide text-amber-300">
+              Reconnecting file…
+            </span>
+          )}
           {loaderMessage && (
             <span className="text-xs uppercase tracking-wide text-slate-500">
               {loaderMessage}
@@ -734,6 +772,17 @@ const AppShell = ({
             <span className="text-xs uppercase tracking-wide text-red-400">
               {persistenceError}
             </span>
+          )}
+          {persistenceCanReconnect && (
+            <button
+              type="button"
+              onClick={handleReconnectPersistedFile}
+              disabled={persistenceReconnecting}
+              title={persistenceReconnectFileName ?? 'Reconnect previous file'}
+              className="rounded border border-amber-500/60 px-2 py-1 text-xs font-medium text-amber-200 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {persistenceReconnecting ? 'Reconnecting…' : reconnectButtonLabel}
+            </button>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -760,7 +809,12 @@ const AppShell = ({
             type="button"
             className="rounded bg-accent px-3 py-1 text-sm font-semibold text-slate-900"
             onClick={handleOpenFile}
-            disabled={!workerReady || loaderStatus === 'loading' || persistenceRestoring}
+            disabled={
+              !workerReady ||
+              loaderStatus === 'loading' ||
+              persistenceRestoring ||
+              persistenceReconnecting
+            }
           >
             {loaderStatus === 'loading' ? 'Loading…' : 'Open File'}
           </button>
