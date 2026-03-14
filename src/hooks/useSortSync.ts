@@ -4,7 +4,7 @@ import { useDataStore } from '@state/dataStore';
 import { useSessionStore, type SessionSnapshot } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { reportAppError } from '@utils/diagnostics';
-import { logDebug } from '@utils/debugLog';
+import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
 
 type SortState = SessionSnapshot['sorts'][number];
 
@@ -39,13 +39,14 @@ export const useSortSync = (): UseSortSyncResult => {
   const totalRows = useDataStore((state) => state.totalRows);
   const loaderStatus = useDataStore((state) => state.status);
   const bootstrapAppliedRef = useRef(false);
+  const debugLoggingEnabled = isDebugLoggingEnabled();
 
   const applySortsInternal = useCallback(
     async (nextSorts: SortState[], options: ApplyOptions = {}): Promise<SortState[]> => {
       const { persist = true, progressive = false, visibleRows = 1000 } = options;
 
       try {
-        if (import.meta.env.DEV) {
+        if (debugLoggingEnabled) {
           logDebug('sorts', 'applySorts requested', {
             sortCount: nextSorts.length,
             sorts: nextSorts,
@@ -62,7 +63,7 @@ export const useSortSync = (): UseSortSyncResult => {
           visibleRows
         });
 
-        if (import.meta.env.DEV) {
+        if (debugLoggingEnabled) {
           logDebug('sorts', 'applySorts response', {
             matchedRows: response.matchedRows ?? null,
             totalRows: response.totalRows,
@@ -89,7 +90,7 @@ export const useSortSync = (): UseSortSyncResult => {
         throw error;
       }
     },
-    [bumpViewVersion, setMatchedRowCount, setSorts]
+    [bumpViewVersion, debugLoggingEnabled, setMatchedRowCount, setSorts]
   );
 
   const applySorts = useCallback(
@@ -111,7 +112,7 @@ export const useSortSync = (): UseSortSyncResult => {
     }
 
     if (loaderStatus !== 'ready' || totalRows === 0) {
-      if (import.meta.env.DEV) {
+      if (debugLoggingEnabled) {
         logDebug('sorts', 'bootstrap deferred', {
           loaderStatus,
           totalRows,
@@ -126,7 +127,7 @@ export const useSortSync = (): UseSortSyncResult => {
       return;
     }
 
-    if (import.meta.env.DEV) {
+    if (debugLoggingEnabled) {
       logDebug('sorts', 'bootstrapping persisted sorts', {
         totalRows,
         sorts
@@ -137,7 +138,7 @@ export const useSortSync = (): UseSortSyncResult => {
         setSorts(validSorts);
       }
     });
-  }, [applySortsInternal, loaderStatus, setSorts, sorts, totalRows]);
+  }, [applySortsInternal, debugLoggingEnabled, loaderStatus, setSorts, sorts, totalRows]);
 
   return { sorts, applySorts, clearSorts };
 };

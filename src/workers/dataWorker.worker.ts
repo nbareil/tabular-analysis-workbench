@@ -5,7 +5,7 @@ import { RowIndexStore, findNearestCheckpoint } from './rowIndexStore';
 import { groupMaterializedRows, normaliseGroupColumns } from './groupEngine';
 import { RowBatchStore } from './rowBatchStore';
 import type { GroupingRequest, GroupingResult } from './types';
-import { logDebug } from '../utils/debugLog';
+import { isDebugLoggingEnabled, logDebug, setDebugLoggingEnabled } from '../utils/debugLog';
 import { createDataWorkerState } from './state/dataWorkerState';
 import { createIngestionPipeline } from './controllers/ingestionPipeline';
 import { createFilterController } from './controllers/filterController';
@@ -107,7 +107,7 @@ export const createDataWorkerApi = (): DataWorkerApi => {
 
   const materializeViewWindow = async (offset: number, limit?: number): Promise<MaterializedRow[]> => {
     const rowIds = buildRowIdWindow(offset, limit);
-    if (import.meta.env.DEV) {
+    if (isDebugLoggingEnabled()) {
       logDebug('data-worker', 'materializeViewWindow', {
         offset,
         limit,
@@ -123,7 +123,7 @@ export const createDataWorkerApi = (): DataWorkerApi => {
 
     const batchStore = ensureBatchStore();
     const rows = await batchStore.materializeRows(rowIds);
-    if (import.meta.env.DEV) {
+    if (isDebugLoggingEnabled()) {
       logDebug('data-worker', 'materializeViewWindow resolved', {
         offset,
         limit,
@@ -157,6 +157,8 @@ export const createDataWorkerApi = (): DataWorkerApi => {
   const api: DataWorkerApi = {
     async init(options) {
       const threshold = options.slowBatchThresholdMs;
+
+      setDebugLoggingEnabled(Boolean(options.debugLogging));
 
       state.setOptions({
         chunkSize: options.chunkSize,
@@ -215,7 +217,7 @@ export const createDataWorkerApi = (): DataWorkerApi => {
       return filterController.run(request);
     },
     async fetchRows({ offset, limit }: FetchRowsRequest): Promise<FetchRowsResult> {
-      if (import.meta.env.DEV) {
+      if (isDebugLoggingEnabled()) {
         logDebug('data-worker', 'fetchRows request', {
           offset,
           limit,
@@ -225,7 +227,7 @@ export const createDataWorkerApi = (): DataWorkerApi => {
         });
       }
       if (!state.dataset.batchStore) {
-        if (import.meta.env.DEV) {
+        if (isDebugLoggingEnabled()) {
           console.warn('[data-worker] fetchRows received request before dataset ready');
         }
         return {
@@ -236,7 +238,7 @@ export const createDataWorkerApi = (): DataWorkerApi => {
       }
 
       const rows = await materializeViewWindow(offset, limit);
-      if (import.meta.env.DEV) {
+      if (isDebugLoggingEnabled()) {
         logDebug('data-worker', 'fetchRows resolved', {
           offset,
           limit,

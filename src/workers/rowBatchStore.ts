@@ -1,4 +1,4 @@
-import { logDebug } from '../utils/debugLog';
+import { isDebugLoggingEnabled, logDebug } from '../utils/debugLog';
 import { materializeRowBatch, type MaterializedRow } from './utils/materializeRowBatch';
 import type { ColumnBatch, ColumnType, RowBatch } from './types';
 
@@ -130,7 +130,7 @@ export class RowBatchStore {
       });
 
       this.memoryStore.set(batchIndex, batch);
-      if (import.meta.env.DEV) {
+      if (isDebugLoggingEnabled()) {
         logDebug('row-batch-store', 'Stored batch in memory fallback', {
           batchIndex,
           rowStart,
@@ -237,7 +237,7 @@ export class RowBatchStore {
     });
 
     this.cacheBatch({ index: batchIndex, batch });
-    if (import.meta.env.DEV) {
+    if (isDebugLoggingEnabled()) {
       logDebug('row-batch-store', 'Stored batch on disk', {
         batchIndex,
         rowStart,
@@ -397,7 +397,7 @@ export class RowBatchStore {
       return [];
     }
 
-    if (import.meta.env.DEV) {
+    if (isDebugLoggingEnabled()) {
       logDebug('row-batch-store', 'materializeRows request', {
         rowCount: rowIds.length,
         firstRowId: rowIds[0],
@@ -439,7 +439,7 @@ export class RowBatchStore {
       }
     }
 
-    if (import.meta.env.DEV) {
+    if (isDebugLoggingEnabled()) {
       logDebug('row-batch-store', 'materializeRows resolved', {
         requested: rowIds.length,
         resolved: orderedRows.length

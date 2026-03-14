@@ -5,7 +5,7 @@ import { useSessionStore, type FilterState } from '@state/sessionStore';
 import { getDataWorker, type ApplyFilterRequest } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
 import { reportAppError } from '@utils/diagnostics';
-import { logDebug } from '@utils/debugLog';
+import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
 
 export interface UseFilterSyncResult {
   filters: FilterState[];
@@ -32,6 +32,7 @@ export const useFilterSync = (
   const totalRows = useDataStore((state) => state.totalRows);
   const bootstrapAppliedRef = useRef(false);
   const requestIdRef = useRef(0);
+  const debugLoggingEnabled = isDebugLoggingEnabled();
 
   const applyFilters = useCallback(
     async (nextFilters: FilterState[]) => {
@@ -41,7 +42,7 @@ export const useFilterSync = (
       setFilters(filtersToApply);
 
       try {
-        if (import.meta.env.DEV) {
+        if (debugLoggingEnabled) {
           logDebug('filters', 'applyFilters requested', {
             filterCount: filtersToApply.length,
             filters: filtersToApply.map((filter) => ({
@@ -68,7 +69,7 @@ export const useFilterSync = (
           if (requestId !== requestIdRef.current) {
             return;
           }
-          if (import.meta.env.DEV) {
+          if (debugLoggingEnabled) {
             logDebug('filters', 'applyFilters cleared expression', {
               totalRows: response.totalRows
             });
@@ -92,7 +93,7 @@ export const useFilterSync = (
           return;
         }
 
-        if (import.meta.env.DEV) {
+        if (debugLoggingEnabled) {
           logDebug('filters', 'applyFilters response', {
             matchedRows: response.matchedRows,
             totalRows: response.totalRows,
@@ -120,7 +121,16 @@ export const useFilterSync = (
         });
       }
     },
-    [setFilters, clearFilterSummary, clearSearchResult, setFilterSummary, setMatchedRowCount, setDidYouMean, bumpViewVersion]
+    [
+      bumpViewVersion,
+      clearFilterSummary,
+      clearSearchResult,
+      debugLoggingEnabled,
+      setDidYouMean,
+      setFilterSummary,
+      setFilters,
+      setMatchedRowCount
+    ]
   );
 
   useEffect(() => {
@@ -130,7 +140,7 @@ export const useFilterSync = (
     }
 
     if (loaderStatus !== 'ready' || totalRows === 0) {
-      if (import.meta.env.DEV && filters.length > 0) {
+      if (debugLoggingEnabled && filters.length > 0) {
         logDebug('filters', 'bootstrap deferred', {
           loaderStatus,
           totalRows,
@@ -151,14 +161,14 @@ export const useFilterSync = (
     }
 
     bootstrapAppliedRef.current = true;
-    if (import.meta.env.DEV) {
+    if (debugLoggingEnabled) {
       logDebug('filters', 'bootstrapping persisted filters', {
         totalRows,
         filterCount: filters.length
       });
     }
     void applyFilters(filters);
-  }, [applyFilters, bootstrap, filters, loaderStatus, totalRows]);
+  }, [applyFilters, bootstrap, debugLoggingEnabled, filters, loaderStatus, totalRows]);
 
   return { filters, applyFilters };
 };

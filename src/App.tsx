@@ -19,7 +19,7 @@ import CapabilityGate from '@components/CapabilityGate';
 import CapabilityWarningBanner from '@components/CapabilityWarningBanner';
 import DiagnosticsToast from '@components/DiagnosticsToast';
 import { getDataWorker } from '@workers/dataWorkerProxy';
-import { logDebug } from '@utils/debugLog';
+import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
 import { summariseLabelFilters } from '@utils/labelFilters';
 import {
@@ -139,11 +139,12 @@ const AppShell = ({
     reconnectFile: reconnectPersistedFile
   } = sessionPersistence;
   const lastViewSnapshotRef = useRef<string | null>(null);
+  const debugLoggingEnabled = isDebugLoggingEnabled();
 
   useDiagnosticsReporter();
 
   useEffect(() => {
-    if (!import.meta.env.DEV) {
+    if (!debugLoggingEnabled) {
       return;
     }
 
@@ -177,6 +178,7 @@ const AppShell = ({
     console.info(`[app] view snapshot ${snapshot}`);
   }, [
     columns.length,
+    debugLoggingEnabled,
     fileHandle,
     filterMatchedRows,
     filters,
@@ -242,7 +244,7 @@ const AppShell = ({
       try {
         const worker = getDataWorker();
         await worker.init({
-          debugLogging: import.meta.env.DEV,
+          debugLogging: debugLoggingEnabled,
           slowBatchThresholdMs: 50
         });
         const response = await worker.ping();
@@ -273,13 +275,13 @@ const AppShell = ({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [debugLoggingEnabled]);
 
   const loadSelectedFile = useCallback(
     async (handle: FileSystemFileHandle) => {
       let callbackReportedError = false;
 
-      if (import.meta.env.DEV) {
+      if (debugLoggingEnabled) {
         console.info('[app] Triggering loadFile for handle', {
           name: handle.name
         });
@@ -295,19 +297,19 @@ const AppShell = ({
           { handle },
           proxy({
             onStart: async ({ columns }) => {
-              if (import.meta.env.DEV) {
+              if (debugLoggingEnabled) {
                 logDebug('app', 'Worker onStart', { columnCount: columns.length, columns });
               }
               setHeader(columns);
             },
             onProgress: async (progress) => {
-              if (import.meta.env.DEV) {
+              if (debugLoggingEnabled) {
                 logDebug('app', 'Worker onProgress', { ...progress });
               }
               reportProgress(progress);
             },
             onComplete: async (summary) => {
-              if (import.meta.env.DEV) {
+              if (debugLoggingEnabled) {
                 console.info('[app] Worker onComplete', summary);
               }
               complete(summary);
@@ -317,7 +319,7 @@ const AppShell = ({
             },
             onError: async (error) => {
               callbackReportedError = true;
-              if (import.meta.env.DEV) {
+              if (debugLoggingEnabled) {
                 console.error('[app] Worker onError', error);
               }
               reportAppError(error.message ?? 'Failed to load file', error, {
@@ -344,6 +346,7 @@ const AppShell = ({
     [
       clearSearchResult,
       complete,
+      debugLoggingEnabled,
       initializeColumnLayout,
       reportProgress,
       setHeader,

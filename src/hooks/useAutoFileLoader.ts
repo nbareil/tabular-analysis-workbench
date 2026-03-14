@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
 
+import { isDebugLoggingEnabled } from '@utils/debugLog';
+
 interface UseAutoFileLoaderOptions {
   workerReady: boolean;
   fileHandle: FileSystemFileHandle | null;
@@ -12,6 +14,7 @@ export const useAutoFileLoader = ({
   loadFile
 }: UseAutoFileLoaderOptions): void => {
   const lastRequestedHandleRef = useRef<FileSystemFileHandle | null>(null);
+  const debugLoggingEnabled = isDebugLoggingEnabled();
 
   useEffect(() => {
     if (!workerReady || !fileHandle) {
@@ -19,7 +22,7 @@ export const useAutoFileLoader = ({
     }
 
     if (lastRequestedHandleRef.current === fileHandle) {
-      if (import.meta.env.DEV) {
+      if (debugLoggingEnabled) {
         console.info('[auto-file-loader] Skipping duplicate auto-load', {
           fileName: fileHandle.name ?? null
         });
@@ -28,14 +31,14 @@ export const useAutoFileLoader = ({
     }
 
     lastRequestedHandleRef.current = fileHandle;
-    if (import.meta.env.DEV) {
+    if (debugLoggingEnabled) {
       console.info('[auto-file-loader] Starting auto-load', {
         fileName: fileHandle.name ?? null
       });
     }
 
     void loadFile(fileHandle).catch(() => {
-      if (import.meta.env.DEV) {
+      if (debugLoggingEnabled) {
         console.warn('[auto-file-loader] Auto-load failed', {
           fileName: fileHandle.name ?? null
         });
@@ -44,7 +47,7 @@ export const useAutoFileLoader = ({
         lastRequestedHandleRef.current = null;
       }
     });
-  }, [fileHandle, loadFile, workerReady]);
+  }, [debugLoggingEnabled, fileHandle, loadFile, workerReady]);
 
   useEffect(() => {
     if (!fileHandle) {

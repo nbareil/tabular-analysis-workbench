@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 import type { ColumnInference, ColumnType, GroupingResult, RowBatch } from '@workers/types';
 import type { DidYouMeanInfo } from '@workers/didYouMean';
-import { logDebug } from '@utils/debugLog';
+import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
 import { formatBytes } from '@utils/formatBytes';
 
 export interface GridColumn {
@@ -155,7 +155,7 @@ export const useDataStore = create<DataState>((set) => ({
     })),
   setHeader: (header) =>
     set((state) => {
-      if (import.meta.env.DEV) {
+      if (isDebugLoggingEnabled()) {
         logDebug('data-store', 'setHeader', {
           headerCount: header.length,
           previousColumnCount: state.columns.length
@@ -173,7 +173,7 @@ export const useDataStore = create<DataState>((set) => ({
     }),
   reportProgress: (progress) =>
     set((state) => {
-      if (import.meta.env.DEV) {
+      if (isDebugLoggingEnabled()) {
         logDebug('data-store', 'reportProgress', {
           rowsParsed: progress.rowsParsed,
           bytesParsed: progress.bytesParsed,
@@ -193,7 +193,7 @@ export const useDataStore = create<DataState>((set) => ({
     }),
   complete: (summary) =>
     set((state) => {
-      if (import.meta.env.DEV) {
+      if (isDebugLoggingEnabled()) {
         console.info('[data-store] complete', {
           rowsParsed: summary.rowsParsed,
           bytesParsed: summary.bytesParsed,
@@ -253,7 +253,7 @@ export const useDataStore = create<DataState>((set) => ({
         columnInference: summary.columnInference
       };
 
-      if (import.meta.env.DEV) {
+      if (isDebugLoggingEnabled()) {
         logDebug('data-store', 'complete applied', {
           status: nextState.status,
           totalRows: nextState.totalRows,
@@ -266,7 +266,7 @@ export const useDataStore = create<DataState>((set) => ({
     }),
   setError: (message, details) =>
     set((state) => {
-      if (import.meta.env.DEV) {
+      if (isDebugLoggingEnabled()) {
         console.error('[data-store] setError', { message, previousStatus: state.status, details });
       }
       return {

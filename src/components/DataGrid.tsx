@@ -22,7 +22,7 @@ import { useTagStore } from '@state/tagStore';
 import type { FilterState, SessionSnapshot } from '@state/sessionStore';
 import { useSessionStore } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
-import { logDebug } from '@utils/debugLog';
+import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
 import { buildTagCellValue, type TagCellValue, type TagLabelView } from '@utils/tagCells';
 import { renderMarkdownToSafeHtml } from '@utils/markdown';
 import { useFilterSync } from '@/hooks/useFilterSync';
@@ -290,6 +290,7 @@ interface DataGridProps {
 }
 
 const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
+  const debugLoggingEnabled = isDebugLoggingEnabled();
   const columns = useDataStore((state) => state.columns);
   const matchedRows = useDataStore((state) => state.matchedRows);
   const viewVersion = useDataStore((state) => state.viewVersion);
@@ -533,7 +534,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       typeof (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed === 'function' &&
       (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed?.()
     ) {
-      if (import.meta.env.DEV) {
+      if (debugLoggingEnabled) {
         logDebug('grid', 'skipping datasource update because grid is destroyed');
       }
       return;
@@ -542,7 +543,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     const datasource: IDatasource = {
       getRows: async (params: IGetRowsParams) => {
         try {
-          if (import.meta.env.DEV) {
+          if (debugLoggingEnabled) {
             const currentView = viewStateRef.current;
             logDebug('grid', 'getRows request', {
               startRow: params.startRow,
@@ -560,7 +561,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
             limit: requestSize
           });
           params.successCallback(response.rows as GridRow[], response.matchedRows);
-          if (import.meta.env.DEV) {
+          if (debugLoggingEnabled) {
             logDebug('grid', 'Worker fetchRows response', {
               offset: params.startRow,
               limit: requestSize,
@@ -585,7 +586,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     } else if (typeof gridApi.setDatasource === 'function') {
       gridApi.setDatasource(datasource);
     }
-  }, [gridApi, viewVersion]);
+  }, [debugLoggingEnabled, gridApi, viewVersion]);
 
   useEffect(() => {
     if (status !== 'ready') {
@@ -600,12 +601,12 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed?.()
       )
     ) {
-      if (import.meta.env.DEV) {
+      if (debugLoggingEnabled) {
         logDebug('grid', 'refreshing infinite cache after ready status');
       }
       gridApi.refreshInfiniteCache();
     }
-  }, [gridApi, status]);
+  }, [debugLoggingEnabled, gridApi, status]);
 
   useEffect(() => {
     if (status === 'loading') {
@@ -767,7 +768,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         setAutoColumnWidths(nextWidths);
         computedVersionRef.current = targetVersion;
       } catch (error) {
-        if (import.meta.env.DEV) {
+        if (debugLoggingEnabled) {
           console.warn('[grid] Failed to compute auto column widths', error);
         }
       }
@@ -778,7 +779,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     return () => {
       cancelled = true;
     };
-  }, [columns, gridApi, status, totalRows, viewVersion]);
+  }, [columns, debugLoggingEnabled, gridApi, status, totalRows, viewVersion]);
 
   const themeClass = theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz';
   const showPlaceholder = shouldShowInitialPlaceholder({
@@ -799,7 +800,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   });
 
   useEffect(() => {
-    if (!import.meta.env.DEV) {
+    if (!debugLoggingEnabled) {
       return;
     }
 
@@ -819,7 +820,18 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     }
     lastRenderSnapshotRef.current = snapshot;
     console.info(`[grid] render state ${snapshot}`);
-  }, [columns.length, emptyStateMessage, gridApi, matchedRows, showEmptyOverlay, showPlaceholder, status, totalRows, viewVersion]);
+  }, [
+    columns.length,
+    debugLoggingEnabled,
+    emptyStateMessage,
+    gridApi,
+    matchedRows,
+    showEmptyOverlay,
+    showPlaceholder,
+    status,
+    totalRows,
+    viewVersion
+  ]);
 
   const menuMetadata = useMemo(() => {
     if (!contextMenu) {
