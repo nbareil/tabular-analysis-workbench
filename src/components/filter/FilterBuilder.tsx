@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 
 import type { FilterState } from '@state/sessionStore';
 import type { GridColumn } from '@state/dataStore';
@@ -67,9 +67,6 @@ const defaultFilter = (column: string, labels: LabelDefinition[]): FilterState =
     operator: isTagColumn ? 'eq' : 'contains',
     value: isTagColumn ? (labels[0]?.id ?? TAG_NO_LABEL_FILTER_VALUE) : '',
     caseSensitive: false,
-    fuzzy: false,
-    fuzzyExplicit: isTagColumn,
-    fuzzyDistanceExplicit: false,
     enabled: true
   };
 };
@@ -94,10 +91,6 @@ const normaliseFilterForColumn = (
     operator,
     value,
     value2: undefined,
-    fuzzy: false,
-    fuzzyExplicit: true,
-    fuzzyDistance: undefined,
-    fuzzyDistanceExplicit: false,
     caseSensitive: false,
     enabled: filter.enabled ?? true
   };
@@ -154,21 +147,12 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
   const tagLabels = useTagStore((state) => state.labels);
   const tagStatus = useTagStore((state) => state.status);
   const loadTags = useTagStore((state) => state.load);
-  const [fuzzyWarning, setFuzzyWarning] = useState<string | null>(null);
 
   useEffect(() => {
     if (tagStatus === 'idle') {
       void loadTags();
     }
   }, [loadTags, tagStatus]);
-
-  useEffect(() => {
-    if (!fuzzyWarning) {
-      return undefined;
-    }
-    const timeout = window.setTimeout(() => setFuzzyWarning(null), 4000);
-    return () => window.clearTimeout(timeout);
-  }, [fuzzyWarning]);
 
   const columnMap = useMemo(() => Object.fromEntries(columns.map(c => [c.key, c])), [columns]);
 
@@ -227,10 +211,6 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
           operator: 'contains',
           value: '',
           value2: undefined,
-          fuzzy: false,
-          fuzzyExplicit: false,
-          fuzzyDistance: undefined,
-          fuzzyDistanceExplicit: false,
           caseSensitive: false
         };
       }
@@ -258,13 +238,6 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
 
       if (updates.column === TAG_COLUMN_ID || updated.column === TAG_COLUMN_ID) {
         return normaliseFilterForColumn(updated, tagLabels);
-      }
-
-      if (updates.operator && updates.operator !== 'eq') {
-        updated.fuzzy = false;
-        updated.fuzzyExplicit = false;
-        updated.fuzzyDistance = undefined;
-        updated.fuzzyDistanceExplicit = false;
       }
 
       return updated;
@@ -319,11 +292,6 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          {fuzzyWarning && (
-            <div className="rounded border border-yellow-600 bg-yellow-900/30 px-2 py-1 text-xs text-yellow-200">
-              {fuzzyWarning}
-            </div>
-          )}
           {filters.map((filter) => {
             const matchCount = filterMatchCounts?.[filter.id];
             const isEnabled = filter.enabled !== false;
@@ -476,25 +444,6 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
               <div className="flex items-center justify-between text-slate-500">
                 {filter.column !== TAG_COLUMN_ID ? (
                   <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(filter.fuzzy)}
-                        onChange={(event) => {
-                          const nextValue = event.target.checked;
-                          const operatorSupportsFuzzy = filter.operator === 'eq';
-                          if (nextValue && !operatorSupportsFuzzy) {
-                            setFuzzyWarning('Fuzzy search only works with Equals predicates. Switch this filter to "equals" before enabling fuzzy matching.');
-                            return;
-                          }
-                          handleChange(filter.id, {
-                            fuzzy: nextValue,
-                            fuzzyExplicit: true
-                          });
-                        }}
-                      />
-                      Fuzzy
-                    </label>
                     <label className="flex items-center gap-1">
                       <input
                         type="checkbox"

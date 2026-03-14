@@ -23,8 +23,8 @@ export const LargeDatasetWarning = ({
         </p>
         <p className="text-amber-100/80">
           Estimated footprint {formatBytes(estimatedBytes)} exceeds{' '}
-          {formatBytes(thresholdBytes)}. Consider reducing batch size or disabling fuzzy search in
-          Options to stay within the 600&nbsp;MB budget.
+          {formatBytes(thresholdBytes)}. Consider reducing batch size to stay within the
+          600&nbsp;MB budget.
         </p>
       </div>
       <button

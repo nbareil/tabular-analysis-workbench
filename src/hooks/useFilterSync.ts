@@ -4,7 +4,6 @@ import { useDataStore } from '@state/dataStore';
 import { useSessionStore, type FilterState } from '@state/sessionStore';
 import { getDataWorker, type ApplyFilterRequest } from '@workers/dataWorkerProxy';
 import { buildFilterExpression } from '@utils/filterExpression';
-import type { FuzzyMatchInfo } from '@workers/filterEngine';
 import { reportAppError } from '@utils/diagnostics';
 
 export interface UseFilterSyncResult {
@@ -12,60 +11,11 @@ export interface UseFilterSyncResult {
   applyFilters: (nextFilters: FilterState[]) => Promise<void>;
 }
 
-const normaliseFilterValue = (value: unknown): string => {
-  if (typeof value === 'string') {
-    return value.trim();
-  }
-  return String(value ?? '');
-};
-
-const applyAutoFuzzyFlag = (
-  filters: FilterState[],
-  fuzzyUsed: FuzzyMatchInfo | null | undefined
-): { filters: FilterState[]; changed: boolean } => {
-  if (!fuzzyUsed) {
-    return { filters, changed: false };
-  }
-
-  let changed = false;
-  const updated = filters.map((filter) => {
-    if (filter.enabled === false) {
-      return filter;
-    }
-    const matchesFilter =
-      filter.column === fuzzyUsed.column &&
-      filter.operator === fuzzyUsed.operator &&
-      normaliseFilterValue(filter.value) === fuzzyUsed.query;
-
-    if (
-      !matchesFilter ||
-      filter.fuzzy === true ||
-      (filter.fuzzy === false && filter.fuzzyExplicit === true)
-    ) {
-      return filter;
-    }
-
-    changed = true;
-    const nextFilter: FilterState = {
-      ...filter,
-      fuzzy: true,
-      fuzzyExplicit: filter.fuzzyExplicit ?? false,
-      fuzzyDistanceExplicit: false
-    };
-    if (typeof fuzzyUsed.maxDistance === 'number') {
-      nextFilter.fuzzyDistance = fuzzyUsed.maxDistance;
-    }
-    return nextFilter;
-  });
-
-  return changed ? { filters: updated, changed: true } : { filters, changed: false };
-};
-
 export const useFilterSync = (): UseFilterSyncResult => {
   const filters = useSessionStore((state) => state.filters);
   const setFilters = useSessionStore((state) => state.setFilters);
   const setFilterSummary = useDataStore((state) => state.setFilterSummary);
-  const setFuzzyUsed = useDataStore((state) => state.setFuzzyUsed);
+  const setDidYouMean = useDataStore((state) => state.setDidYouMean);
   const clearFilterSummary = useDataStore((state) => state.clearFilterSummary);
   const setMatchedRowCount = useDataStore((state) => state.setMatchedRowCount);
   const bumpViewVersion = useDataStore((state) => state.bumpViewVersion);
@@ -99,7 +49,7 @@ export const useFilterSync = (): UseFilterSyncResult => {
           clearFilterSummary();
           clearSearchResult();
           setMatchedRowCount(response.totalRows);
-          setFuzzyUsed(null);
+          setDidYouMean(null);
           bumpViewVersion();
           return;
         }
@@ -115,24 +65,15 @@ export const useFilterSync = (): UseFilterSyncResult => {
           return;
         }
 
-        const { filters: maybeUpdated, changed } = applyAutoFuzzyFlag(
-          filtersToApply,
-          response.fuzzyUsed
-        );
-        if (changed) {
-          filtersToApply = maybeUpdated;
-          setFilters(maybeUpdated);
-        }
-
         setFilterSummary({
           matchedRows: response.matchedRows,
           totalRows: response.totalRows,
-          fuzzyUsed: response.fuzzyUsed,
+          didYouMean: response.didYouMean,
           filterMatchCounts: response.predicateMatchCounts ?? undefined
         });
         clearSearchResult();
         setMatchedRowCount(response.matchedRows);
-        setFuzzyUsed(response.fuzzyUsed ?? null);
+        setDidYouMean(response.didYouMean ?? null);
         bumpViewVersion();
       } catch (error) {
         console.error('Failed to apply filter', error);
@@ -143,7 +84,7 @@ export const useFilterSync = (): UseFilterSyncResult => {
         });
       }
     },
-    [setFilters, clearFilterSummary, clearSearchResult, setFilterSummary, setMatchedRowCount, setFuzzyUsed, bumpViewVersion]
+    [setFilters, clearFilterSummary, clearSearchResult, setFilterSummary, setMatchedRowCount, setDidYouMean, bumpViewVersion]
   );
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import type { ColumnInference, ColumnType, GroupingResult, RowBatch } from '@workers/types';
-import type { FuzzyMatchInfo } from '@workers/filterEngine';
+import type { DidYouMeanInfo } from '@workers/filterEngine';
 import { logDebug } from '@utils/debugLog';
 import { formatBytes } from '@utils/formatBytes';
 
@@ -38,7 +38,7 @@ export interface DataState {
   filterMatchedRows: number | null;
   filterPredicateMatchCounts: Record<string, number> | null;
   searchMatchedRows: number | null;
-  fuzzyUsed: FuzzyMatchInfo | null;
+  didYouMean: DidYouMeanInfo | null;
   viewVersion: number;
   grouping: {
     status: LoaderStatus;
@@ -63,12 +63,12 @@ export interface DataState {
   setFilterSummary: (payload: {
     matchedRows: number;
     totalRows: number;
-    fuzzyUsed?: FuzzyMatchInfo;
+    didYouMean?: DidYouMeanInfo;
     filterMatchCounts?: Record<string, number>;
   }) => void;
   clearFilterSummary: () => void;
   setMatchedRowCount: (value: number | null) => void;
-  setFuzzyUsed: (fuzzyUsed: FuzzyMatchInfo | null) => void;
+  setDidYouMean: (didYouMean: DidYouMeanInfo | null) => void;
   bumpViewVersion: () => void;
   setSearchResult: (payload: { totalRows: number; matchedRows: number }) => void;
   clearSearchResult: () => void;
@@ -132,7 +132,7 @@ export const useDataStore = create<DataState>((set) => ({
   filterMatchedRows: null,
   filterPredicateMatchCounts: null,
   searchMatchedRows: null,
-  fuzzyUsed: null,
+  didYouMean: null,
   viewVersion: 0,
   grouping: initialGroupingState(),
   startLoading: (fileName) =>
@@ -149,7 +149,7 @@ export const useDataStore = create<DataState>((set) => ({
       filterMatchedRows: null,
       filterPredicateMatchCounts: null,
       searchMatchedRows: null,
-      fuzzyUsed: null,
+      didYouMean: null,
       viewVersion: state.viewVersion + 1,
       grouping: initialGroupingState()
     })),
@@ -281,18 +281,18 @@ export const useDataStore = create<DataState>((set) => ({
       errorDetails: null,
       status: state.status === 'error' ? 'idle' : state.status
     })),
-  setFilterSummary: ({ matchedRows, totalRows, fuzzyUsed, filterMatchCounts }) =>
+  setFilterSummary: ({ matchedRows, totalRows, didYouMean, filterMatchCounts }) =>
     set(() => ({
       filterMatchedRows: matchedRows,
       matchedRows,
       totalRows,
-      fuzzyUsed: fuzzyUsed ?? null,
+      didYouMean: didYouMean ?? null,
       filterPredicateMatchCounts: filterMatchCounts ?? null
   })),
   clearFilterSummary: () =>
     set((state) => ({
       filterMatchedRows: null,
-      fuzzyUsed: null,
+      didYouMean: null,
       matchedRows: state.searchMatchedRows ?? state.totalRows,
       filterPredicateMatchCounts: null
   })),
@@ -300,9 +300,9 @@ export const useDataStore = create<DataState>((set) => ({
     set(() => ({
       matchedRows: value
     })),
-  setFuzzyUsed: (fuzzyUsed) =>
+  setDidYouMean: (didYouMean) =>
     set(() => ({
-      fuzzyUsed
+      didYouMean
     })),
   bumpViewVersion: () =>
     set((state) => ({
@@ -372,7 +372,7 @@ export const useDataStore = create<DataState>((set) => ({
       matchedRows: null,
       filterMatchedRows: null,
       searchMatchedRows: null,
-      fuzzyUsed: null,
+      didYouMean: null,
       filterPredicateMatchCounts: null,
       viewVersion: state.viewVersion + 1,
       grouping: initialGroupingState()

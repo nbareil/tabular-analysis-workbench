@@ -4,10 +4,8 @@ type ThemeMode = 'dark' | 'light';
 
 interface AppState {
   theme: ThemeMode;
-  fuzzyEnabled: boolean;
   setTheme: (theme: ThemeMode) => void;
   toggleTheme: () => void;
-  setFuzzyEnabled: (enabled: boolean) => void;
 }
 
 const THEME_STORAGE_KEY = 'wlx:theme';
@@ -29,7 +27,6 @@ const readInitialTheme = (): ThemeMode => {
 
 export const useAppStore = create<AppState>((set) => ({
   theme: readInitialTheme(),
-  fuzzyEnabled: true,
   setTheme: (theme) => {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -47,6 +44,5 @@ export const useAppStore = create<AppState>((set) => ({
 
       return { theme: nextTheme };
     });
-  },
-  setFuzzyEnabled: (enabled) => set({ fuzzyEnabled: enabled })
+  }
 }));

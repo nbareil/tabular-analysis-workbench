@@ -32,7 +32,7 @@ describe('evaluateFilterMenuMetadata', () => {
     expect(metadata.neqExists).toBe(false);
   });
 
-  it('treats equality with fuzzy flag as not matching so it can be updated', () => {
+  it('treats equality with the same exact value as matching even if legacy fuzzy flags are present', () => {
     const filters: FilterState[] = [
       {
         id: 'eq-1',
@@ -46,7 +46,7 @@ describe('evaluateFilterMenuMetadata', () => {
     const metadata = evaluateFilterMenuMetadata(filters, 'name', 'Alice');
 
     expect(metadata.eqIndex).toBe(0);
-    expect(metadata.eqMatchesValue).toBe(false);
+    expect(metadata.eqMatchesValue).toBe(true);
   });
 
   it('detects existing inequality predicate for the same value', () => {

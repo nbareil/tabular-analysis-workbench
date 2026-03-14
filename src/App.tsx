@@ -8,7 +8,7 @@ import { useSessionStore, getSessionSnapshot } from '@state/sessionStore';
 import { useTagStore } from '@state/tagStore';
 import DataGrid from '@components/DataGrid';
 import FilterBuilder, { buildNewFilter } from '@components/filter/FilterBuilder';
-import { FuzzyBanner } from '@components/FuzzyBanner';
+import { DidYouMeanBanner } from '@components/DidYouMeanBanner';
 import PivotView from '@components/PivotView';
 import ColumnsPanel from '@components/ColumnsPanel';
 import LabelsPanel from '@components/LabelsPanel';
@@ -911,7 +911,7 @@ const AppShell = ({
         </aside>
         <section className="flex flex-1 flex-col">
           <div className="flex-1 overflow-auto p-4">
-          <FuzzyBanner />
+          <DidYouMeanBanner />
           <div className="h-full rounded border border-slate-800">
           {showPivot ? (
             <PivotView />

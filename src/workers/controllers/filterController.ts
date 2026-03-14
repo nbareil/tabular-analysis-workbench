@@ -76,7 +76,7 @@ export const createFilterController = ({
       }
 
       const matchedRowIds: number[] = [];
-      let fuzzyUsed: ApplyFilterResult['fuzzyUsed'];
+      let didYouMean: ApplyFilterResult['didYouMean'];
       const predicateMatchCounts: Record<string, number> = {};
 
       for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
@@ -102,8 +102,8 @@ export const createFilterController = ({
           }
         }
 
-        if (result.fuzzyUsed && !fuzzyUsed) {
-          fuzzyUsed = result.fuzzyUsed;
+        if (result.didYouMean && !didYouMean) {
+          didYouMean = result.didYouMean;
         }
       }
 
@@ -117,7 +117,7 @@ export const createFilterController = ({
         totalRows,
         matchedRows: matchedRowIds.length,
         expression,
-        fuzzyUsed,
+        didYouMean,
         predicateMatchCounts
       };
     } finally {

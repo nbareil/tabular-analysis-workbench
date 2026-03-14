@@ -60,7 +60,7 @@ describe('useFilterSync', () => {
       matchedRows: 75,
       totalRows: 100,
       predicateMatchCounts: null,
-      fuzzyUsed: null
+      didYouMean: null
     });
     resetStores();
   });
@@ -181,7 +181,7 @@ describe('useFilterSync', () => {
         matchedRows: 200,
         totalRows: 500,
         predicateMatchCounts: null,
-        fuzzyUsed: null
+        didYouMean: null
       });
       await secondPromise!;
     });
@@ -192,7 +192,7 @@ describe('useFilterSync', () => {
         matchedRows: 5,
         totalRows: 500,
         predicateMatchCounts: null,
-        fuzzyUsed: null
+        didYouMean: null
       });
       await firstPromise!;
     });

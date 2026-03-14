@@ -1,20 +1,19 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, it, beforeEach, afterEach, vi } from 'vitest';
 
-import { FuzzyBanner } from './FuzzyBanner';
+import { DidYouMeanBanner } from './DidYouMeanBanner';
 import { useDataStore } from '@state/dataStore';
 import type { FilterState } from '@state/sessionStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
-import type { FuzzyMatchInfo } from '@workers/filterEngine';
+import type { DidYouMeanInfo } from '@workers/filterEngine';
 
 vi.mock('@/hooks/useFilterSync');
 
-const baseFuzzyUsed: FuzzyMatchInfo = {
+const baseDidYouMean: DidYouMeanInfo = {
   column: 'message',
   operator: 'eq',
   query: 'login sucess',
-  suggestions: ['login success'],
-  maxDistance: 2
+  suggestions: ['login success', 'log success']
 };
 
 const createFilter = (overrides: Partial<FilterState> = {}): FilterState => ({
@@ -22,13 +21,11 @@ const createFilter = (overrides: Partial<FilterState> = {}): FilterState => ({
   column: 'message',
   operator: 'eq',
   value: 'login sucess',
-  fuzzy: true,
-  fuzzyExplicit: false,
   enabled: true,
   ...overrides
 });
 
-describe('FuzzyBanner', () => {
+describe('DidYouMeanBanner', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useDataStore.setState((state) => ({
@@ -42,7 +39,7 @@ describe('FuzzyBanner', () => {
           examples: []
         }
       ],
-      fuzzyUsed: { ...baseFuzzyUsed }
+      didYouMean: { ...baseDidYouMean }
     }));
   });
 
@@ -51,51 +48,47 @@ describe('FuzzyBanner', () => {
     useDataStore.setState((state) => ({
       ...state,
       columns: [],
-      fuzzyUsed: null
+      didYouMean: null
     }));
   });
 
-  it('dispatches filter updates when selecting a different distance chip', async () => {
+  it('applies a clicked suggestion as the new exact filter value', async () => {
     const applyFilters = vi.fn().mockResolvedValue(undefined);
-    const filters = [createFilter({ fuzzy: false })];
+    const filters = [createFilter()];
 
     vi.mocked(useFilterSync).mockReturnValue({
       filters,
       applyFilters
     });
 
-    render(<FuzzyBanner />);
+    render(<DidYouMeanBanner />);
 
-    const distanceButton = screen.getByRole('button', { name: '≤ 3' });
-    fireEvent.click(distanceButton);
+    fireEvent.click(screen.getByRole('button', { name: 'login success' }));
 
     await waitFor(() => expect(applyFilters).toHaveBeenCalledTimes(1));
     const [nextFilters] = applyFilters.mock.calls[0]!;
     expect(nextFilters).toHaveLength(1);
     expect(nextFilters[0]).toMatchObject({
-      fuzzy: true,
-      fuzzyExplicit: true,
-      fuzzyDistance: 3,
-      fuzzyDistanceExplicit: true
+      value: 'login success',
+      enabled: true
     });
   });
 
-  it('handles Alt+~ keyboard toggle to exit fuzzy mode', async () => {
-    const applyFilters = vi.fn().mockResolvedValue(undefined);
+  it('does not render without any suggestions', () => {
     vi.mocked(useFilterSync).mockReturnValue({
-      filters: [createFilter({ fuzzy: true })],
-      applyFilters
+      filters: [createFilter()],
+      applyFilters: vi.fn().mockResolvedValue(undefined)
     });
+    useDataStore.setState((state) => ({
+      ...state,
+      didYouMean: {
+        ...baseDidYouMean,
+        suggestions: []
+      }
+    }));
 
-    render(<FuzzyBanner />);
+    render(<DidYouMeanBanner />);
 
-    fireEvent.keyDown(window, { altKey: true, code: 'Backquote' });
-
-    await waitFor(() => expect(applyFilters).toHaveBeenCalledTimes(1));
-    const [nextFilters] = applyFilters.mock.calls[0]!;
-    expect(nextFilters[0]).toMatchObject({
-      fuzzy: false,
-      fuzzyExplicit: true
-    });
+    expect(screen.queryByText(/did you mean/i)).toBeNull();
   });
 });

@@ -19,7 +19,7 @@ import type {
 } from './types';
 import type { RowIndexData } from './rowIndexStore';
 import type { FuzzyColumnSnapshot, FuzzyIndexSnapshot } from './fuzzyIndexStore';
-import type { FuzzyMatchInfo } from './filterEngine';
+import type { DidYouMeanInfo } from './filterEngine';
 
 export interface WorkerInitOptions {
   enableDuckDb?: boolean;
@@ -119,7 +119,7 @@ export interface ApplyFilterResult {
   totalRows: number;
   matchedRows: number;
   expression: FilterNode | null;
-  fuzzyUsed?: FuzzyMatchInfo;
+  didYouMean?: DidYouMeanInfo;
   predicateMatchCounts?: Record<string, number>;
 }
 

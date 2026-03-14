@@ -421,7 +421,7 @@ describe('filterEngine', () => {
     expect(Array.from(notLabel.matches)).toEqual([0, 1, 1]);
   });
 
-  it('applies fuzzy fallback when equality has no matches and fuzzy is not explicitly disabled', () => {
+  it('returns did-you-mean suggestions when equality has no exact matches', () => {
     const batch = buildRowBatch(
       {
         message: stringColumn(['login success', 'payment complete'])
@@ -440,13 +440,14 @@ describe('filterEngine', () => {
       { fuzzyIndex }
     );
 
-    expect(Array.from(result.matches)).toEqual([1, 0]);
-    expect(result.fuzzyUsed).toBeDefined();
-    expect(result.fuzzyUsed?.column).toBe('message');
-    expect(result.fuzzyUsed?.query).toBe('login sucess');
+    expect(Array.from(result.matches)).toEqual([0, 0]);
+    expect(result.didYouMean).toBeDefined();
+    expect(result.didYouMean?.column).toBe('message');
+    expect(result.didYouMean?.query).toBe('login sucess');
+    expect(result.didYouMean?.suggestions).toContain('login success');
   });
 
-  it('honours explicit fuzzy distance overrides', () => {
+  it('does not change result sets when legacy fuzzy flags are still present', () => {
     const batch = buildRowBatch(
       {
         message: stringColumn(['kitten'])
@@ -460,30 +461,31 @@ describe('filterEngine', () => {
       {
         column: 'message',
         operator: 'eq',
-        value: 'sitting'
+        value: 'kittne'
       },
       { fuzzyIndex }
     );
 
     expect(Array.from(defaultResult.matches)).toEqual([0]);
-    expect(defaultResult.fuzzyUsed?.maxDistance).toBe(2);
+    expect(defaultResult.didYouMean?.suggestions).toContain('kitten');
 
-    const overrideResult = evaluateFilter(
+    const legacyFuzzyResult = evaluateFilter(
       batch,
       {
         column: 'message',
         operator: 'eq',
-        value: 'sitting',
+        value: 'kittne',
         fuzzy: true,
         fuzzyDistance: 3
       },
       { fuzzyIndex }
     );
 
-    expect(Array.from(overrideResult.matches)).toEqual([1]);
+    expect(Array.from(legacyFuzzyResult.matches)).toEqual([0]);
+    expect(legacyFuzzyResult.didYouMean?.suggestions).toContain('kitten');
   });
 
-  it('skips fuzzy fallback when predicate explicitly opts out', () => {
+  it('does not emit suggestions when an exact equality match exists', () => {
     const batch = buildRowBatch(
       {
         message: stringColumn(['login success'])
@@ -497,17 +499,16 @@ describe('filterEngine', () => {
       {
         column: 'message',
         operator: 'eq',
-        value: 'login sucess',
-        fuzzy: false
+        value: 'login success'
       },
       { fuzzyIndex }
     );
 
-    expect(Array.from(result.matches)).toEqual([0]);
-    expect(result.fuzzyUsed).toBeUndefined();
+    expect(Array.from(result.matches)).toEqual([1]);
+    expect(result.didYouMean).toBeUndefined();
   });
 
-  it('scores fuzzy matches using Damerau-Levenshtein even when suggestions are unavailable', () => {
+  it('does not fuzzy-match row values when suggestions are unavailable', () => {
     const batch = buildRowBatch(
       {
         message: stringColumn(['logni sucess'])
@@ -534,10 +535,11 @@ describe('filterEngine', () => {
       { fuzzyIndex }
     );
 
-    expect(Array.from(result.matches)).toEqual([1]);
+    expect(Array.from(result.matches)).toEqual([0]);
+    expect(result.didYouMean).toBeUndefined();
   });
 
-  it('uses fuzzy scoring to exclude rows for neq predicates', () => {
+  it('does not emit did-you-mean suggestions for neq predicates', () => {
     const batch = buildRowBatch(
       {
         message: stringColumn(['login success', 'payment accepted'])
@@ -556,6 +558,7 @@ describe('filterEngine', () => {
       { fuzzyIndex }
     );
 
-    expect(Array.from(result.matches)).toEqual([0, 1]);
+    expect(Array.from(result.matches)).toEqual([1, 1]);
+    expect(result.didYouMean).toBeUndefined();
   });
 });

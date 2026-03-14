@@ -11,20 +11,18 @@ import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from './types';
 import type { FuzzyIndexSnapshot } from './fuzzyIndexStore';
 import { FuzzyIndexBuilder } from './fuzzyIndexBuilder';
 import { normalizeString } from './utils/stringUtils';
-import { damerauLevenshtein } from './utils/levenshtein';
 
-export interface FuzzyMatchInfo {
+export interface DidYouMeanInfo {
   column: string;
   operator: FilterPredicate['operator'];
   query: string;
   suggestions: string[];
-  maxDistance: number;
 }
 
 export interface FilterResult {
   matches: Uint8Array;
   matchedCount: number;
-  fuzzyUsed?: FuzzyMatchInfo;
+  didYouMean?: DidYouMeanInfo;
 }
 
 export interface FilterEvaluationContext {
@@ -59,16 +57,6 @@ const determineMaxDistance = (value: string): number => {
   return 0;
 };
 
-const clampExplicitDistance = (value: unknown): number | null => {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return null;
-  }
-  const rounded = Math.floor(value);
-  if (rounded < 1) {
-    return null;
-  }
-  return Math.min(3, rounded);
-};
 const tokenizeFuzzyQuery = (value: string): string[] => {
   const normalized = value.toLowerCase().normalize('NFC');
   const tokens = normalized
@@ -83,14 +71,84 @@ const tokenizeFuzzyQuery = (value: string): string[] => {
   return normalized ? [normalized] : [];
 };
 
-const tokenizeValueForFuzzy = (value: string): string[] => {
-  const normalized = value.toLowerCase().normalize('NFC');
-  const tokens = normalized
-    .split(/[\s\p{P}]+/u)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
+const buildDidYouMeanSuggestions = ({
+  column,
+  query,
+  fuzzyIndex
+}: {
+  column: string;
+  query: string;
+  fuzzyIndex: FuzzyIndexSnapshot | null | undefined;
+}): string[] => {
+  if (!fuzzyIndex) {
+    return [];
+  }
 
-  return tokens.length > 0 ? tokens : normalized ? [normalized] : [];
+  const columnSnapshot = fuzzyIndex.columns.find((snapshot) => snapshot.key === column);
+  if (!columnSnapshot) {
+    return [];
+  }
+
+  const queryTokens = tokenizeFuzzyQuery(query);
+  if (!queryTokens.length) {
+    return [];
+  }
+
+  const builder = new FuzzyIndexBuilder({
+    trigramSize:
+      typeof fuzzyIndex.trigramSize === 'number' && Number.isFinite(fuzzyIndex.trigramSize)
+        ? fuzzyIndex.trigramSize
+        : 3
+  });
+  const tokenSuggestions = queryTokens.map((token) => {
+    const maxDistance = determineMaxDistance(token);
+    if (maxDistance <= 0) {
+      return [];
+    }
+
+    return builder
+      .searchColumn(columnSnapshot, token, maxDistance, 3)
+      .filter((match) => match.token !== token);
+  });
+
+  const normalizedQuery = normalizeString(query, false);
+  const ranked = new Map<string, number>();
+  const rememberSuggestion = (candidate: string, score: number) => {
+    const normalizedCandidate = normalizeString(candidate, false);
+    if (!normalizedCandidate || normalizedCandidate === normalizedQuery) {
+      return;
+    }
+    const existing = ranked.get(candidate);
+    if (existing == null || score < existing) {
+      ranked.set(candidate, score);
+    }
+  };
+
+  if (queryTokens.length > 1) {
+    const combinedSuggestion = queryTokens.map(
+      (token, index) => tokenSuggestions[index]?.[0]?.token ?? token
+    );
+    if (combinedSuggestion.some((token, index) => token !== queryTokens[index])) {
+      const score = combinedSuggestion.reduce(
+        (total, _token, index) => total + (tokenSuggestions[index]?.[0]?.distance ?? 0),
+        0
+      );
+      rememberSuggestion(combinedSuggestion.join(' '), score);
+    }
+  }
+
+  tokenSuggestions.forEach((matches, index) => {
+    matches.forEach((match, rank) => {
+      const candidateTokens = [...queryTokens];
+      candidateTokens[index] = match.token;
+      rememberSuggestion(candidateTokens.join(' '), match.distance + rank / 10);
+    });
+  });
+
+  return Array.from(ranked.entries())
+    .sort((left, right) => left[1] - right[1] || left[0].localeCompare(right[0]))
+    .slice(0, 5)
+    .map(([candidate]) => candidate);
 };
 
 const parseBooleanValue = (value: unknown): boolean | null => {
@@ -166,7 +224,7 @@ const evaluateTagPredicate = (
   rows: Array<Record<string, unknown>>,
   predicate: FilterPredicate,
   context: FilterEvaluationContext
-): { matches: Uint8Array; fuzzyInfo?: FuzzyMatchInfo } => {
+): { matches: Uint8Array; fuzzyInfo?: DidYouMeanInfo } => {
   const result = new Uint8Array(rows.length);
   const operator = predicate.operator;
 
@@ -209,7 +267,7 @@ const evaluatePredicate = (
   columnTypes: Record<string, ColumnType>,
   predicate: FilterPredicate,
   context: FilterEvaluationContext
-): { matches: Uint8Array; fuzzyInfo?: FuzzyMatchInfo } => {
+): { matches: Uint8Array; fuzzyInfo?: DidYouMeanInfo } => {
   if (predicate.column === TAG_COLUMN_ID) {
     return evaluateTagPredicate(rows, predicate, context);
   }
@@ -226,8 +284,6 @@ const evaluatePredicate = (
       const valuesNormalised = values.map((value) =>
         normalizeString(String(value ?? ''), predicate.caseSensitive ?? false)
       );
-      const explicitDistance = clampExplicitDistance(predicate.fuzzyDistance);
-
       if (predicate.operator === 'eq' || predicate.operator === 'neq') {
         let hasExactMatches = false;
         for (let index = 0; index < rowCount; index += 1) {
@@ -236,125 +292,26 @@ const evaluatePredicate = (
           result[index] = predicate.operator === 'eq' ? (exactMatch ? 1 : 0) : exactMatch ? 0 : 1;
         }
 
-        // Determine whether fuzzy fallback should run.
-        const trimmedQuery = targetValue.trim();
-        const queryTokens = tokenizeFuzzyQuery(trimmedQuery);
-        const tokenConfigs = queryTokens.map((token) => ({
-          token,
-          distance: explicitDistance ?? determineMaxDistance(token)
-        }));
-        const maxTokenDistance = tokenConfigs.reduce(
-          (acc, config) => Math.max(acc, config.distance),
-          0
-        );
-        const forceFuzzy = predicate.fuzzy === true;
-        const allowAutoFuzzy =
-          predicate.fuzzy !== false && !hasExactMatches && maxTokenDistance > 0;
-        const infoMaxDistance =
-          explicitDistance ?? (forceFuzzy ? Math.max(maxTokenDistance, 1) : maxTokenDistance);
-        const fuzzyIndex = context.fuzzyIndex;
-        let fuzzyInfo: FuzzyMatchInfo | undefined;
-
-        if (fuzzyIndex && (allowAutoFuzzy || (forceFuzzy && tokenConfigs.length > 0))) {
-          const columnSnapshot = fuzzyIndex.columns.find((col) => col.key === predicate.column);
-          if (columnSnapshot) {
-            const builder = new FuzzyIndexBuilder({
-              trigramSize:
-                typeof fuzzyIndex.trigramSize === 'number' &&
-                Number.isFinite(fuzzyIndex.trigramSize)
-                  ? fuzzyIndex.trigramSize
-                  : 3
-            });
-            const matchesByToken = new Map<
-              string,
-              { token: string; distance: number; frequency: number }
-            >();
-
-            for (const config of tokenConfigs) {
-              const effectiveDistance =
-                forceFuzzy && config.distance === 0 ? 1 : config.distance;
-              if (effectiveDistance <= 0) {
-                continue;
-              }
-
-              const tokenMatches = builder.searchColumn(
-                columnSnapshot,
-                config.token,
-                effectiveDistance,
-                5
-              );
-
-              for (const match of tokenMatches) {
-                const existing = matchesByToken.get(match.token);
-                if (!existing || match.distance < existing.distance) {
-                  matchesByToken.set(match.token, match);
-                }
-              }
-            }
-
-            const fuzzyMatches = Array.from(matchesByToken.values()).sort((a, b) => {
-              if (a.distance !== b.distance) {
-                return a.distance - b.distance;
-              }
-              return b.frequency - a.frequency;
-            });
-
-            if (allowAutoFuzzy) {
-              fuzzyInfo = {
+        if (!hasExactMatches && predicate.operator === 'eq') {
+          const suggestions = buildDidYouMeanSuggestions({
+            column: predicate.column,
+            query: targetValue.trim(),
+            fuzzyIndex: context.fuzzyIndex
+          });
+          if (suggestions.length > 0) {
+            return {
+              matches: result,
+              fuzzyInfo: {
                 column: predicate.column,
                 operator: predicate.operator,
-                query: trimmedQuery,
-                suggestions: fuzzyMatches.slice(0, 5).map((match) => match.token),
-                maxDistance: infoMaxDistance
-              };
-            }
-
-            if (tokenConfigs.length > 0) {
-              const rowTokenCache: Array<string[] | null> = new Array(rowCount).fill(null);
-              const resolveRowTokens = (index: number): string[] => {
-                const cached = rowTokenCache[index];
-                if (cached) {
-                  return cached;
-                }
-                const tokens = tokenizeValueForFuzzy(valuesNormalised[index]);
-                rowTokenCache[index] = tokens;
-                return tokens;
-              };
-
-              for (let index = 0; index < rowCount; index += 1) {
-                const rowTokens = resolveRowTokens(index);
-                if (!rowTokens.length) {
-                  continue;
-                }
-
-                const matchesFuzzy = tokenConfigs.some((config) => {
-                  const distanceLimit =
-                    forceFuzzy && config.distance === 0 ? 1 : config.distance;
-                  if (distanceLimit <= 0) {
-                    return rowTokens.some((token) => token.includes(config.token));
-                  }
-
-                  return rowTokens.some(
-                    (token) =>
-                      damerauLevenshtein(token, config.token, distanceLimit) <= distanceLimit
-                  );
-                });
-
-                if (!matchesFuzzy) {
-                  continue;
-                }
-
-                if (predicate.operator === 'eq') {
-                  result[index] = 1;
-                } else {
-                  result[index] = 0;
-                }
+                query: targetValue.trim(),
+                suggestions
               }
-            }
+            };
           }
         }
 
-        return { matches: result, fuzzyInfo };
+        return { matches: result };
       }
 
       if (predicate.operator === 'contains') {
@@ -542,7 +499,7 @@ const evaluateNode = (
   node: FilterNode,
   context: FilterEvaluationContext,
   options?: FilterEvaluationOptions
-): { matches: Uint8Array; fuzzyInfo?: FuzzyMatchInfo } => {
+): { matches: Uint8Array; fuzzyInfo?: DidYouMeanInfo } => {
   if (isExpression(node)) {
     if (!node.predicates.length) {
       return { matches: new Uint8Array(rows.length).fill(1) };
@@ -554,7 +511,7 @@ const evaluateNode = (
       const next = evaluateNode(rows, columnTypes, node.predicates[index]!, context, options);
       accumulator = {
         matches: combineMasks(accumulator.matches, next.matches, node.op),
-        fuzzyInfo: accumulator.fuzzyInfo || next.fuzzyInfo // take first fuzzyInfo
+        fuzzyInfo: accumulator.fuzzyInfo || next.fuzzyInfo
       };
     }
 
@@ -585,7 +542,7 @@ const evaluateFilterInternal = (
   const result = evaluateNode(rows, columnTypes, expression, context, options);
   const matchedCount = countMatches(result.matches);
 
-  return { matches: result.matches, matchedCount, fuzzyUsed: result.fuzzyInfo };
+  return { matches: result.matches, matchedCount, didYouMean: result.fuzzyInfo };
 };
 
 export const evaluateFilterOnRows = (
