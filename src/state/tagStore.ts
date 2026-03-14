@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createWithEqualityFn } from 'zustand/traditional';
 
 import type {
   LabelDefinition,
@@ -38,7 +38,7 @@ interface TagState {
 
 const generateId = (): string => crypto.randomUUID();
 
-export const useTagStore = create<TagState>((set, get) => ({
+export const useTagStore = createWithEqualityFn<TagState>()((set, get) => ({
   labels: [],
   tags: {},
   status: 'idle',

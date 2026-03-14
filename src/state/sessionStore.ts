@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createWithEqualityFn } from 'zustand/traditional';
 
 import { DATA_DEFAULT_FONT_ID, DEFAULT_FONT_ID, DEFAULT_FONT_SIZE } from '@constants/fonts';
 import type { ColumnInference, GroupAggregationDefinition, LabelDefinition, TagRecord } from '@workers/types';
@@ -84,7 +84,7 @@ const initialState: SessionSnapshot = {
   updatedAt: Date.now()
 };
 
-export const useSessionStore = create<SessionStore>((set) => ({
+export const useSessionStore = createWithEqualityFn<SessionStore>()((set) => ({
   ...initialState,
   setFileHandle: (fileHandle) => set(() => ({ fileHandle, updatedAt: Date.now() })),
   setFilters: (filters) => set(() => ({ filters, updatedAt: Date.now() })),

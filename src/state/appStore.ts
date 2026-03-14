@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createWithEqualityFn } from 'zustand/traditional';
 
 type ThemeMode = 'dark' | 'light';
 
@@ -25,7 +25,7 @@ const readInitialTheme = (): ThemeMode => {
   return prefersDark ? 'dark' : 'light';
 };
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = createWithEqualityFn<AppState>()((set) => ({
   theme: readInitialTheme(),
   setTheme: (theme) => {
     if (typeof window !== 'undefined') {

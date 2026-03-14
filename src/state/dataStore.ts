@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+import { createWithEqualityFn } from 'zustand/traditional';
 
 import type { ColumnInference, ColumnType, GroupingResult, RowBatch } from '@workers/types';
 import type { DidYouMeanInfo } from '@workers/didYouMean';
@@ -119,7 +119,7 @@ const initialGroupingState = (): DataState['grouping'] => ({
   error: null
 });
 
-export const useDataStore = create<DataState>((set) => ({
+export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
   fileName: null,
   columns: [],
   columnInference: {},
