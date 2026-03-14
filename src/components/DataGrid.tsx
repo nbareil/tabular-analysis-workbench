@@ -374,22 +374,32 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   }, [columnLayout.order, columns]);
 
   useEffect(() => {
-    if (!columnApi) {
+    if (!columnApi && !gridApi) {
       return;
     }
 
-    columnApi.applyColumnState({
-      state: orderedColumns.map((column, index) => ({
-        colId: column.key,
-        hide: columnLayout.visibility[column.key] === false,
-        order: index,
-        ...(autoColumnWidths[column.key] != null
-          ? { width: Math.round(autoColumnWidths[column.key]!) }
-          : {})
-      })),
+    const state = orderedColumns.map((column, index) => ({
+      colId: column.key,
+      hide: columnLayout.visibility[column.key] === false,
+      order: index,
+      ...(autoColumnWidths[column.key] != null
+        ? { width: Math.round(autoColumnWidths[column.key]!) }
+        : {})
+    }));
+
+    if (gridApi && typeof gridApi.applyColumnState === 'function') {
+      gridApi.applyColumnState({
+        state,
+        applyOrder: true
+      });
+      return;
+    }
+
+    columnApi?.applyColumnState({
+      state,
       applyOrder: true
     });
-  }, [autoColumnWidths, columnApi, orderedColumns, columnLayout.visibility]);
+  }, [autoColumnWidths, columnApi, gridApi, orderedColumns, columnLayout.visibility]);
 
   const mapColumnTypeToAgDataType = useMemo(() => {
     const mapping: Record<GridColumn['type'], 'text' | 'number' | 'boolean' | 'dateString'> = {
@@ -454,10 +464,8 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       headerTooltip: 'Row labels',
       pinned: 'left',
       lockPosition: true,
-      headerCheckboxSelection: true,
-      headerCheckboxSelectionFilteredOnly: true,
       checkboxSelection: true,
-      suppressMenu: true,
+      suppressHeaderMenuButton: true,
       sortable: false,
       resizable: false,
       suppressSizeToFit: true,
