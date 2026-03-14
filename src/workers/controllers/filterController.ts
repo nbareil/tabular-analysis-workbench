@@ -27,7 +27,10 @@ export const createFilterController = ({
     state.updateDataset((dataset) => {
       dataset.filterExpression = null;
       dataset.filterRowIds = null;
+      dataset.searchRowIds = null;
       dataset.sortedRowIds = null;
+      dataset.backgroundSortPromise = null;
+      dataset.sortComplete = true;
     });
   };
 
@@ -41,7 +44,10 @@ export const createFilterController = ({
       state.updateDataset((dataset) => {
         dataset.filterExpression = expression;
         dataset.filterRowIds = null;
+        dataset.searchRowIds = null;
         dataset.sortedRowIds = null;
+        dataset.backgroundSortPromise = null;
+        dataset.sortComplete = true;
       });
 
       const totalRows = state.dataset.totalRows;

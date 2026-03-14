@@ -219,7 +219,6 @@ interface DataGridProps {
 
 const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const columns = useDataStore((state) => state.columns);
-  const searchRows = useDataStore((state) => state.searchRows);
   const matchedRows = useDataStore((state) => state.matchedRows);
   const viewVersion = useDataStore((state) => state.viewVersion);
   const totalRows = useDataStore((state) => state.totalRows);
@@ -443,21 +442,8 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
           if (import.meta.env.DEV) {
             logDebug('grid', 'getRows request', {
               startRow: params.startRow,
-              endRow: params.endRow,
-              usingSearchRows: Boolean(searchRows)
+              endRow: params.endRow
             });
-          }
-
-          if (searchRows) {
-            const slice = searchRows.slice(params.startRow, params.endRow);
-            params.successCallback(slice, searchRows.length);
-            if (import.meta.env.DEV) {
-              logDebug('grid', 'Served search rows', {
-                served: slice.length,
-                totalMatches: searchRows.length
-              });
-            }
-            return;
           }
 
           const worker = getDataWorker();
@@ -492,7 +478,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     } else if (typeof gridApi.setDatasource === 'function') {
       gridApi.setDatasource(datasource);
     }
-  }, [gridApi, searchRows, viewVersion]);
+  }, [gridApi, viewVersion]);
 
   useEffect(() => {
     if (status !== 'ready') {

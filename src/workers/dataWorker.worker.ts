@@ -5,7 +5,6 @@ import { RowIndexStore, findNearestCheckpoint } from './rowIndexStore';
 import { groupMaterializedRows, normaliseGroupColumns } from './groupEngine';
 import { RowBatchStore } from './rowBatchStore';
 import type { GroupingRequest, GroupingResult } from './types';
-import type { SearchRequest } from './searchEngine';
 import { shouldPreferDuckDb, tryGroupWithDuckDb } from './duckDbPlan';
 import {
   FuzzyIndexStore,
@@ -36,6 +35,8 @@ import type {
   FetchRowsRequest,
   FetchRowsResult,
   DataWorkerApi,
+  SearchRequest,
+  ClearSearchRequest,
   GlobalSearchResult,
   TaggingSnapshot,
   TagRowsRequest,
@@ -78,7 +79,9 @@ export const createDataWorkerApi = (): DataWorkerApi => {
   };
 
   const getActiveRowOrder = (): Uint32Array | null => {
-    return state.dataset.sortedRowIds ?? state.dataset.filterRowIds;
+    return (
+      state.dataset.sortedRowIds ?? state.dataset.searchRowIds ?? state.dataset.filterRowIds
+    );
   };
 
   const getActiveRowCount = (): number => {
@@ -153,8 +156,7 @@ export const createDataWorkerApi = (): DataWorkerApi => {
     getActiveRowCount
   });
   const searchController = createSearchController({
-    state,
-    materializeViewWindow
+    state
   });
   const taggingController = createTaggingController(state);
 
@@ -186,6 +188,7 @@ export const createDataWorkerApi = (): DataWorkerApi => {
     },
     async loadFile(request: LoadFileRequest, callbacks: LoadFileCallbacks) {
       filterController.clear();
+      searchController.clear();
       sortController.clear();
       taggingController.clear();
       await ingestionPipeline.run(request, callbacks);
@@ -281,7 +284,16 @@ export const createDataWorkerApi = (): DataWorkerApi => {
       const currentOrder = getActiveRowOrder();
       const collectedRows: MaterializedRow[] = [];
 
-      if (currentOrder && currentOrder.length) {
+      if (currentOrder) {
+        if (!currentOrder.length) {
+          return {
+            groupBy: groupColumns,
+            rows: [],
+            totalGroups: 0,
+            totalRows: 0
+          };
+        }
+
         const idsArray = Array.from(currentOrder);
         const chunkSize = 10_000;
         for (let start = 0; start < idsArray.length; start += chunkSize) {
@@ -324,8 +336,8 @@ export const createDataWorkerApi = (): DataWorkerApi => {
     async globalSearch(request: SearchRequest): Promise<GlobalSearchResult> {
       return searchController.run(request);
     },
-    async fetchRowsByIds(rowIds: number[]): Promise<MaterializedRow[]> {
-      return searchController.fetchRowsByIds(rowIds);
+    async clearSearch(request?: ClearSearchRequest): Promise<void> {
+      searchController.clearSearch(request);
     },
     async loadTags(): Promise<TaggingSnapshot> {
       return taggingController.loadTags();

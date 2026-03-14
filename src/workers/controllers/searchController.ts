@@ -1,140 +1,182 @@
-import { damerauLevenshtein } from '../utils/levenshtein';
 import { normalizeValue } from '../utils/stringUtils';
-import { evaluateFilterOnRows } from '../filterEngine';
 import type { DataWorkerStateController } from '../state/dataWorkerState';
 import type { MaterializedRow } from '../utils/materializeRowBatch';
-import type { SearchRequest } from '../searchEngine';
-import type { GlobalSearchResult } from '../workerApiTypes';
+import type { ClearSearchRequest, SearchRequest, GlobalSearchResult } from '../workerApiTypes';
 
 export interface SearchController {
   init(): void;
   clear(): void;
+  clearSearch(request?: ClearSearchRequest): void;
   run(request: SearchRequest): Promise<GlobalSearchResult>;
-  fetchRowsByIds(rowIds: number[]): Promise<MaterializedRow[]>;
 }
 
 export interface SearchControllerDeps {
   state: DataWorkerStateController;
-  materializeViewWindow: (offset: number, limit?: number) => Promise<MaterializedRow[]>;
 }
 
-export const createSearchController = ({
-  state,
-  materializeViewWindow
-}: SearchControllerDeps): SearchController => {
+const SEARCH_CHUNK_SIZE = 10_000;
+
+const rowMatchesQuery = ({
+  row,
+  columns,
+  needle,
+  caseSensitive
+}: {
+  row: MaterializedRow;
+  columns: string[];
+  needle: string;
+  caseSensitive: boolean;
+}): boolean =>
+  columns.some((column) => normalizeValue(row[column], caseSensitive).includes(needle));
+
+export const createSearchController = ({ state }: SearchControllerDeps): SearchController => {
+  let latestRequestId = 0;
+
   const init = (): void => {
     // No-op hook for future instrumentation
   };
 
+  const clearSearch = (request?: ClearSearchRequest): void => {
+    const requestId =
+      typeof request?.requestId === 'number' && Number.isFinite(request.requestId)
+        ? request.requestId
+        : null;
+    if (requestId != null) {
+      latestRequestId = Math.max(latestRequestId, requestId);
+    }
+
+    state.updateDataset((dataset) => {
+      dataset.searchRowIds = null;
+      dataset.sortedRowIds = null;
+      dataset.backgroundSortPromise = null;
+      dataset.sortComplete = true;
+    });
+  };
+
   const clear = (): void => {
-    // Search does not maintain its own state, but lifecycle parity helps future refactors
+    clearSearch();
   };
 
   const run = async (request: SearchRequest): Promise<GlobalSearchResult> => {
     const batchStore = state.dataset.batchStore;
     if (!batchStore) {
       return {
-        rows: [],
         totalRows: 0,
         matchedRows: 0
       };
     }
 
-    const totalRows = state.dataset.totalRows;
-    if (!totalRows) {
-      return {
-        rows: [],
-        totalRows: 0,
-        matchedRows: 0
-      };
-    }
-
-    const limit = typeof request.limit === 'number' ? Math.max(1, request.limit) : 500;
-    const caseSensitive = Boolean(request.caseSensitive);
-    const trimmed = request.query.trim();
-    const columns =
+    const searchableColumns =
       request.columns.length > 0
         ? request.columns.filter((column) => state.dataset.columnTypes[column] != null)
         : Object.keys(state.dataset.columnTypes);
+    const caseSensitive = Boolean(request.caseSensitive);
+    const requestId =
+      typeof request.requestId === 'number' && Number.isFinite(request.requestId)
+        ? request.requestId
+        : null;
+    const trimmed = request.query.trim();
+
+    if (requestId != null) {
+      latestRequestId = Math.max(latestRequestId, requestId);
+    }
+
+    const baseRowIds = state.dataset.filterRowIds
+      ? Array.from(state.dataset.filterRowIds)
+      : null;
+    const totalRows = baseRowIds ? baseRowIds.length : state.dataset.totalRows;
 
     if (!trimmed) {
-      const rows = await materializeViewWindow(0, limit);
+      clearSearch();
       return {
-        rows: rows.map((row) => row.__rowId),
         totalRows,
-        matchedRows: rows.length
+        matchedRows: 0
+      };
+    }
+
+    if (totalRows === 0 || searchableColumns.length === 0) {
+      if (requestId == null || requestId === latestRequestId) {
+        state.updateDataset((dataset) => {
+          dataset.searchRowIds = new Uint32Array(0);
+          dataset.sortedRowIds = null;
+          dataset.backgroundSortPromise = null;
+          dataset.sortComplete = true;
+        });
+      }
+      return {
+        totalRows,
+        matchedRows: 0
       };
     }
 
     const needle = caseSensitive ? trimmed : trimmed.toLowerCase();
     const matched: number[] = [];
 
-    for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
-      let filterMatches: Uint8Array | null = null;
-      if (request.filter) {
-        filterMatches = evaluateFilterOnRows(rows, state.dataset.columnTypes, request.filter, {
-          tags: state.tagging.tags,
-          fuzzyIndex: state.dataset.fuzzyIndexSnapshot
-        }).matches;
-      }
+    if (baseRowIds) {
+      for (let start = 0; start < baseRowIds.length; start += SEARCH_CHUNK_SIZE) {
+        const slice = baseRowIds.slice(start, start + SEARCH_CHUNK_SIZE);
+        const rows = await batchStore.materializeRows(slice);
 
-      for (let idx = 0; idx < rows.length; idx += 1) {
-        if (filterMatches && filterMatches[idx] !== 1) {
-          continue;
+        for (let index = 0; index < rows.length; index += 1) {
+          const row = rows[index];
+          const rowId = slice[index];
+          if (!row || rowId == null) {
+            continue;
+          }
+
+          if (
+            rowMatchesQuery({
+              row,
+              columns: searchableColumns,
+              needle,
+              caseSensitive
+            })
+          ) {
+            matched.push(rowId);
+          }
         }
-
-        const row = rows[idx]!;
-        const found = columns.some((column) => {
-          const value = normalizeValue(row[column], caseSensitive);
-          if (value.includes(needle)) {
-            return true;
+      }
+    } else {
+      for await (const { rowStart, rows } of batchStore.iterateMaterializedBatches()) {
+        for (let index = 0; index < rows.length; index += 1) {
+          const row = rows[index];
+          if (!row) {
+            continue;
           }
-          if (needle.length <= 10) {
-            const distance = damerauLevenshtein(value, needle, 2);
-            if (distance <= 2) {
-              return true;
-            }
-          }
-          return false;
-        });
 
-        if (found) {
-          matched.push(rowStart + idx);
-          if (matched.length >= limit) {
-            return {
-              rows: matched,
-              totalRows,
-              matchedRows: matched.length
-            };
+          if (
+            rowMatchesQuery({
+              row,
+              columns: searchableColumns,
+              needle,
+              caseSensitive
+            })
+          ) {
+            matched.push(rowStart + index);
           }
         }
       }
     }
 
+    if (requestId == null || requestId === latestRequestId) {
+      state.updateDataset((dataset) => {
+        dataset.searchRowIds = Uint32Array.from(matched);
+        dataset.sortedRowIds = null;
+        dataset.backgroundSortPromise = null;
+        dataset.sortComplete = true;
+      });
+    }
+
     return {
-      rows: matched,
       totalRows,
       matchedRows: matched.length
     };
   };
 
-  const fetchRowsByIds = async (rowIds: number[]): Promise<MaterializedRow[]> => {
-    if (!state.dataset.batchStore) {
-      return [];
-    }
-    const uniqueIds = Array.from(new Set(rowIds)).sort((a, b) => a - b);
-    const rows = await state.dataset.batchStore.materializeRows(uniqueIds);
-    const idToRow = new Map<number, MaterializedRow>();
-    uniqueIds.forEach((id, index) => {
-      idToRow.set(id, rows[index]!);
-    });
-    return rowIds.map((id) => idToRow.get(id)).filter((row): row is MaterializedRow => row != null);
-  };
-
   return {
     init,
     clear,
-    run,
-    fetchRowsByIds
+    clearSearch,
+    run
   };
 };

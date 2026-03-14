@@ -18,7 +18,6 @@ import type {
   ImportTagsRequest
 } from './types';
 import type { RowIndexData } from './rowIndexStore';
-import type { SearchRequest } from './searchEngine';
 import type { FuzzyColumnSnapshot, FuzzyIndexSnapshot } from './fuzzyIndexStore';
 import type { FuzzyMatchInfo } from './filterEngine';
 
@@ -49,8 +48,18 @@ export interface LoadCompleteSummary {
   };
 }
 
+export interface SearchRequest {
+  requestId?: number;
+  query: string;
+  columns: string[];
+  caseSensitive?: boolean;
+}
+
+export interface ClearSearchRequest {
+  requestId?: number;
+}
+
 export interface GlobalSearchResult {
-  rows: number[];
   totalRows: number;
   matchedRows: number;
 }
@@ -136,7 +145,7 @@ export interface DataWorkerApi {
   fetchRows: (request: FetchRowsRequest) => Promise<FetchRowsResult>;
   groupBy: (request: GroupingRequest) => Promise<GroupingResult>;
   globalSearch: (request: SearchRequest) => Promise<GlobalSearchResult>;
-  fetchRowsByIds: (rowIds: number[]) => Promise<MaterializedRow[]>;
+  clearSearch: (request?: ClearSearchRequest) => Promise<void>;
   loadTags: () => Promise<TaggingSnapshot>;
   tagRows: (request: TagRowsRequest) => Promise<TagRowsResponse>;
   clearTag: (rowIds: number[]) => Promise<TagRowsResponse>;

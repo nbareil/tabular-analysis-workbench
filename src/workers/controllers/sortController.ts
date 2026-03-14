@@ -71,7 +71,9 @@ export const createSortController = ({
       };
     }
 
-    const baseRowIds = state.dataset.filterRowIds
+    const baseRowIds = state.dataset.searchRowIds
+      ? Array.from(state.dataset.searchRowIds)
+      : state.dataset.filterRowIds
       ? Array.from(state.dataset.filterRowIds)
       : Array.from({ length: totalRows }, (_, index) => index);
 

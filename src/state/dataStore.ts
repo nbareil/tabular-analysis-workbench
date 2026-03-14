@@ -24,7 +24,6 @@ export interface DataState {
   fileName: string | null;
   columns: GridColumn[];
   columnInference: Record<string, ColumnInference>;
-  searchRows: GridRow[] | null;
   status: LoaderStatus;
   message: string | null;
   errorDetails: {
@@ -71,7 +70,7 @@ export interface DataState {
   setMatchedRowCount: (value: number | null) => void;
   setFuzzyUsed: (fuzzyUsed: FuzzyMatchInfo | null) => void;
   bumpViewVersion: () => void;
-  setSearchResult: (payload: { rows: GridRow[]; totalRows: number; matchedRows: number }) => void;
+  setSearchResult: (payload: { totalRows: number; matchedRows: number }) => void;
   clearSearchResult: () => void;
   setGroupingLoading: () => void;
   setGroupingResult: (result: GroupingResult) => void;
@@ -124,7 +123,6 @@ export const useDataStore = create<DataState>((set) => ({
   fileName: null,
   columns: [],
   columnInference: {},
-  searchRows: null,
   status: 'idle',
   message: null,
   errorDetails: null,
@@ -142,7 +140,6 @@ export const useDataStore = create<DataState>((set) => ({
       fileName,
       columns: [],
       columnInference: {},
-      searchRows: null,
       status: 'loading',
       message: null,
       errorDetails: null,
@@ -311,9 +308,8 @@ export const useDataStore = create<DataState>((set) => ({
     set((state) => ({
       viewVersion: state.viewVersion + 1
     })),
-  setSearchResult: ({ rows, totalRows, matchedRows }) =>
+  setSearchResult: ({ totalRows, matchedRows }) =>
     set((state) => ({
-      searchRows: rows,
       matchedRows,
       totalRows,
       status: 'ready',
@@ -322,7 +318,6 @@ export const useDataStore = create<DataState>((set) => ({
     })),
   clearSearchResult: () =>
     set((state) => ({
-      searchRows: null,
       matchedRows: state.filterMatchedRows ?? state.totalRows,
       searchMatchedRows: null,
       message:
@@ -369,7 +364,6 @@ export const useDataStore = create<DataState>((set) => ({
       fileName: null,
       columns: [],
       columnInference: {},
-      searchRows: null,
       status: 'idle',
       message: null,
       errorDetails: null,

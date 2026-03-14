@@ -167,4 +167,68 @@ describe('dataWorkerApi integration harness', () => {
     expect(filteredWindow.matchedRows).toBe(2);
     expect(filteredWindow.rows.map((row) => row.name)).toEqual(['Alice', 'Carol']);
   });
+
+  it('pages search results through fetchRows and keeps sorting functional', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle(
+      'name,city\nAlice,Paris\nBob,London\nCarol,Paris\nDave,Lisbon\n'
+    );
+    await worker.loadFile({ handle }, {});
+
+    const searchResult = await worker.globalSearch({
+      query: 'par',
+      columns: ['city'],
+      caseSensitive: false
+    });
+    expect(searchResult).toEqual({
+      totalRows: 4,
+      matchedRows: 2
+    });
+
+    const searchWindow = await worker.fetchRows({ offset: 0, limit: 10 });
+    expect(searchWindow.matchedRows).toBe(2);
+    expect(searchWindow.rows.map((row) => row.name)).toEqual(['Alice', 'Carol']);
+
+    await worker.applySorts({
+      sorts: [{ column: 'name', direction: 'desc' }],
+      offset: 0,
+      limit: 0
+    });
+
+    const sortedSearchWindow = await worker.fetchRows({ offset: 0, limit: 10 });
+    expect(sortedSearchWindow.rows.map((row) => row.name)).toEqual(['Carol', 'Alice']);
+  });
+
+  it('searches within the filtered row set instead of the full dataset', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle(
+      'name,city\nAlice,Paris\nBob,Paris\nCarol,London\nDave,Paris\n'
+    );
+    await worker.loadFile({ handle }, {});
+
+    const expression: FilterNode = {
+      column: 'city',
+      operator: 'eq',
+      value: 'Paris',
+      id: 'city-paris'
+    };
+    await worker.applyFilter({ expression, offset: 0, limit: 10 });
+
+    const searchResult = await worker.globalSearch({
+      query: 'a',
+      columns: ['name'],
+      caseSensitive: false
+    });
+    expect(searchResult).toEqual({
+      totalRows: 3,
+      matchedRows: 2
+    });
+
+    const searchWindow = await worker.fetchRows({ offset: 0, limit: 10 });
+    expect(searchWindow.rows.map((row) => row.name)).toEqual(['Alice', 'Dave']);
+  });
 });

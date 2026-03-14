@@ -35,6 +35,7 @@ export interface DatasetState {
   columnInference: Record<string, ColumnInference>;
   filterRowIds: Uint32Array | null;
   filterExpression: FilterNode | null;
+  searchRowIds: Uint32Array | null;
   sorts: SortDefinition[];
   sortedRowIds: Uint32Array | null;
   totalRows: number;
@@ -83,6 +84,7 @@ const createEmptyDatasetState = (): DatasetState => ({
   columnInference: {},
   filterRowIds: null,
   filterExpression: null,
+  searchRowIds: null,
   sorts: [],
   sortedRowIds: null,
   totalRows: 0,

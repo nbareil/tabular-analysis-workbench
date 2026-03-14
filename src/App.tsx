@@ -19,7 +19,6 @@ import CapabilityGate from '@components/CapabilityGate';
 import CapabilityWarningBanner from '@components/CapabilityWarningBanner';
 import DiagnosticsToast from '@components/DiagnosticsToast';
 import { getDataWorker } from '@workers/dataWorkerProxy';
-import { buildFilterExpression } from '@utils/filterExpression';
 import { logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
 import { summariseLabelFilters } from '@utils/labelFilters';
@@ -34,6 +33,7 @@ import { buildTagExportFilename } from '@utils/tagExport';
 import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
 import { useSessionPersistence } from '@/hooks/useSessionPersistence';
 import { useFilterSync } from '@/hooks/useFilterSync';
+import { useGlobalSearchSync } from '@/hooks/useGlobalSearchSync';
 import { formatBytes } from '@utils/formatBytes';
 import { reportAppError } from '@utils/diagnostics';
 import { useDiagnosticsReporter } from '@/hooks/useDiagnosticsReporter';
@@ -83,13 +83,13 @@ const AppShell = ({
   const interfaceFontSize = useSessionStore((state) => state.interfaceFontSize);
   const dataFontFamily = useSessionStore((state) => state.dataFontFamily);
   const dataFontSize = useSessionStore((state) => state.dataFontSize);
+  const columnLayout = useSessionStore((state) => state.columnLayout);
   const setFileHandle = useSessionStore((state) => state.setFileHandle);
   const initializeColumnLayout = useSessionStore((state) => state.initializeColumnLayout);
   const startLoading = useDataStore((state) => state.startLoading);
   const setHeader = useDataStore((state) => state.setHeader);
   const reportProgress = useDataStore((state) => state.reportProgress);
   const complete = useDataStore((state) => state.complete);
-  const setSearchResult = useDataStore((state) => state.setSearchResult);
   const clearSearchResult = useDataStore((state) => state.clearSearchResult);
   const loaderStatus = useDataStore((state) => state.status);
   const loaderMessage = useDataStore((state) => state.message);
@@ -100,7 +100,6 @@ const AppShell = ({
   const stats = useDataStore((state) => state.stats);
   const columns = useDataStore((state) => state.columns);
   const columnInference = useDataStore((state) => state.columnInference);
-  const columnKeys = useDataStore((state) => state.columns.map((column) => column.key));
   const allColumns = useDataStore((state) => state.columns);
   const groupingState = useDataStore((state) => state.grouping);
   const tagLabels = useTagStore((state) => state.labels);
@@ -312,6 +311,14 @@ const AppShell = ({
     setNoteSaving(false);
   }, [fileHandle]);
 
+  const visibleColumnKeys = useMemo(
+    () =>
+      columns
+        .filter((column) => columnLayout.visibility[column.key] !== false)
+        .map((column) => column.key),
+    [columnLayout.visibility, columns]
+  );
+
   const addFilterFromShortcut = useCallback((): boolean => {
     const newFilter = buildNewFilter({
       columns,
@@ -368,12 +375,16 @@ const AppShell = ({
     };
   }, [addFilterFromShortcut, isSidebarCollapsed, setSidebarCollapsed]);
 
-  const filterExpression = useMemo(() => buildFilterExpression(filters), [filters]);
-
   const labelFilterSummary = useMemo(
     () => summariseLabelFilters(filters, tagLabels),
     [filters, tagLabels]
   );
+
+  useGlobalSearchSync({
+    query: searchTerm,
+    columns: visibleColumnKeys,
+    enabled: workerReady
+  });
 
   const statusText = useMemo(() => {
     if (persistenceRestoring) {
@@ -476,62 +487,6 @@ const AppShell = ({
     [applyTagToRows, noteEditor]
   );
 
-  useEffect(() => {
-    if (!workerReady) {
-      return undefined;
-    }
-
-    const trimmed = searchTerm.trim();
-    const timeout = window.setTimeout(async () => {
-      if (!workerReady) {
-        return;
-      }
-
-      if (!trimmed) {
-        clearSearchResult();
-        return;
-      }
-
-      if (!columns.length) {
-        return;
-      }
-
-      try {
-        const worker = getDataWorker();
-        const response = await worker.globalSearch({
-          query: trimmed,
-          columns: columnKeys,
-          filter: filterExpression,
-          limit: 500,
-          caseSensitive: searchCaseSensitive
-        });
-        const fetchedRows = await worker.fetchRowsByIds(response.rows);
-        setSearchResult({
-          rows: fetchedRows,
-          totalRows: response.totalRows,
-          matchedRows: response.matchedRows
-        });
-      } catch (error) {
-        console.error('Failed to perform global search', error);
-        reportAppError('Failed to perform global search', error, {
-          operation: 'grid.search'
-        });
-      }
-    }, 250);
-
-    return () => {
-      window.clearTimeout(timeout);
-    };
-  }, [
-    searchTerm,
-    workerReady,
-    columns,
-    filterExpression,
-    setSearchResult,
-    clearSearchResult,
-    searchCaseSensitive
-  ]);
-
   const handleOpenFile = useCallback(async () => {
     if (!('showOpenFilePicker' in window)) {
       reportAppError('File System Access API is not supported in this browser.', null, {
@@ -584,11 +539,10 @@ const AppShell = ({
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === 'Escape') {
         setSearchTerm('');
-        clearSearchResult();
         event.preventDefault();
       }
     },
-    [clearSearchResult]
+    []
   );
 
   const handleExportRows = useCallback(

@@ -29,6 +29,7 @@ export type {
   ApplyFilterResult,
   FetchRowsRequest,
   FetchRowsResult,
+  ClearSearchRequest,
   GroupingRequest,
   GroupingResult,
   TaggingSnapshot,
