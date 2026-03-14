@@ -11,7 +11,7 @@
 | Stream large CSV/TSV files (goal section 3 objective 1) | section 7.1, section 7.3 | Streams API, worker batching, byte index |
 | Chromium-only runtime (goal section 3 objective 2) | section 3.1, section 10 | Chromium feature detection, fallbacks |
 | Local-only operation (goal section 3 objective 3) | section 3.1, section 12 | No network dependencies, in-browser persistence |
-| Filtering/sorting/grouping (goal section 3 objective 5) | section 7.4, section 7.5, section 6.2 | Worker-side query engine, optional DuckDB |
+| Filtering/sorting/grouping (goal section 3 objective 5) | section 7.4, section 7.5, section 6.2 | Worker-side query engine |
 | Tagging and annotation (goal section 3 objective 6) | section 7.7, section 8 | OPFS-backed tag map plus UI |
 | Persistent sessions (goal section 3 objective 7) | section 7.6, section 6.4 | OPFS layout, auto-save scheduler |
 | Fuzzy fallback search (goal section 3 objective 8) | section 7.6, section 6.3 | Damerau-Levenshtein worker module |
@@ -27,14 +27,13 @@
 
 ### 3.2 Runtime contexts and threading
 - Main thread: handles UI rendering, user events, session orchestration, and OPFS scheduling.
-- Data worker: long-lived worker implementing parser, indexing, query execution, fuzzy search, and optional DuckDB harness.
+- Data worker: long-lived worker implementing parser, indexing, query execution, fuzzy search, and grouping.
 - Export worker (optional): spawned on demand for large export jobs to prevent UI stalls and reuses parser utilities.
 - Message channels: Each worker communicates via MessageChannel ports managed by Comlink to structure requests and propagate transferable ArrayBuffers.
 
 ### 3.3 External dependencies and polyfills
 - ag-grid-community for virtualized grid and grouping UI.
 - comlink for worker RPC.
-- duckdb-wasm (standalone build) loaded behind a feature toggle.
 - fastest-levenshtein or custom Damerau-Levenshtein implementation for fuzzy search.
 - No third-party network services; all dependencies bundled.
 
@@ -61,7 +60,7 @@
 ## 5. Component Design
 ### 5.1 Application bootstrap
 - Entry point mounts React app after verifying Chromium capabilities (File System Access, Streams, OPFS). Unsupported browsers receive a blocking warning screen.
-- Initializes global stores (useAppStore, useSessionStore) and establishes the long-lived data worker via Comlink, passing feature flags such as gzip support and duckdb availability.
+- Initializes global stores (useAppStore, useSessionStore) and establishes the long-lived data worker via Comlink, passing feature flags such as gzip support.
 
 ### 5.2 UI layer
 - Layout: Top bar (file picker, global search, export, theme), left sidebar (column controls), main grid, bottom status bar.
@@ -78,7 +77,7 @@
 - Structured modules:
   - Parser: orchestrates stream decoding, delimiter detection, row batching, and type inference.
   - RowIndex: maintains byte-offset index, OPFS cache sync, and random-access fetch helpers.
-  - QueryEngine: executes filter, sort, and group operations using typed column vectors and delegates to DuckDB when advanced aggregations are requested.
+  - QueryEngine: executes filter, sort, and group operations using typed column vectors inside the worker.
   - FuzzyEngine: manages per-column token dictionaries, trigram indexes, and Levenshtein scoring fallback.
   - AnnotationStore: in-memory view of tag and note map synchronized with OPFS.
 - Supported commands include loadFile, applyFilter, updateTag, exportRequest, each returning structured responses with success or error metadata.
@@ -87,10 +86,10 @@
 - Session controller in main thread coordinates periodic saves by batching dirty flags from UI and worker. OPFS writes are throttled via requestIdleCallback or timeout fallback at a one-minute cadence.
 - Storage layout is detailed in section 8.
 
-### 5.5 Optional DuckDB module
-- DuckDB-WASM loads lazily when grouping or complex aggregations are first requested or when filters exceed local engine capabilities.
-- Uses duckdb.browser.js AsyncDuckDB variant stored in the DuckDB virtual filesystem; we wrap custom table registration to feed incoming row batches incrementally without duplicating the entire dataset.
-- Fallback: built-in query engine covers comparisons, ranges, boolean logic, and regex via RE2-wasm if profiling shows need; otherwise use native JavaScript regex.
+### 5.5 Query engine boundaries
+- Filtering, sorting, searching, and grouping run inside the native worker engine over the active row-id sets.
+- The implementation favors streamed ingestion plus in-memory row-id transforms rather than loading a secondary SQL engine in the browser.
+- Regex evaluation uses native JavaScript RegExp support unless profiling shows a specific need for a dedicated WASM path.
 
 ### 5.6 Options and preferences panel
 - Accessible from top bar "Options" button; renders headless modal overlay.
@@ -162,11 +161,11 @@
 - Supported predicate operators: equals, not-equals, contains, startsWith, regex, matches, notMatches, numeric ranges, date ranges, boolean.
 - Engine processes typed arrays to avoid repeated parsing; uses optimized comparator functions and optional WASM module if profiling justifies.
 - String comparisons normalise to lowercase unless predicates explicitly opt into case-sensitive evaluation.
-- Sorting leverages TimSort on row id array with comparator referencing typed values; large multi-column sorts can delegate to DuckDB when thresholds hit.
+- Sorting leverages TimSort on row id array with comparator referencing typed values.
 
 ### 7.5 Grouping and aggregations
 - For simple groupings (single column with count, sum, min, max, avg) use worker-managed hash map storing aggregates in typed arrays.
-- For multi-column or high-cardinality grouping, switch to DuckDB plan: load predicate-matched rows into ephemeral DuckDB table and run SQL query; results streamed back to grid pivot component.
+- Grouping runs inside the worker over the active filtered row set, using hash maps to accumulate aggregates before streaming the materialized results back to the pivot component.
 
 ### 7.6 Fuzzy search implementation
 - Build per-column dictionary of unique tokens (lowercased, NFC) limited to 50,000 entries or 32 MB memory, whichever comes first.
@@ -290,7 +289,6 @@ interface AnnotationRecord {
 - Graceful degradation:
   - If Streams API missing, block app (Chromium requirement).
   - If OPFS unavailable, fallback to in-memory session and warn user (reduced functionality).
-  - If DuckDB load fails, continue with built-in query engine only.
 
 ## 12. Security and Privacy Considerations
 - Application runs entirely local; no fetch or XHR except for lazy-loading bundled assets.
@@ -321,7 +319,7 @@ interface AnnotationRecord {
 
 ## 16. Open Issues and Follow-ups
 - Determine optimal row index granularity (10,000 vs 50,000) once benchmarks available, tying back to PRD open question.
-- Decide default execution path for complex filters: evaluate DuckDB versus native engine once dataset characteristics are known.
+- Decide whether repeated filter/search workloads need additional indexing once real-world dataset characteristics are known.
 - Finalize annotation UX (inline versus side panel) after user testing; current plan implements side panel with quick-edit tooltip.
 - Clarify whether filtered view should limit note JSON export (pending product decision; current design exports all annotations with filter metadata flag).
 - Evaluate need for additional worker dedicated to fuzzy search if profiling reveals contention.

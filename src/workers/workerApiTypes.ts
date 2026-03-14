@@ -22,7 +22,6 @@ import type { FuzzyColumnSnapshot, FuzzyIndexSnapshot } from './fuzzyIndexStore'
 import type { DidYouMeanInfo } from './filterEngine';
 
 export interface WorkerInitOptions {
-  enableDuckDb?: boolean;
   chunkSize?: number;
   debugLogging?: boolean;
   slowBatchThresholdMs?: number;

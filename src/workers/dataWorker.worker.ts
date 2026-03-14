@@ -5,7 +5,6 @@ import { RowIndexStore, findNearestCheckpoint } from './rowIndexStore';
 import { groupMaterializedRows, normaliseGroupColumns } from './groupEngine';
 import { RowBatchStore } from './rowBatchStore';
 import type { GroupingRequest, GroupingResult } from './types';
-import { shouldPreferDuckDb, tryGroupWithDuckDb } from './duckDbPlan';
 import {
   FuzzyIndexStore,
   type FuzzyIndexSnapshot,
@@ -171,7 +170,6 @@ export const createDataWorkerApi = (): DataWorkerApi => {
       const threshold = options.slowBatchThresholdMs;
 
       state.setOptions({
-        enableDuckDb: options.enableDuckDb,
         chunkSize: options.chunkSize,
         debugLogging: options.debugLogging,
         slowBatchThresholdMs: threshold
@@ -314,21 +312,6 @@ export const createDataWorkerApi = (): DataWorkerApi => {
           totalGroups: 0,
           totalRows: 0
         };
-      }
-
-      if (
-        state.options.enableDuckDb &&
-        shouldPreferDuckDb(normalisedRequest, state.dataset.columnTypes, collectedRows.length)
-      ) {
-        const duckResult = await tryGroupWithDuckDb(
-          collectedRows,
-          state.dataset.columnTypes,
-          normalisedRequest
-        );
-
-        if (duckResult) {
-          return duckResult;
-        }
       }
 
       return groupMaterializedRows(collectedRows, state.dataset.columnTypes, normalisedRequest);

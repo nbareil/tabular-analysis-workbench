@@ -12,7 +12,6 @@ import type { RowBatchStore } from '../rowBatchStore';
 import { normaliseLabelIds } from '../taggingHelpers';
 
 const DEFAULT_OPTIONS = {
-  enableDuckDb: false,
   chunkSize: 1_048_576,
   debugLogging: false,
   slowBatchThresholdMs: 32
@@ -21,7 +20,6 @@ const DEFAULT_OPTIONS = {
 const TAG_PERSIST_DEBOUNCE_MS = 30_000;
 
 export interface WorkerOptionsState {
-  enableDuckDb: boolean;
   chunkSize: number;
   debugLogging: boolean;
   slowBatchThresholdMs: number;
@@ -124,10 +122,6 @@ class DataWorkerState implements DataWorkerStateController {
 
   setOptions(options: Partial<WorkerOptionsState>): void {
     this._options = {
-      enableDuckDb:
-        typeof options.enableDuckDb === 'boolean'
-          ? options.enableDuckDb
-          : this._options.enableDuckDb,
       chunkSize:
         typeof options.chunkSize === 'number' && Number.isFinite(options.chunkSize)
           ? options.chunkSize

@@ -23,7 +23,7 @@ https://nbareil.github.io/tabular-analysis-workbench/
 | --- | --- |
 | Streaming ingestion | Streams files up to ~2 GB with gzip support, chunked workers, and checkpointed byte offsets for random access. |
 | Filtering & search | Rich filter builder, regex operators, per-cell context menu shortcuts, and a fuzzy fallback path. |
-| Grouping & aggregations | Worker-powered pivoting plus DuckDB-WASM fallback for high-cardinality workloads. |
+| Grouping & aggregations | Worker-powered pivoting and aggregations over the active filtered row set. |
 | Tagging & notes | Color-coded tags, markdown notes, and import/export flows persisted to the Origin Private File System (OPFS). |
 | Session persistence | Auto-saves filters, layouts, and annotation state to OPFS so sessions resume instantly. |
 | UI polish | Column chooser, collapsible filter panel, keyboard shortcuts, accessibility fixes, and global search. |
@@ -52,11 +52,9 @@ https://nbareil.github.io/tabular-analysis-workbench/
 ## Architecture Snapshot
 - **React 18 + Vite** UI with Tailwind theming and AG Grid virtualization.
 - **Workers everywhere:** Comlink-powered data worker handles parsing, query
-  execution, fuzzy search, and DuckDB plans so the UI just receives row batches.
+  execution, search, and grouping so the UI just receives row batches.
 - **Origin Private File System (OPFS):** Persists session metadata, annotation
   maps, and byte-offset checkpoints for fast resume.
-- **DuckDB-WASM optional path:** Provides SQL-like aggregations for heavy
-  grouping and sorting workflows.
 - **Testing stack:** Vitest + Testing Library for unit/component coverage with
   Playwright-based end-to-end tests on the roadmap.
 

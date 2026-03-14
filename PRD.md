@@ -63,7 +63,6 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
   - Batch emission (e.g., 50 000 rows)
   - Byte-offset index every N rows for random paging
 - Designed for **long, narrow** datasets.
-- Optional **DuckDB-WASM** backend for SQL-style filtering/grouping.
 - Type inference (string, number, datetime, boolean).
   - Datetime supports ISO formats, epoch timestamps, and common formats like "Oct 14 2025 01:44:33".
   - Datetime values displayed in ISO 8601 format without milliseconds.
@@ -192,7 +191,6 @@ MessageChannel (postMessage)
 │ - Stream parser (CSV/TSV) │
 │ - Row indexer (byte offsets)│
 │ - Filter/Sort/Fuzzy engine │
-│ - DuckDB-WASM (optional) │
 │ - Tag/Note manager │
 └──────────────┬─────────────┘
 │
@@ -263,7 +261,7 @@ Typography: Inter + JetBrains Mono.
 |-------|---------------|-----|
 | **M1 — Parser Prototype** | Stream parser + virtual grid | 3 weeks |
 | **M2 — Filtering & Sorting** | Worker predicates + UI | 2 weeks |
-| **M3 — Grouping & DuckDB** | Pivot / aggregations | 3 weeks |
+| **M3 — Grouping** | Pivot / aggregations | 3 weeks |
 | **M4 — Tagging & Notes** | UI + JSON export | 2 weeks |
 | **M5 — Fuzzy Search** | N-gram index + DL distance | 3 weeks |
 | **M6 — Persistence & Polish** | OPFS sessions + UX | 2 weeks |
@@ -297,7 +295,7 @@ Typography: Inter + JetBrains Mono.
 | Topic | Question |
 |--------|-----------|
 | Row index granularity | Ideal interval (10k vs 50k)? |
-| Filter execution | Use DuckDB for simple filters or native JS? |
+| Filter execution | Do we need additional indexing or precomputation for repeated filters? |
 | Annotation UX | Inline cell vs side panel editor? |
 | Export | Should filters affect note JSON export? |
 

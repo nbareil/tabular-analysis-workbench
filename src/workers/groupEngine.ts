@@ -302,8 +302,7 @@ export const paginateGroupingRows = (
 
 /**
  * Groups materialized rows by specified columns and computes aggregations.
- * Uses in-memory hash maps for efficient grouping of smaller datasets.
- * For larger or complex groupings, prefer DuckDB fallback.
+ * Uses in-memory hash maps over the materialized worker row set.
  */
 export const groupMaterializedRows = (
   rows: MaterializedRow[],
