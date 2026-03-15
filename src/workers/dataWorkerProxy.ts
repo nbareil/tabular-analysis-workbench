@@ -29,6 +29,8 @@ export type {
   ApplyFilterResult,
   FetchRowsRequest,
   FetchRowsResult,
+  EventTimelineRequest,
+  EventTimelineResult,
   ClearSearchRequest,
   GroupingRequest,
   GroupingResult,
@@ -41,5 +43,7 @@ export type {
   ImportTagsRequest,
   LabelDefinition,
   LoadCompleteSummary,
-  GlobalSearchResult
+  GlobalSearchResult,
+  EventTimelineBucket,
+  EventTimelineBucketFamily
 } from './workerApiTypes';

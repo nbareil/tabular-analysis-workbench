@@ -114,6 +114,46 @@ describe('dataWorkerApi integration harness', () => {
     expect(filteredWindow.rows.map((row) => row.name)).toEqual(['Alice', 'Carol']);
   });
 
+  it('computes event timeline buckets from the filtered context', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle(
+      [
+        'Timestamp,Category',
+        '2024-01-01T00:00:00Z,auth',
+        '2024-01-01T00:01:00Z,network',
+        '2024-01-01T00:02:00Z,auth'
+      ].join('\n')
+    );
+    await worker.loadFile({ handle }, {});
+
+    const expression: FilterNode = {
+      column: 'Category',
+      operator: 'eq',
+      value: 'auth',
+      id: 'category-auth'
+    };
+
+    const result = await worker.getEventTimeline({
+      column: 'Timestamp',
+      expression,
+      rangeStart: Date.parse('2024-01-01T00:00:00Z'),
+      rangeEnd: Date.parse('2024-01-01T00:03:00Z'),
+      selectedStart: Date.parse('2024-01-01T00:01:00Z'),
+      selectedEnd: Date.parse('2024-01-01T00:02:00Z')
+    });
+
+    expect(result.totalMatchingRows).toBe(2);
+    expect(result.bucketFamily).toBe('seconds');
+    expect(result.bucketStep).toBe(5);
+    expect(result.selectedStart).toBe(Date.parse('2024-01-01T00:01:00Z'));
+    expect(result.selectedEnd).toBe(Date.parse('2024-01-01T00:02:00Z'));
+    expect(result.buckets[0]?.count).toBe(1);
+    expect(result.buckets[12]?.count).toBe(0);
+    expect(result.buckets[24]?.count).toBe(1);
+  });
+
   it('returns did-you-mean suggestions for zero-match equality filters', async () => {
     const worker = createDataWorkerApi();
     await worker.init({});

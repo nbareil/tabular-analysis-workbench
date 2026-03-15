@@ -454,6 +454,21 @@ export class RowBatchStore {
     return materializeRowBatch(batch).rows;
   }
 
+  async *iterateBatches(): AsyncGenerator<{
+    index: number;
+    rowStart: number;
+    batch: RowBatch;
+  }> {
+    for (const meta of this.metas) {
+      const batch = await this.ensureBatch(meta.index);
+      yield {
+        index: meta.index,
+        rowStart: meta.rowStart,
+        batch
+      };
+    }
+  }
+
   async *iterateMaterializedBatches(): AsyncGenerator<{
     index: number;
     rowStart: number;

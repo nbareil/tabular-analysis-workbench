@@ -12,6 +12,7 @@ import { createFilterController } from './controllers/filterController';
 import { createSortController } from './controllers/sortController';
 import { createSearchController } from './controllers/searchController';
 import { createTaggingController } from './controllers/taggingController';
+import { createTimelineController } from './controllers/timelineController';
 import type {
   WorkerInitOptions,
   LoadFileRequest,
@@ -32,6 +33,8 @@ import type {
   TagRowsRequest,
   TagRowsResponse,
   ExportTagsResponse,
+  EventTimelineRequest,
+  EventTimelineResult,
   UpdateLabelRequest,
   DeleteLabelRequest,
   DeleteLabelResponse,
@@ -147,6 +150,9 @@ export const createDataWorkerApi = (): DataWorkerApi => {
     state
   });
   const taggingController = createTaggingController(state);
+  const timelineController = createTimelineController({
+    state
+  });
 
 
 
@@ -171,6 +177,7 @@ export const createDataWorkerApi = (): DataWorkerApi => {
       sortController.init();
       searchController.init();
       taggingController.init();
+      timelineController.init();
     },
     async ping() {
       return 'pong';
@@ -306,6 +313,9 @@ export const createDataWorkerApi = (): DataWorkerApi => {
       }
 
       return groupMaterializedRows(collectedRows, state.dataset.columnTypes, normalisedRequest);
+    },
+    async getEventTimeline(request: EventTimelineRequest): Promise<EventTimelineResult> {
+      return timelineController.run(request);
     },
     async globalSearch(request: SearchRequest): Promise<GlobalSearchResult> {
       return searchController.run(request);

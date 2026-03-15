@@ -18,6 +18,7 @@ import LargeDatasetWarning from '@components/LargeDatasetWarning';
 import CapabilityGate from '@components/CapabilityGate';
 import CapabilityWarningBanner from '@components/CapabilityWarningBanner';
 import DiagnosticsToast from '@components/DiagnosticsToast';
+import { EventTimelineSparkline } from '@components/EventTimelineSparkline';
 import { getDataWorker } from '@workers/dataWorkerProxy';
 import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
 import { getFontStack } from '@constants/fonts';
@@ -35,9 +36,11 @@ import { useSessionPersistence } from '@/hooks/useSessionPersistence';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useGlobalSearchSync } from '@/hooks/useGlobalSearchSync';
 import { useAutoFileLoader } from '@/hooks/useAutoFileLoader';
+import { useEventTimeline } from '@/hooks/useEventTimeline';
 import { formatBytes } from '@utils/formatBytes';
 import { reportAppError } from '@utils/diagnostics';
 import { useDiagnosticsReporter } from '@/hooks/useDiagnosticsReporter';
+import { resolveEventTimelineConfig } from '@utils/eventTimeline';
 
 const formatTime = (timestamp: number): string => {
   return new Intl.DateTimeFormat(undefined, {
@@ -789,6 +792,30 @@ const AppShell = ({
     workerReady && Boolean(fileHandle) && matchedRows != null && matchedRows > 0;
   const canExportGrouping =
     workerReady && groupingState.status === 'ready' && groupingState.rows.length > 0;
+  const hasDatetimeColumn = columns.some((column) => column.type === 'datetime');
+  const eventTimelineConfig = useMemo(
+    () =>
+      resolveEventTimelineConfig({
+        filters,
+        columns,
+        columnLayout,
+        columnInference
+      }),
+    [columnInference, columnLayout, columns, filters]
+  );
+  const eventTimeline = useEventTimeline({
+    enabled: workerReady && loaderStatus === 'ready' && totalRows > 0,
+    config: eventTimelineConfig
+  });
+  const eventTimelineEmptyState = loaderStatus === 'loading'
+    ? 'Loading timeline…'
+    : !fileHandle
+    ? 'Open a file to see event volume.'
+    : !hasDatetimeColumn
+      ? 'No datetime column available.'
+      : !eventTimelineConfig
+        ? 'Timeline needs a datetime extent.'
+        : 'Timeline loading…';
 
   return (
     <div className="flex h-full flex-col bg-canvas text-slate-100">
@@ -988,6 +1015,13 @@ const AppShell = ({
           onOpenOptions={() => setOptionsOpen(true)}
         />
       )}
+      <EventTimelineSparkline
+        columnLabel={eventTimelineConfig?.columnLabel ?? null}
+        status={eventTimeline.status}
+        data={eventTimeline.data}
+        error={eventTimeline.error}
+        emptyState={eventTimelineEmptyState}
+      />
       <main className="flex flex-1 overflow-hidden">
         <aside
           className={`hidden border-r border-slate-800 lg:block ${

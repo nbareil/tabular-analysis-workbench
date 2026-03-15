@@ -58,6 +58,37 @@ export interface GlobalSearchResult {
   matchedRows: number;
 }
 
+export type EventTimelineBucketFamily = 'seconds' | 'minutes' | 'hours';
+
+export interface EventTimelineBucket {
+  start: number;
+  end: number;
+  count: number;
+}
+
+export interface EventTimelineRequest {
+  requestId?: number;
+  column: string;
+  expression: FilterNode | null;
+  rangeStart: number;
+  rangeEnd: number;
+  selectedStart?: number | null;
+  selectedEnd?: number | null;
+}
+
+export interface EventTimelineResult {
+  requestId?: number;
+  column: string;
+  rangeStart: number;
+  rangeEnd: number;
+  selectedStart: number | null;
+  selectedEnd: number | null;
+  bucketFamily: EventTimelineBucketFamily;
+  bucketStep: number;
+  totalMatchingRows: number;
+  buckets: EventTimelineBucket[];
+}
+
 export interface LoadFileCallbacks {
   onStart?: (payload: { columns: string[] }) => void | Promise<void>;
   onProgress?: (progress: { rowsParsed: number; bytesParsed: number; batchesStored: number }) => void | Promise<void>;
@@ -130,6 +161,7 @@ export interface DataWorkerApi {
   fetchRows: (request: FetchRowsRequest) => Promise<FetchRowsResult>;
   groupBy: (request: GroupingRequest) => Promise<GroupingResult>;
   globalSearch: (request: SearchRequest) => Promise<GlobalSearchResult>;
+  getEventTimeline: (request: EventTimelineRequest) => Promise<EventTimelineResult>;
   clearSearch: (request?: ClearSearchRequest) => Promise<void>;
   loadTags: () => Promise<TaggingSnapshot>;
   tagRows: (request: TagRowsRequest) => Promise<TagRowsResponse>;
