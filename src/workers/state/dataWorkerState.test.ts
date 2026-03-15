@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDataWorkerState } from './dataWorkerState';
+import { createDefaultMitreAttackTacticLabels } from '@constants/mitreAttackTactics';
 import type { RowBatchStore } from '../rowBatchStore';
-import type { TaggingStore } from '../taggingStore';
+import { TaggingStore, type TaggingStore as TaggingStoreInstance } from '../taggingStore';
 import type { TagRecord } from '../types';
 
 const createMockBatchStore = (): RowBatchStore =>
@@ -12,8 +13,9 @@ const createMockBatchStore = (): RowBatchStore =>
 
 const createMockTaggingStore = () =>
   ({
+    load: vi.fn().mockResolvedValue(null),
     save: vi.fn().mockResolvedValue(undefined)
-  }) as unknown as TaggingStore;
+  }) as unknown as TaggingStoreInstance;
 
 describe('dataWorkerState', () => {
   beforeEach(() => {
@@ -76,5 +78,40 @@ describe('dataWorkerState', () => {
 
     expect(store.save).toHaveBeenCalledTimes(1);
     expect(state.tagging.dirty).toBe(false);
+  });
+
+  it('hydrates default MITRE ATT&CK labels when no snapshot exists yet', async () => {
+    const state = createDataWorkerState();
+    const store = createMockTaggingStore();
+    vi.spyOn(TaggingStore, 'create').mockResolvedValue(store);
+
+    await state.hydrateTaggingStore({
+      fileName: 'events.csv',
+      fileSize: 10,
+      lastModified: 20
+    });
+
+    expect(state.tagging.labels).toEqual(createDefaultMitreAttackTacticLabels());
+    expect(state.tagging.tags).toEqual({});
+    expect(state.tagging.dirty).toBe(false);
+  });
+
+  it('preserves an explicitly saved empty label catalog', async () => {
+    const state = createDataWorkerState();
+    const store = createMockTaggingStore();
+    vi.spyOn(TaggingStore, 'create').mockResolvedValue(store);
+    vi.mocked(store.load).mockResolvedValue({
+      labels: [],
+      tags: {}
+    });
+
+    await state.hydrateTaggingStore({
+      fileName: 'events.csv',
+      fileSize: 10,
+      lastModified: 20
+    });
+
+    expect(state.tagging.labels).toEqual([]);
+    expect(state.tagging.tags).toEqual({});
   });
 });

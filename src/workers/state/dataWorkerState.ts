@@ -10,6 +10,7 @@ import type {
 } from '../types';
 import type { RowBatchStore } from '../rowBatchStore';
 import { normaliseLabelIds } from '../taggingHelpers';
+import { createDefaultMitreAttackTacticLabels } from '@constants/mitreAttackTactics';
 
 const DEFAULT_OPTIONS = {
   chunkSize: 1_048_576,
@@ -183,8 +184,10 @@ class DataWorkerState implements DataWorkerStateController {
       const store = await TaggingStore.create(fingerprint);
       this._tagging.store = store;
       const snapshot = await store.load();
-      this._tagging.labels = snapshot?.labels ?? [];
-      const allowedLabelIds = new Set((snapshot?.labels ?? []).map((label) => label.id));
+      const labels =
+        snapshot == null ? createDefaultMitreAttackTacticLabels() : (snapshot.labels ?? []);
+      this._tagging.labels = labels;
+      const allowedLabelIds = new Set(labels.map((label) => label.id));
       const tags: Record<number, TagRecord> = {};
       const incomingTags = snapshot?.tags ?? {};
 
