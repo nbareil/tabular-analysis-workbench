@@ -33,6 +33,12 @@ const supportsAnchors = (): boolean => {
   return typeof document !== 'undefined' && typeof document.createElement === 'function';
 };
 
+const normalizePickerMimeType = (mimeType: string): string => {
+  const [baseType] = mimeType.split(';', 1);
+  const normalized = baseType?.trim();
+  return normalized && normalized.length > 0 ? normalized : 'application/octet-stream';
+};
+
 interface SaveBlobOptions {
   suggestedName: string;
   blob: Blob;
@@ -50,13 +56,14 @@ export const saveBlobFile = async ({
 }: SaveBlobOptions): Promise<void> => {
   const picker = getSaveFilePicker();
   if (picker) {
+    const pickerMimeType = normalizePickerMimeType(mimeType);
     const handle = await picker({
       suggestedName,
       types: [
         {
           description,
           accept: {
-            [mimeType]: extensions && extensions.length ? extensions : ['.bin']
+            [pickerMimeType]: extensions && extensions.length ? extensions : ['.bin']
           }
         }
       ]
