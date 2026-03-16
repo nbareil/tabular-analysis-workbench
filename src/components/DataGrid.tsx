@@ -272,6 +272,24 @@ export const serializeRowForClipboard = (columns: ClipboardColumnValue[]): strin
   return `${headers.join('\t')}\n${values.join('\t')}`;
 };
 
+export const serializeRowsForClipboard = (rows: ClipboardColumnValue[][]): string => {
+  if (rows.length === 0) {
+    return '';
+  }
+
+  const [firstRow] = rows;
+  if (!firstRow || firstRow.length === 0) {
+    return '';
+  }
+
+  const headers = firstRow.map((column) => normalizeClipboardText(column.headerName));
+  const serializedRows = rows.map((row) =>
+    row.map((column) => formatClipboardCellValue(column.value)).join('\t')
+  );
+
+  return `${headers.join('\t')}\n${serializedRows.join('\n')}`;
+};
+
 const TagCellRenderer = ({
   value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element => {
@@ -1128,15 +1146,23 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
       const rowId = Number.isFinite(params.data?.__rowId) ? Number(params.data?.__rowId) : null;
       const cellClipboardText = formatClipboardCellValue(rawValue);
-      const rowClipboardText = serializeRowForClipboard(
-        (params.api.getAllDisplayedColumns?.() ?? []).map((column) => {
-          const columnId = column.getColId();
-          const headerName = String(column.getColDef().headerName ?? columnId);
-          return {
-            headerName,
-            value: params.api.getValue(column, params.node)
-          };
-        })
+      const displayedColumns = params.api.getAllDisplayedColumns?.() ?? [];
+      const selectedNodes = params.api.getSelectedNodes?.() ?? [];
+      const selectionIncludesContext = selectedNodes.some((node) => node === params.node);
+      const rowNodesToCopy = selectionIncludesContext
+        ? [...selectedNodes].sort((left, right) => (left.rowIndex ?? 0) - (right.rowIndex ?? 0))
+        : [params.node];
+      const rowClipboardText = serializeRowsForClipboard(
+        rowNodesToCopy.map((node) =>
+          displayedColumns.map((column) => {
+            const columnId = column.getColId();
+            const headerName = String(column.getColDef().headerName ?? columnId);
+            return {
+              headerName,
+              value: params.api.getValue(column, node)
+            };
+          })
+        )
       );
 
       const menuWidth = 220;

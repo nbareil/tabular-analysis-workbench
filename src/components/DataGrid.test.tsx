@@ -16,6 +16,7 @@ import {
   getNextRowIndex,
   getEmptyStateMessage,
   serializeRowForClipboard,
+  serializeRowsForClipboard,
   shouldShowEmptyOverlay,
   shouldShowInitialPlaceholder,
   toggleRowSelection
@@ -400,5 +401,20 @@ describe('clipboard row serialization', () => {
     expect(
       serializeRowForClipboard([{ headerName: 'Payload', value: { foo: 'bar', count: 2 } }])
     ).toBe('Payload\n{"foo":"bar","count":2}');
+  });
+
+  it('serializes multiple rows under a single header line', () => {
+    expect(
+      serializeRowsForClipboard([
+        [
+          { headerName: 'Name', value: 'Alice' },
+          { headerName: 'Count', value: 3 }
+        ],
+        [
+          { headerName: 'Name', value: 'Bob' },
+          { headerName: 'Count', value: 7 }
+        ]
+      ])
+    ).toBe('Name\tCount\nAlice\t3\nBob\t7');
   });
 });
