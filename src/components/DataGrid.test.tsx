@@ -12,6 +12,7 @@ import {
   computeMedianWidth,
   evaluateFilterMenuMetadata,
   formatClipboardCellValue,
+  getHeaderContextMenuColumnId,
   buildSortStateFromColumnState,
   getNextRowIndex,
   getEmptyStateMessage,
@@ -416,5 +417,25 @@ describe('clipboard row serialization', () => {
         ]
       ])
     ).toBe('Name\tCount\nAlice\t3\nBob\t7');
+  });
+});
+
+describe('getHeaderContextMenuColumnId', () => {
+  it('returns the header col-id for header cell descendants', () => {
+    const headerCell = document.createElement('div');
+    headerCell.className = 'ag-header-cell';
+    headerCell.setAttribute('col-id', 'status');
+    const label = document.createElement('span');
+    headerCell.appendChild(label);
+
+    expect(getHeaderContextMenuColumnId(label)).toBe('status');
+  });
+
+  it('ignores non-header targets', () => {
+    const cell = document.createElement('div');
+    cell.className = 'ag-cell';
+    cell.setAttribute('col-id', 'status');
+
+    expect(getHeaderContextMenuColumnId(cell)).toBeNull();
   });
 });

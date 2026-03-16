@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 
 import { AgGridReact } from 'ag-grid-react';
@@ -90,7 +90,15 @@ export const buildSortStateFromColumnState = (columnState: ColumnState[]): SortS
     }))
     .filter((sort) => Boolean(sort.column));
 
-interface FilterContextMenuState {
+interface HeaderContextMenuState {
+  kind: 'header';
+  x: number;
+  y: number;
+  columnId: string;
+}
+
+interface CellContextMenuState {
+  kind: 'cell';
   x: number;
   y: number;
   columnId: string;
@@ -100,6 +108,8 @@ interface FilterContextMenuState {
   cellClipboardText: string;
   rowClipboardText: string;
 }
+
+type GridContextMenuState = HeaderContextMenuState | CellContextMenuState;
 
 const AUTO_WIDTH_MAX_SAMPLE_ROWS = 1_000;
 const AUTO_WIDTH_BLOCK_SIZE = 250;
@@ -290,6 +300,15 @@ export const serializeRowsForClipboard = (rows: ClipboardColumnValue[][]): strin
   return `${headers.join('\t')}\n${serializedRows.join('\n')}`;
 };
 
+export const getHeaderContextMenuColumnId = (target: EventTarget | null): string | null => {
+  if (!(target instanceof Element)) {
+    return null;
+  }
+
+  const headerCell = target.closest<HTMLElement>('.ag-header-cell[col-id]');
+  return headerCell?.getAttribute('col-id') ?? null;
+};
+
 const TagCellRenderer = ({
   value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element => {
@@ -371,7 +390,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const theme = useAppStore((state) => state.theme);
   const { filters, applyFilters } = useFilterSync();
   const { sorts, applySorts } = useSortSync();
-  const [contextMenu, setContextMenu] = useState<FilterContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<GridContextMenuState | null>(null);
   const columnLayout = useSessionStore((state) => state.columnLayout);
   const setColumnLayout = useSessionStore((state) => state.setColumnLayout);
   const [gridApi, setGridApi] = useState<GridApi | null>(null);
@@ -907,7 +926,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   ]);
 
   const menuMetadata = useMemo(() => {
-    if (!contextMenu) {
+    if (!contextMenu || contextMenu.kind !== 'cell') {
       return null;
     }
 
@@ -1181,6 +1200,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       }
 
       setContextMenu({
+        kind: 'cell',
         x,
         y,
         columnId,
@@ -1193,6 +1213,22 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     },
     [gridApi, loadTags, tagLabels.length, tagStatus]
   );
+
+  const handleContainerContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+
+    const columnId = getHeaderContextMenuColumnId(event.target);
+    if (!columnId) {
+      return;
+    }
+
+    setContextMenu({
+      kind: 'header',
+      x: event.clientX,
+      y: event.clientY,
+      columnId
+    });
+  }, []);
 
   const getSelectedRowIds = useCallback((): number[] => {
     if (!gridApi || typeof gridApi.getSelectedNodes !== 'function') {
@@ -1208,7 +1244,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   }, [gridApi]);
 
   const handleFilterIn = useCallback(() => {
-    if (!contextMenu || !menuMetadata) {
+    if (!contextMenu || contextMenu.kind !== 'cell' || !menuMetadata) {
       return;
     }
 
@@ -1251,7 +1287,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   }, [applyFilters, closeMenu, contextMenu, filters, menuMetadata]);
 
   const handleFilterOut = useCallback(() => {
-    if (!contextMenu || !menuMetadata) {
+    if (!contextMenu || contextMenu.kind !== 'cell' || !menuMetadata) {
       return;
     }
 
@@ -1281,7 +1317,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
   const handleApplyLabel = useCallback(
     async (labelId: string | null) => {
-      if (!contextMenu || contextMenu.rowId == null || tagMutationPending) {
+      if (!contextMenu || contextMenu.kind !== 'cell' || contextMenu.rowId == null || tagMutationPending) {
         return;
       }
 
@@ -1319,7 +1355,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   );
 
   const handleEditNote = useCallback(() => {
-    if (!contextMenu || contextMenu.rowId == null || !onEditTagNote) {
+    if (!contextMenu || contextMenu.kind !== 'cell' || contextMenu.rowId == null || !onEditTagNote) {
       return;
     }
 
@@ -1346,7 +1382,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         reportAppError(`Failed to copy ${target} to clipboard`, error, {
           operation: `grid.copy${target === 'row' ? 'Row' : 'Cell'}ToClipboard`,
           context: {
-            rowId: contextMenu?.rowId ?? null,
+            rowId: contextMenu?.kind === 'cell' ? contextMenu.rowId : null,
             columnId: contextMenu?.columnId ?? null
           }
         });
@@ -1393,7 +1429,39 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   );
 
   const renderContextMenu = () => {
-    if (!contextMenu || !menuMetadata) {
+    if (!contextMenu) {
+      return null;
+    }
+
+    const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
+
+    if (contextMenu.kind === 'header') {
+      const menu = (
+      <div
+      data-grid-context-menu="true"
+      className="fixed z-[10000] min-w-[14rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
+      style={{ top: contextMenu.y, left: contextMenu.x }}
+      onMouseDown={(event) => event.stopPropagation()}
+      >
+          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Columns</div>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800"
+            onClick={() => {
+              handleToggleColumn(contextMenu.columnId);
+              closeMenu();
+            }}
+            disabled={!columnVisible}
+          >
+            Hide column
+          </button>
+        </div>
+      );
+
+      return createPortal(menu, document.body);
+    }
+
+    if (!menuMetadata) {
       return null;
     }
 
@@ -1413,7 +1481,6 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
           ? selectedRowIds.length
           : selectedRowIds.length + 1;
 
-    const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
     const canWriteClipboard =
       typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function';
 
@@ -1565,7 +1632,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   ref={gridContainerRef}
   className={`${themeClass} h-full w-full`}
   style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
-    onContextMenu={(e) => e.preventDefault()}
+    onContextMenu={handleContainerContextMenu}
     >
       {showPlaceholder ? (
         <div className="flex h-full items-center justify-center text-sm text-slate-500">
