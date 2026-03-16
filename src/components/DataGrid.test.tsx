@@ -11,9 +11,11 @@ import {
   computeAutoColumnWidth,
   computeMedianWidth,
   evaluateFilterMenuMetadata,
+  formatClipboardCellValue,
   buildSortStateFromColumnState,
   getNextRowIndex,
   getEmptyStateMessage,
+  serializeRowForClipboard,
   shouldShowEmptyOverlay,
   shouldShowInitialPlaceholder,
   toggleRowSelection
@@ -365,5 +367,38 @@ describe('toggleRowSelection', () => {
     const gridApi = createGridApi(null);
 
     expect(toggleRowSelection(gridApi, 10)).toBe(false);
+  });
+});
+
+describe('clipboard row serialization', () => {
+  it('formats tag values with labels and notes', () => {
+    const value: TagCellValue = {
+      rowId: 12,
+      labels: [
+        { id: 'l1', name: 'Suspicious' },
+        { id: 'l2', name: 'Escalate' }
+      ],
+      note: 'needs\nreview',
+      updatedAt: Date.now()
+    };
+
+    expect(formatClipboardCellValue(value)).toBe('Suspicious, Escalate | note: needs review');
+  });
+
+  it('serializes a displayed row as tab-delimited headers and values', () => {
+    expect(
+      serializeRowForClipboard([
+        { headerName: 'Name', value: 'Alice' },
+        { headerName: 'Status', value: 'open\tcase' },
+        { headerName: 'Count', value: 3 },
+        { headerName: 'Extra', value: null }
+      ])
+    ).toBe('Name\tStatus\tCount\tExtra\nAlice\topen case\t3\t');
+  });
+
+  it('stringifies object values when a cell exposes structured data', () => {
+    expect(
+      serializeRowForClipboard([{ headerName: 'Payload', value: { foo: 'bar', count: 2 } }])
+    ).toBe('Payload\n{"foo":"bar","count":2}');
   });
 });

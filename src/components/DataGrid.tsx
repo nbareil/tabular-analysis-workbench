@@ -97,6 +97,8 @@ interface FilterContextMenuState {
   displayValue: string;
   filterValue: string | null;
   rowId: number | null;
+  cellClipboardText: string;
+  rowClipboardText: string;
 }
 
 const AUTO_WIDTH_MAX_SAMPLE_ROWS = 1_000;
@@ -215,6 +217,59 @@ export const toggleRowSelection = (gridApi: GridApi | null, rowId: number | null
     typeof rowNode.isSelected === 'function' ? rowNode.isSelected() : false;
   rowNode.setSelected(!currentlySelected, false, 'api');
   return true;
+};
+
+interface ClipboardColumnValue {
+  headerName: string;
+  value: unknown;
+}
+
+const normalizeClipboardText = (value: string): string => value.replace(/[\t\r\n]+/g, ' ');
+
+const isTagCellValue = (value: unknown): value is TagCellValue =>
+  value != null &&
+  typeof value === 'object' &&
+  ('labels' in value || 'note' in value);
+
+export const formatClipboardCellValue = (value: unknown): string => {
+  if (value == null) {
+    return '';
+  }
+
+  if (isTagCellValue(value)) {
+    const labels = value.labels.map((label) => label.name).filter(Boolean);
+    const segments: string[] = [];
+
+    if (labels.length > 0) {
+      segments.push(labels.join(', '));
+    }
+
+    if (typeof value.note === 'string' && value.note.trim().length > 0) {
+      segments.push(`note: ${value.note}`);
+    }
+
+    return normalizeClipboardText(segments.join(' | '));
+  }
+
+  if (Array.isArray(value)) {
+    return normalizeClipboardText(value.map((item) => formatClipboardCellValue(item)).join(', '));
+  }
+
+  if (typeof value === 'object') {
+    return normalizeClipboardText(JSON.stringify(value));
+  }
+
+  return normalizeClipboardText(String(value));
+};
+
+export const serializeRowForClipboard = (columns: ClipboardColumnValue[]): string => {
+  if (columns.length === 0) {
+    return '';
+  }
+
+  const headers = columns.map((column) => normalizeClipboardText(column.headerName));
+  const values = columns.map((column) => formatClipboardCellValue(column.value));
+  return `${headers.join('\t')}\n${values.join('\t')}`;
 };
 
 const TagCellRenderer = ({
@@ -1072,6 +1127,17 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       }
 
       const rowId = Number.isFinite(params.data?.__rowId) ? Number(params.data?.__rowId) : null;
+      const cellClipboardText = formatClipboardCellValue(rawValue);
+      const rowClipboardText = serializeRowForClipboard(
+        (params.api.getAllDisplayedColumns?.() ?? []).map((column) => {
+          const columnId = column.getColId();
+          const headerName = String(column.getColDef().headerName ?? columnId);
+          return {
+            headerName,
+            value: params.api.getValue(column, params.node)
+          };
+        })
+      );
 
       const menuWidth = 220;
       const estimatedHeight = isTagColumn
@@ -1094,7 +1160,9 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         columnId,
         displayValue,
         filterValue,
-        rowId
+        rowId,
+        cellClipboardText,
+        rowClipboardText
       });
     },
     [gridApi, loadTags, tagLabels.length, tagStatus]
@@ -1233,6 +1301,36 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     closeMenu();
   }, [closeMenu, contextMenu, onEditTagNote]);
 
+  const handleCopyToClipboard = useCallback(
+    async (text: string, target: 'row' | 'cell') => {
+      if (!text) {
+        closeMenu();
+        return;
+      }
+
+      if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
+        closeMenu();
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (error) {
+        console.error(`Failed to copy grid ${target} to clipboard`, error);
+        reportAppError(`Failed to copy ${target} to clipboard`, error, {
+          operation: `grid.copy${target === 'row' ? 'Row' : 'Cell'}ToClipboard`,
+          context: {
+            rowId: contextMenu?.rowId ?? null,
+            columnId: contextMenu?.columnId ?? null
+          }
+        });
+      } finally {
+        closeMenu();
+      }
+    },
+    [closeMenu, contextMenu]
+  );
+
   const handleSortChanged = useCallback(
     (event: SortChangedEvent) => {
       const columnState = event.columnApi.getColumnState();
@@ -1290,6 +1388,8 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
           : selectedRowIds.length + 1;
 
     const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
+    const canWriteClipboard =
+      typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function';
 
     const menu = (
     <div
@@ -1298,6 +1398,32 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     style={{ top: contextMenu.y, left: contextMenu.x }}
     onMouseDown={(event) => event.stopPropagation()}
     >
+        <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Copy</div>
+        <button
+          type="button"
+          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 ${
+            !canWriteClipboard || !contextMenu.rowClipboardText ? 'cursor-not-allowed opacity-50' : ''
+          }`}
+          onClick={() => {
+            void handleCopyToClipboard(contextMenu.rowClipboardText, 'row');
+          }}
+          disabled={!canWriteClipboard || !contextMenu.rowClipboardText}
+        >
+          Copy Row
+        </button>
+        <button
+          type="button"
+          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 ${
+            !canWriteClipboard || !contextMenu.cellClipboardText ? 'cursor-not-allowed opacity-50' : ''
+          }`}
+          onClick={() => {
+            void handleCopyToClipboard(contextMenu.cellClipboardText, 'cell');
+          }}
+          disabled={!canWriteClipboard || !contextMenu.cellClipboardText}
+        >
+          Copy Cell Value
+        </button>
+        <div className="mt-1 border-t border-slate-800 pt-1">
         <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Filters</div>
         <button
           type="button"
@@ -1321,6 +1447,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
           Filter out
           <span className="truncate text-slate-400">{contextMenu.displayValue}</span>
         </button>
+        </div>
         {isLabelColumn ? (
           <div className="mt-1 border-t border-slate-800 pt-1">
             <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">
