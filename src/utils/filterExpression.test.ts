@@ -65,20 +65,24 @@ describe('buildFilterExpression', () => {
     }
     expect((expression as FilterExpression).op).toBe('and');
     expect((expression as FilterExpression).predicates).toHaveLength(2);
-    expect((expression as FilterExpression).predicates[0]).toMatchObject({
-      id: '1',
-      column: 'name',
-      operator: 'eq',
-      value: 'Alice',
-      caseSensitive: false
-    } satisfies Partial<FilterPredicate>);
-    expect((expression as FilterExpression).predicates[1]).toMatchObject({
-      id: '2',
-      column: 'age',
-      operator: 'gt',
-      value: 25,
-      caseSensitive: false
-    } satisfies Partial<FilterPredicate>);
+    expect((expression as FilterExpression).predicates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: '1',
+          column: 'name',
+          operator: 'eq',
+          value: 'Alice',
+          caseSensitive: false
+        }),
+        expect.objectContaining({
+          id: '2',
+          column: 'age',
+          operator: 'gt',
+          value: 25,
+          caseSensitive: false
+        })
+      ])
+    );
   });
 
   it('handles range operator with value2', () => {
@@ -104,6 +108,53 @@ describe('buildFilterExpression', () => {
       value2: 30,
       caseSensitive: false
     } satisfies Partial<FilterPredicate>);
+  });
+
+  it('groups same-column equality filters with OR logic', () => {
+    const expression = buildFilterExpression([
+      {
+        id: '1',
+        column: 'name',
+        operator: 'eq',
+        value: 'Alice'
+      },
+      {
+        id: '2',
+        column: 'name',
+        operator: 'eq',
+        value: 'Bob'
+      },
+      {
+        id: '3',
+        column: 'age',
+        operator: 'gt',
+        value: 25
+      }
+    ]);
+
+    expect(expression).not.toBeNull();
+    if (!expression) {
+      throw new Error('expression should not be null');
+    }
+
+    expect((expression as FilterExpression).op).toBe('and');
+    expect((expression as FilterExpression).predicates).toHaveLength(2);
+    expect((expression as FilterExpression).predicates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          column: 'age',
+          operator: 'gt',
+          value: 25
+        }),
+        expect.objectContaining({
+          op: 'or',
+          predicates: [
+            expect.objectContaining({ column: 'name', operator: 'eq', value: 'Alice' }),
+            expect.objectContaining({ column: 'name', operator: 'eq', value: 'Bob' })
+          ]
+        })
+      ])
+    );
   });
 
   it('preserves caseSensitive flags', () => {

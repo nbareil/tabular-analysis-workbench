@@ -22,6 +22,8 @@ import type {
   ApplySortResult,
   ApplyFilterRequest,
   ApplyFilterResult,
+  ColumnValueDistributionRequest,
+  ColumnValueDistributionResult,
   FetchRowsRequest,
   FetchRowsResult,
   DataWorkerApi,
@@ -133,6 +135,111 @@ export const createDataWorkerApi = (): DataWorkerApi => {
     return rows;
   };
 
+  const getColumnValueDistribution = async ({
+    column
+  }: ColumnValueDistributionRequest): Promise<ColumnValueDistributionResult> => {
+    const batchStore = state.dataset.batchStore;
+    const totalRows = state.dataset.totalRows;
+
+    if (!batchStore || !totalRows || state.dataset.columnTypes[column] == null) {
+      return {
+        column,
+        totalRows,
+        nonNullRows: 0,
+        distinctCount: 0,
+        skipped: false,
+        defaultSort: 'desc',
+        items: []
+      };
+    }
+
+    const cached = state.dataset.columnValueDistributionCache.get(column);
+    if (cached) {
+      return cached;
+    }
+
+    const inFlight = state.dataset.columnValueDistributionPromises.get(column);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const request = (async (): Promise<ColumnValueDistributionResult> => {
+      const counts = new Map<string, { value: string; count: number }>();
+      let nonNullRows = 0;
+
+      for await (const { rows } of batchStore.iterateMaterializedBatches()) {
+        for (const row of rows) {
+          const rawValue = row[column];
+          if (rawValue == null) {
+            continue;
+          }
+
+          nonNullRows += 1;
+          const value = String(rawValue);
+          const key = `${typeof rawValue}:${value}`;
+          const entry = counts.get(key);
+          if (entry) {
+            entry.count += 1;
+          } else {
+            counts.set(key, { value, count: 1 });
+          }
+        }
+      }
+
+      const distinctCount = counts.size;
+      const skipped = totalRows > 0 && distinctCount / totalRows > 0.5;
+
+      if (skipped) {
+        return {
+          column,
+          totalRows,
+          nonNullRows,
+          distinctCount,
+          skipped: true,
+          skipReason: 'Too many unique values',
+          defaultSort: 'desc',
+          items: []
+        };
+      }
+
+      const items = Array.from(counts.values()).sort((left, right) => {
+        if (right.count !== left.count) {
+          return right.count - left.count;
+        }
+
+        return left.value.localeCompare(right.value);
+      });
+
+      return {
+        column,
+        totalRows,
+        nonNullRows,
+        distinctCount,
+        skipped: false,
+        defaultSort: 'desc',
+        items
+      };
+    })();
+
+    state.updateDataset((dataset) => {
+      dataset.columnValueDistributionPromises.set(column, request);
+    });
+
+    try {
+      const result = await request;
+      state.updateDataset((dataset) => {
+        dataset.columnValueDistributionPromises.delete(column);
+        dataset.columnValueDistributionCache.set(column, result);
+      });
+      return result;
+    } catch (error) {
+      state.updateDataset((dataset) => {
+        dataset.columnValueDistributionPromises.delete(column);
+      });
+      throw error;
+    }
+  };
+
   const ingestionPipeline = createIngestionPipeline({ state });
   const filterController = createFilterController({
     state,
@@ -215,6 +322,11 @@ export const createDataWorkerApi = (): DataWorkerApi => {
     },
     async applyFilter(request: ApplyFilterRequest): Promise<ApplyFilterResult> {
       return filterController.run(request);
+    },
+    async getColumnValueDistribution(
+      request: ColumnValueDistributionRequest
+    ): Promise<ColumnValueDistributionResult> {
+      return getColumnValueDistribution(request);
     },
     async fetchRows({ offset, limit }: FetchRowsRequest): Promise<FetchRowsResult> {
       if (isDebugLoggingEnabled()) {

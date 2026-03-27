@@ -9,6 +9,7 @@ import type {
   TagRecord
 } from '../types';
 import type { RowBatchStore } from '../rowBatchStore';
+import type { ColumnValueDistributionResult } from '../workerApiTypes';
 import { normaliseLabelIds } from '../taggingHelpers';
 import { createDefaultMitreAttackTacticLabels } from '@constants/mitreAttackTactics';
 
@@ -42,6 +43,8 @@ export interface DatasetState {
   fileHandle: FileSystemFileHandle | null;
   backgroundSortPromise: Promise<Uint32Array | void> | null;
   sortComplete: boolean;
+  columnValueDistributionCache: Map<string, ColumnValueDistributionResult>;
+  columnValueDistributionPromises: Map<string, Promise<ColumnValueDistributionResult>>;
 }
 
 export interface TaggingState {
@@ -87,7 +90,9 @@ const createEmptyDatasetState = (): DatasetState => ({
   bytesParsed: 0,
   fileHandle: null,
   backgroundSortPromise: null,
-  sortComplete: true
+  sortComplete: true,
+  columnValueDistributionCache: new Map(),
+  columnValueDistributionPromises: new Map()
 });
 
 const createEmptyTaggingState = (): TaggingState => ({

@@ -27,6 +27,8 @@ export type {
   ApplySortResult,
   ApplyFilterRequest,
   ApplyFilterResult,
+  ColumnValueDistributionRequest,
+  ColumnValueDistributionResult,
   FetchRowsRequest,
   FetchRowsResult,
   ClearSearchRequest,

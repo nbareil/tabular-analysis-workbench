@@ -104,6 +104,7 @@ const AppShell = ({
   const stats = useDataStore((state) => state.stats);
   const columns = useDataStore((state) => state.columns);
   const columnInference = useDataStore((state) => state.columnInference);
+  const valueFrequencyIndexing = useDataStore((state) => state.valueFrequencyIndexing);
   const allColumns = useDataStore((state) => state.columns);
   const groupingState = useDataStore((state) => state.grouping);
   const tagLabels = useTagStore((state) => state.labels);
@@ -467,6 +468,14 @@ const AppShell = ({
       base = `${base} • ${labelFilterSummary.summary}`;
     }
 
+    if (valueFrequencyIndexing.totalColumns > 0) {
+      if (valueFrequencyIndexing.status === 'indexing') {
+        base = `${base} • Indexing value frequency list (${valueFrequencyIndexing.completedColumns}/${valueFrequencyIndexing.totalColumns} columns)`;
+      } else if (valueFrequencyIndexing.status === 'ready') {
+        base = `${base} • Value frequency list ready`;
+      }
+    }
+
     if (persistenceError) {
       return `${base} • ${persistenceError}`;
     }
@@ -485,6 +494,7 @@ const AppShell = ({
     loaderStatus,
     stats,
     labelFilterSummary,
+    valueFrequencyIndexing,
     persistenceError,
     persistenceLastSavedAt
   ]);
@@ -817,6 +827,17 @@ const AppShell = ({
           {loaderMessage && (
             <span className="text-xs uppercase tracking-wide text-slate-500">
               {loaderMessage}
+            </span>
+          )}
+          {valueFrequencyIndexing.totalColumns > 0 && valueFrequencyIndexing.status === 'indexing' && (
+            <span className="text-xs uppercase tracking-wide text-amber-300">
+              Indexing value frequency list… {valueFrequencyIndexing.completedColumns}/
+              {valueFrequencyIndexing.totalColumns}
+            </span>
+          )}
+          {valueFrequencyIndexing.totalColumns > 0 && valueFrequencyIndexing.status === 'ready' && (
+            <span className="text-xs uppercase tracking-wide text-emerald-300">
+              Value frequency list ready
             </span>
           )}
           {persistenceError && (

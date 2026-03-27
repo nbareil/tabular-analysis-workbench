@@ -29,10 +29,8 @@ const stringColumn = (values: string[]): StringColumnBatch => {
     offsets[index + 1] = totalBytes;
   });
 
-  const buffer = new ArrayBuffer(offsets.byteLength + totalBytes);
-  const offsetsView = new Uint32Array(buffer, 0, offsets.length);
-  offsetsView.set(offsets);
-  const dataView = new Uint8Array(buffer, offsets.byteLength);
+  const data = new ArrayBuffer(totalBytes);
+  const dataView = new Uint8Array(data);
 
   let cursor = 0;
   encodedChunks.forEach((chunk) => {
@@ -42,8 +40,8 @@ const stringColumn = (values: string[]): StringColumnBatch => {
 
   return {
     type: 'string',
-    data: buffer,
-    offsets: offsetsView
+    data,
+    offsets
   };
 };
 

@@ -108,6 +108,26 @@ export interface ApplyFilterResult {
   predicateMatchCounts?: Record<string, number>;
 }
 
+export interface ColumnValueDistributionRequest {
+  column: string;
+}
+
+export interface ColumnValueDistributionItem {
+  value: string;
+  count: number;
+}
+
+export interface ColumnValueDistributionResult {
+  column: string;
+  totalRows: number;
+  nonNullRows: number;
+  distinctCount: number;
+  skipped: boolean;
+  skipReason?: string;
+  defaultSort: 'desc';
+  items: ColumnValueDistributionItem[];
+}
+
 export interface FetchRowsRequest {
   offset: number;
   limit: number;
@@ -127,6 +147,9 @@ export interface DataWorkerApi {
   seekRows: (request: SeekRowsRequest) => Promise<SeekRowsResult | null>;
   applySorts: (request: ApplySortRequest) => Promise<ApplySortResult>;
   applyFilter: (request: ApplyFilterRequest) => Promise<ApplyFilterResult>;
+  getColumnValueDistribution: (
+    request: ColumnValueDistributionRequest
+  ) => Promise<ColumnValueDistributionResult>;
   fetchRows: (request: FetchRowsRequest) => Promise<FetchRowsResult>;
   groupBy: (request: GroupingRequest) => Promise<GroupingResult>;
   globalSearch: (request: SearchRequest) => Promise<GlobalSearchResult>;

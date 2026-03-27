@@ -2,6 +2,7 @@ import { createWithEqualityFn } from 'zustand/traditional';
 
 import type { ColumnInference, ColumnType, GroupingResult, RowBatch } from '@workers/types';
 import type { DidYouMeanInfo } from '@workers/didYouMean';
+import type { ColumnValueDistributionResult } from '@workers/workerApiTypes';
 import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
 import { formatBytes } from '@utils/formatBytes';
 
@@ -20,6 +21,18 @@ export interface GridRow {
 
 export type LoaderStatus = 'idle' | 'loading' | 'ready' | 'error';
 
+export interface ColumnValueDistributionCacheEntry {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  result?: ColumnValueDistributionResult;
+  error?: string;
+}
+
+export interface ValueFrequencyIndexingState {
+  status: 'idle' | 'indexing' | 'ready';
+  totalColumns: number;
+  completedColumns: number;
+}
+
 export interface DataState {
   fileName: string | null;
   columns: GridColumn[];
@@ -37,6 +50,8 @@ export interface DataState {
   matchedRows: number | null;
   filterMatchedRows: number | null;
   filterPredicateMatchCounts: Record<string, number> | null;
+  columnValueDistributions: Record<string, ColumnValueDistributionCacheEntry>;
+  valueFrequencyIndexing: ValueFrequencyIndexingState;
   searchMatchedRows: number | null;
   didYouMean: DidYouMeanInfo | null;
   viewVersion: number;
@@ -68,6 +83,13 @@ export interface DataState {
   }) => void;
   clearFilterSummary: () => void;
   setMatchedRowCount: (value: number | null) => void;
+  setColumnValueDistributionLoading: (column: string) => void;
+  setColumnValueDistributionResult: (result: ColumnValueDistributionResult) => void;
+  setColumnValueDistributionError: (column: string, error: string) => void;
+  clearColumnValueDistributions: () => void;
+  startValueFrequencyIndexing: (totalColumns: number) => void;
+  setValueFrequencyIndexingProgress: (completedColumns: number) => void;
+  completeValueFrequencyIndexing: () => void;
   setDidYouMean: (didYouMean: DidYouMeanInfo | null) => void;
   bumpViewVersion: () => void;
   setSearchResult: (payload: { totalRows: number; matchedRows: number }) => void;
@@ -119,6 +141,12 @@ const initialGroupingState = (): DataState['grouping'] => ({
   error: null
 });
 
+const initialValueFrequencyIndexingState = (): ValueFrequencyIndexingState => ({
+  status: 'idle',
+  totalColumns: 0,
+  completedColumns: 0
+});
+
 export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
   fileName: null,
   columns: [],
@@ -131,6 +159,8 @@ export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
   matchedRows: null,
   filterMatchedRows: null,
   filterPredicateMatchCounts: null,
+  columnValueDistributions: {},
+  valueFrequencyIndexing: initialValueFrequencyIndexingState(),
   searchMatchedRows: null,
   didYouMean: null,
   viewVersion: 0,
@@ -148,6 +178,8 @@ export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
       matchedRows: null,
       filterMatchedRows: null,
       filterPredicateMatchCounts: null,
+      columnValueDistributions: {},
+      valueFrequencyIndexing: initialValueFrequencyIndexingState(),
       searchMatchedRows: null,
       didYouMean: null,
       viewVersion: state.viewVersion + 1,
@@ -250,7 +282,9 @@ export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
         totalRows: summary.rowsParsed,
         matchedRows,
         columns: updatedColumns,
-        columnInference: summary.columnInference
+        columnInference: summary.columnInference,
+        columnValueDistributions: {},
+        valueFrequencyIndexing: initialValueFrequencyIndexingState()
       };
 
       if (isDebugLoggingEnabled()) {
@@ -299,6 +333,78 @@ export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
   setMatchedRowCount: (value) =>
     set(() => ({
       matchedRows: value
+    })),
+  setColumnValueDistributionLoading: (column) =>
+    set((state) => ({
+      columnValueDistributions: {
+        ...state.columnValueDistributions,
+        [column]: {
+          status: 'loading'
+        }
+      }
+    })),
+  setColumnValueDistributionResult: (result) =>
+    set((state) => ({
+      columnValueDistributions: {
+        ...state.columnValueDistributions,
+        [result.column]: {
+          status: 'ready',
+          result
+        }
+      }
+    })),
+  setColumnValueDistributionError: (column, error) =>
+    set((state) => ({
+      columnValueDistributions: {
+        ...state.columnValueDistributions,
+        [column]: {
+          status: 'error',
+          error
+        }
+      }
+    })),
+  clearColumnValueDistributions: () =>
+    set(() => ({
+      columnValueDistributions: {}
+    })),
+  startValueFrequencyIndexing: (totalColumns) =>
+    set(() => ({
+      valueFrequencyIndexing:
+        totalColumns > 0
+          ? {
+              status: 'indexing',
+              totalColumns,
+              completedColumns: 0
+            }
+          : {
+              status: 'ready',
+              totalColumns: 0,
+              completedColumns: 0
+            }
+    })),
+  setValueFrequencyIndexingProgress: (completedColumns) =>
+    set((state) => {
+      if (state.valueFrequencyIndexing.status !== 'indexing') {
+        return state;
+      }
+
+      return {
+        valueFrequencyIndexing: {
+          ...state.valueFrequencyIndexing,
+          completedColumns: Math.max(
+            0,
+            Math.min(completedColumns, state.valueFrequencyIndexing.totalColumns)
+          )
+        }
+      };
+    }),
+  completeValueFrequencyIndexing: () =>
+    set((state) => ({
+      valueFrequencyIndexing: {
+        status: 'ready',
+        totalColumns: state.valueFrequencyIndexing.totalColumns,
+        completedColumns: state.valueFrequencyIndexing.totalColumns
+      }
     })),
   setDidYouMean: (didYouMean) =>
     set(() => ({
@@ -374,6 +480,8 @@ export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
       searchMatchedRows: null,
       didYouMean: null,
       filterPredicateMatchCounts: null,
+      columnValueDistributions: {},
+      valueFrequencyIndexing: initialValueFrequencyIndexingState(),
       viewVersion: state.viewVersion + 1,
       grouping: initialGroupingState()
     }))

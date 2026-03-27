@@ -73,8 +73,36 @@ export const buildFilterExpression = (filters: FilterState[]): FilterNode | null
     };
   });
 
+  const groupedPredicates: FilterNode[] = [];
+  const groupedEqPredicates = new Map<string, FilterPredicate[]>();
+
+  for (const predicate of predicates) {
+    const shouldGroupAsOr = predicate.operator === 'eq' && predicate.column !== TAG_COLUMN_ID;
+    if (!shouldGroupAsOr) {
+      groupedPredicates.push(predicate);
+      continue;
+    }
+
+    const key = `${predicate.column}::${predicate.caseSensitive ? '1' : '0'}`;
+    const current = groupedEqPredicates.get(key) ?? [];
+    current.push(predicate);
+    groupedEqPredicates.set(key, current);
+  }
+
+  for (const group of groupedEqPredicates.values()) {
+    if (group.length === 1) {
+      groupedPredicates.push(group[0]!);
+      continue;
+    }
+
+    groupedPredicates.push({
+      op: 'or',
+      predicates: group
+    });
+  }
+
   return {
     op: 'and',
-    predicates
+    predicates: groupedPredicates
   };
 };

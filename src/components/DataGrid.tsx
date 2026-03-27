@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent
+} from 'react';
 import { createPortal } from 'react-dom';
 
 import { AgGridReact } from 'ag-grid-react';
@@ -7,6 +15,7 @@ import type {
   ColumnState,
   SortChangedEvent,
   IDatasource,
+  IHeaderParams,
   IGetRowsParams,
   GridApi,
   ColumnApi,
@@ -110,12 +119,14 @@ interface CellContextMenuState {
 }
 
 type GridContextMenuState = HeaderContextMenuState | CellContextMenuState;
+type DistributionSortOrder = 'asc' | 'desc';
 
 const AUTO_WIDTH_MAX_SAMPLE_ROWS = 1_000;
 const AUTO_WIDTH_BLOCK_SIZE = 250;
 const CELL_HORIZONTAL_PADDING_PX = 32;
 const MIN_COLUMN_WIDTH = 80;
 const MAX_COLUMN_WIDTH = 520;
+const DISTRIBUTION_SUPPORTED_TYPES = new Set<GridColumn['type']>(['string', 'boolean']);
 
 export const computeMedianWidth = (samples: number[]): number => {
   if (!samples.length) {
@@ -272,6 +283,18 @@ export const formatClipboardCellValue = (value: unknown): string => {
   return normalizeClipboardText(String(value));
 };
 
+const sortDistributionItems = (
+  items: Array<{ value: string; count: number }>,
+  direction: DistributionSortOrder
+): Array<{ value: string; count: number }> =>
+  [...items].sort((left, right) => {
+    if (left.count !== right.count) {
+      return direction === 'asc' ? left.count - right.count : right.count - left.count;
+    }
+
+    return left.value.localeCompare(right.value);
+  });
+
 export const serializeRowForClipboard = (columns: ClipboardColumnValue[]): string => {
   if (columns.length === 0) {
     return '';
@@ -307,6 +330,63 @@ export const getHeaderContextMenuColumnId = (target: EventTarget | null): string
 
   const headerCell = target.closest<HTMLElement>('.ag-header-cell[col-id]');
   return headerCell?.getAttribute('col-id') ?? null;
+};
+
+export const isWithinGridContextMenu = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest('[data-grid-context-menu="true"]') != null;
+
+interface DataGridHeaderParams extends IHeaderParams {
+  openHeaderMenu: (columnId: string, anchorRect: DOMRect) => void;
+}
+
+const DataGridHeader = ({
+  column,
+  displayName,
+  enableSorting,
+  progressSort,
+  openHeaderMenu
+}: DataGridHeaderParams): JSX.Element => {
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const columnId = typeof column?.getColId === 'function' ? column.getColId() : '';
+  const sortDirection = typeof column?.getSort === 'function' ? column.getSort() : null;
+
+  return (
+    <div className="flex h-full min-w-0 items-center gap-2 pr-1">
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden bg-transparent text-left text-inherit"
+        onClick={(event) => {
+          if (!enableSorting || typeof progressSort !== 'function') {
+            return;
+          }
+
+          progressSort(event.shiftKey);
+        }}
+      >
+        <span className="truncate">{displayName}</span>
+        {sortDirection === 'asc' ? <span aria-hidden>↑</span> : null}
+        {sortDirection === 'desc' ? <span aria-hidden>↓</span> : null}
+      </button>
+      <button
+        ref={menuButtonRef}
+        type="button"
+        aria-label={`Open ${displayName} menu`}
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-200/10 hover:text-slate-200"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          if (!columnId || !menuButtonRef.current) {
+            return;
+          }
+
+          openHeaderMenu(columnId, menuButtonRef.current.getBoundingClientRect());
+        }}
+      >
+        ☰
+      </button>
+    </div>
+  );
 };
 
 const TagCellRenderer = ({
@@ -358,7 +438,7 @@ const TagCellRenderer = ({
 export const MarkdownTooltip = ({
   value
 }: ICellRendererParams<TagCellValue | null>): JSX.Element | null => {
-  if (!value) {
+  if (!isTagCellValue(value)) {
     return null;
   }
 
@@ -387,10 +467,38 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const matchedRows = useDataStore((state) => state.matchedRows);
   const viewVersion = useDataStore((state) => state.viewVersion);
   const totalRows = useDataStore((state) => state.totalRows);
+  const setColumnValueDistributionLoading = useDataStore(
+    (state) => state.setColumnValueDistributionLoading
+  );
+  const setColumnValueDistributionResult = useDataStore(
+    (state) => state.setColumnValueDistributionResult
+  );
+  const setColumnValueDistributionError = useDataStore(
+    (state) => state.setColumnValueDistributionError
+  );
+  const startValueFrequencyIndexing = useDataStore((state) => state.startValueFrequencyIndexing);
+  const setValueFrequencyIndexingProgress = useDataStore(
+    (state) => state.setValueFrequencyIndexingProgress
+  );
+  const completeValueFrequencyIndexing = useDataStore(
+    (state) => state.completeValueFrequencyIndexing
+  );
   const theme = useAppStore((state) => state.theme);
   const { filters, applyFilters } = useFilterSync();
   const { sorts, applySorts } = useSortSync();
   const [contextMenu, setContextMenu] = useState<GridContextMenuState | null>(null);
+  const activeHeaderDistributionEntry = useDataStore((state) =>
+    contextMenu?.kind === 'header'
+      ? state.columnValueDistributions[contextMenu.columnId]
+      : undefined
+  );
+  const [headerDistributionSort, setHeaderDistributionSort] = useState<
+    Record<string, DistributionSortOrder>
+  >({});
+  const [hoveredDistributionValue, setHoveredDistributionValue] = useState<{
+    columnId: string;
+    value: string;
+  } | null>(null);
   const columnLayout = useSessionStore((state) => state.columnLayout);
   const setColumnLayout = useSessionStore((state) => state.setColumnLayout);
   const [gridApi, setGridApi] = useState<GridApi | null>(null);
@@ -406,6 +514,8 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   const initialRowsRequestedRef = useRef(false);
   const loadingVersionRef = useRef<number | null>(null);
   const computedVersionRef = useRef<number | null>(null);
+  const distributionPreloadVersionRef = useRef<number | null>(null);
+  const distributionRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const [tagMutationPending, setTagMutationPending] = useState(false);
   const [keyboardFocusedRowId, setKeyboardFocusedRowId] = useState<number | null>(null);
@@ -575,6 +685,15 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     []
   );
 
+  const handleOpenHeaderMenu = useCallback((columnId: string, anchorRect: DOMRect) => {
+    setContextMenu({
+      kind: 'header',
+      x: anchorRect.left,
+      y: anchorRect.bottom + 4,
+      columnId
+    });
+  }, []);
+
   const dataColumnDefs = useMemo(
     () =>
       orderedColumns.map((column) => ({
@@ -583,7 +702,11 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         cellDataType: mapColumnTypeToAgDataType(column.type),
         sortable: true,
         filter: true,
-        tooltipField: column.key,
+        suppressHeaderMenuButton: true,
+        headerComponent: DataGridHeader,
+        headerComponentParams: {
+          openHeaderMenu: handleOpenHeaderMenu
+        },
         headerTooltip:
           column.confidence > 0
             ? `${column.type} • ${column.confidence}% confidence`
@@ -601,7 +724,13 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
           };
         })()
       })),
-    [columnLayout.visibility, mapColumnTypeToAgDataType, orderedColumns, sorts]
+    [
+      columnLayout.visibility,
+      handleOpenHeaderMenu,
+      mapColumnTypeToAgDataType,
+      orderedColumns,
+      sorts
+    ]
   );
 
   const columnDefs = useMemo(
@@ -936,6 +1065,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
   const closeMenu = useCallback(() => {
     setContextMenu(null);
+    setHoveredDistributionValue(null);
   }, []);
 
   useEffect(() => {
@@ -949,7 +1079,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         return;
       }
 
-      if (event.target.closest('[data-grid-context-menu="true"]')) {
+      if (isWithinGridContextMenu(event.target)) {
         return;
       }
 
@@ -962,7 +1092,11 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       }
     };
 
-    const handleScroll = () => {
+    const handleScroll = (event: Event) => {
+      if (isWithinGridContextMenu(event.target)) {
+        return;
+      }
+
       closeMenu();
     };
 
@@ -1230,6 +1364,119 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     });
   }, []);
 
+  const loadColumnValueDistribution = useCallback(
+    async (column: string) => {
+      const currentEntry = useDataStore.getState().columnValueDistributions[column];
+      if (currentEntry?.status === 'ready') {
+        return;
+      }
+
+      const inFlightRequest = distributionRequestsRef.current.get(column);
+      if (currentEntry?.status === 'loading' && inFlightRequest) {
+        await inFlightRequest;
+        return;
+      }
+
+      setColumnValueDistributionLoading(column);
+
+      const request = (async () => {
+        try {
+          const worker = getDataWorker();
+          const result = await worker.getColumnValueDistribution({ column });
+          setColumnValueDistributionResult(result);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : 'Failed to load column value counts';
+          setColumnValueDistributionError(column, message);
+          reportAppError('Failed to load column value counts', error, {
+            operation: 'grid.headerValueDistribution',
+            context: { column },
+            retry: () => loadColumnValueDistribution(column)
+          });
+        } finally {
+          distributionRequestsRef.current.delete(column);
+        }
+      })();
+
+      distributionRequestsRef.current.set(column, request);
+      await request;
+    },
+    [
+      completeValueFrequencyIndexing,
+      setColumnValueDistributionError,
+      setColumnValueDistributionLoading,
+      setColumnValueDistributionResult
+    ]
+  );
+
+  useEffect(() => {
+    if (status !== 'ready') {
+      distributionPreloadVersionRef.current = null;
+      return;
+    }
+
+    const eligibleColumns = columns.filter(
+      (column) =>
+        column.key !== TAG_COLUMN_ID &&
+        DISTRIBUTION_SUPPORTED_TYPES.has(column.type)
+    );
+
+    if (distributionPreloadVersionRef.current === viewVersion) {
+      return;
+    }
+
+    distributionPreloadVersionRef.current = viewVersion;
+    let cancelled = false;
+
+    const preloadDistributions = async () => {
+      startValueFrequencyIndexing(eligibleColumns.length);
+      let completedColumns = 0;
+
+      for (const column of eligibleColumns) {
+        if (cancelled) {
+          return;
+        }
+
+        await loadColumnValueDistribution(column.key);
+        completedColumns += 1;
+        setValueFrequencyIndexingProgress(completedColumns);
+      }
+
+      if (!cancelled) {
+        completeValueFrequencyIndexing();
+      }
+    };
+
+    void preloadDistributions();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    columns,
+    completeValueFrequencyIndexing,
+    loadColumnValueDistribution,
+    setValueFrequencyIndexingProgress,
+    startValueFrequencyIndexing,
+    status,
+    viewVersion
+  ]);
+
+  useEffect(() => {
+    if (!contextMenu || contextMenu.kind !== 'header') {
+      return;
+    }
+
+    const column = columns.find((entry) => entry.key === contextMenu.columnId);
+    if (!column || !DISTRIBUTION_SUPPORTED_TYPES.has(column.type)) {
+      return;
+    }
+
+    if (activeHeaderDistributionEntry == null) {
+      void loadColumnValueDistribution(contextMenu.columnId);
+    }
+  }, [activeHeaderDistributionEntry, columns, contextMenu, loadColumnValueDistribution]);
+
   const getSelectedRowIds = useCallback((): number[] => {
     if (!gridApi || typeof gridApi.getSelectedNodes !== 'function') {
       return [];
@@ -1242,6 +1489,71 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
 
     return Array.from(new Set(ids));
   }, [gridApi]);
+
+  const getSelectedHeaderDistributionValues = useCallback(
+    (columnId: string): Set<string> =>
+      new Set(
+        filters
+          .filter(
+            (filter) =>
+              filter.enabled !== false && filter.column === columnId && filter.operator === 'eq'
+          )
+          .map((filter) => String(filter.value ?? ''))
+      ),
+    [filters]
+  );
+
+  const handleToggleHeaderDistributionValue = useCallback(
+    (columnId: string, value: string) => {
+      const selectedValues = getSelectedHeaderDistributionValues(columnId);
+      const isSelected = selectedValues.has(value);
+      let nextFilters = filters.filter(
+        (filter) =>
+          !(
+            filter.column === columnId &&
+            filter.operator === 'eq' &&
+            String(filter.value ?? '') === value
+          )
+      );
+
+      if (!isSelected) {
+        nextFilters = [
+          ...nextFilters,
+          {
+            id: crypto.randomUUID(),
+            column: columnId,
+            operator: 'eq',
+            value,
+            caseSensitive: false,
+            enabled: true
+          }
+        ];
+      }
+
+      void applyFilters(nextFilters);
+    },
+    [applyFilters, filters, getSelectedHeaderDistributionValues]
+  );
+
+  const handleOnlyHeaderDistributionValue = useCallback(
+    (columnId: string, value: string) => {
+      const nextFilters = filters.filter(
+        (filter) => !(filter.column === columnId && filter.operator === 'eq')
+      );
+
+      nextFilters.push({
+        id: crypto.randomUUID(),
+        column: columnId,
+        operator: 'eq',
+        value,
+        caseSensitive: false,
+        enabled: true
+      });
+
+      void applyFilters(nextFilters);
+    },
+    [applyFilters, filters]
+  );
 
   const handleFilterIn = useCallback(() => {
     if (!contextMenu || contextMenu.kind !== 'cell' || !menuMetadata) {
@@ -1436,10 +1748,25 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
     const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
 
     if (contextMenu.kind === 'header') {
+      const headerColumn = columns.find((column) => column.key === contextMenu.columnId);
+      const distributionEntry = activeHeaderDistributionEntry;
+      const supportsDistribution =
+        headerColumn != null &&
+        headerColumn.key !== TAG_COLUMN_ID &&
+        DISTRIBUTION_SUPPORTED_TYPES.has(headerColumn.type);
+      const distributionResult = distributionEntry?.result;
+      const distributionSort =
+        headerDistributionSort[contextMenu.columnId] ??
+        distributionResult?.defaultSort ??
+        'desc';
+      const selectedDistributionValues = getSelectedHeaderDistributionValues(contextMenu.columnId);
+      const sortedDistributionItems = distributionResult
+        ? sortDistributionItems(distributionResult.items, distributionSort)
+        : [];
       const menu = (
       <div
       data-grid-context-menu="true"
-      className="fixed z-[10000] min-w-[14rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
+      className="fixed z-[10000] min-w-[16rem] max-w-[18rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
       style={{ top: contextMenu.y, left: contextMenu.x }}
       onMouseDown={(event) => event.stopPropagation()}
       >
@@ -1455,6 +1782,127 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
           >
             Hide column
           </button>
+          {supportsDistribution ? (
+            <div className="mt-1 border-t border-slate-800 pt-1">
+              <div className="flex items-center justify-between px-2 py-1">
+                <div className="text-[10px] uppercase tracking-wide text-slate-500">
+                  Value counts
+                </div>
+                <button
+                  type="button"
+                  className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300"
+                  onClick={() =>
+                    setHeaderDistributionSort((current) => ({
+                      ...current,
+                      [contextMenu.columnId]:
+                        distributionSort === 'desc' ? 'asc' : 'desc'
+                    }))
+                  }
+                >
+                  {distributionSort === 'desc' ? 'Most common' : 'Least common'}
+                </button>
+              </div>
+              {distributionEntry?.status === 'loading' ? (
+                <div className="px-2 py-1 text-[11px] text-slate-400">Loading value counts…</div>
+              ) : null}
+              {distributionEntry?.status === 'error' ? (
+                <div className="px-2 py-1">
+                  <div className="text-[11px] text-red-400">
+                    {distributionEntry.error ?? 'Failed to load value counts'}
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-1 rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300"
+                    onClick={() => void loadColumnValueDistribution(contextMenu.columnId)}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : null}
+              {distributionEntry?.status === 'ready' && distributionResult?.skipped ? (
+                <div className="px-2 py-1 text-[11px] text-slate-400">
+                  {distributionResult.skipReason ?? 'Too many unique values'}
+                </div>
+              ) : null}
+              {distributionEntry?.status === 'ready' &&
+              !distributionResult?.skipped &&
+              sortedDistributionItems.length > 0 ? (
+                <div
+                  className="max-h-52 overflow-y-auto overscroll-contain px-1 pb-1"
+                  onWheelCapture={(event) => event.stopPropagation()}
+                >
+                  {sortedDistributionItems.map((item) => {
+                    const isSelected = selectedDistributionValues.has(item.value);
+                    const showOnlyMe =
+                      hoveredDistributionValue?.columnId === contextMenu.columnId &&
+                      hoveredDistributionValue.value === item.value;
+
+                    return (
+                      <div
+                        key={`${contextMenu.columnId}:${item.value}`}
+                        className={`flex items-center gap-2 rounded px-2 py-1 ${
+                          isSelected ? 'bg-cyan-950/30' : 'hover:bg-slate-800'
+                        }`}
+                        onMouseEnter={() =>
+                          setHoveredDistributionValue({
+                            columnId: contextMenu.columnId,
+                            value: item.value
+                          })
+                        }
+                        onMouseLeave={() => setHoveredDistributionValue(null)}
+                      >
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                          onClick={() =>
+                            handleToggleHeaderDistributionValue(contextMenu.columnId, item.value)
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            readOnly
+                            checked={isSelected}
+                            className="h-3.5 w-3.5 shrink-0"
+                            aria-label={`Select ${item.value || '(empty string)'}`}
+                          />
+                          <span className="truncate">{item.value || '(empty string)'}</span>
+                          <span className="shrink-0 text-[10px] text-slate-400">
+                            {item.count.toLocaleString()}
+                          </span>
+                        </button>
+                        {showOnlyMe ? (
+                          <button
+                            type="button"
+                            className="shrink-0 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-200 hover:bg-slate-700"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleOnlyHeaderDistributionValue(
+                                contextMenu.columnId,
+                                item.value
+                              );
+                            }}
+                          >
+                            Only Me
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {distributionEntry?.status === 'ready' &&
+              !distributionResult?.skipped &&
+              sortedDistributionItems.length === 0 ? (
+                <div className="px-2 py-1 text-[11px] text-slate-400">
+                  No repeated values found.
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="mt-1 border-t border-slate-800 px-2 py-2 text-[11px] text-slate-500">
+              Value counts are available for string and boolean columns.
+            </div>
+          )}
         </div>
       );
 
@@ -1633,7 +2081,7 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   className={`${themeClass} h-full w-full`}
   style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
     onContextMenu={handleContainerContextMenu}
-    >
+  >
       {showPlaceholder ? (
         <div className="flex h-full items-center justify-center text-sm text-slate-500">
           {emptyStateMessage}
@@ -1687,4 +2135,6 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
   );
 };
 
-export default DataGrid;
+const MemoizedDataGrid = memo(DataGrid);
+
+export default MemoizedDataGrid;

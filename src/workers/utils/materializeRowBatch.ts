@@ -19,10 +19,8 @@ export interface MaterializedRow extends Record<string, unknown> {
 
 const decodeStringColumn = (column: StringColumnBatch): string[] => {
   const offsets = column.offsets;
-  const buffer = column.data;
   const values: string[] = [];
-  const dataStart = offsets.length * Uint32Array.BYTES_PER_ELEMENT;
-  const dataView = new Uint8Array(buffer, dataStart);
+  const dataView = new Uint8Array(column.data);
 
   for (let index = 0; index < offsets.length - 1; index += 1) {
     const start = offsets[index] ?? 0;

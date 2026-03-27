@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseDelimitedStream } from './csvParser';
+import { materializeRowBatch } from './utils/materializeRowBatch';
 import type {
   ColumnBatch,
   NumberColumnBatch,
@@ -16,7 +17,7 @@ const decodeStringColumn = (column: ColumnBatch): string[] => {
   const stringColumn = column as StringColumnBatch;
   const offsets = stringColumn.offsets;
   const values: string[] = [];
-  const dataView = new Uint8Array(stringColumn.data, offsets.length * Uint32Array.BYTES_PER_ELEMENT);
+  const dataView = new Uint8Array(stringColumn.data);
 
   for (let index = 0; index < offsets.length - 1; index += 1) {
     const start = offsets[index]!;
@@ -138,5 +139,23 @@ describe('parseDelimitedStream', () => {
     expect(decodeStringColumn(batch.columns.col1)).toEqual(['Value;One', 'Fourth']);
     expect(decodeStringColumn(batch.columns.col2)).toEqual(['Second', 'Fifth;Value']);
     expect(decodeStringColumn(batch.columns.col3)).toEqual(['Third', 'Sixth']);
+  });
+
+  it('round-trips UTF-8 string columns through materialization with separate offsets and data', async () => {
+    const chunks = ['city,note\nMontréal,"emoji 🚀"\n東京,"café crème"\n'];
+
+    const { batches } = await collectBatches(chunks, { batchSize: 10 });
+    expect(batches).toHaveLength(1);
+
+    const batch = batches[0]!;
+    expect(batch.columns.city.type).toBe('string');
+
+    const cityColumn = batch.columns.city as StringColumnBatch;
+    expect(cityColumn.data.byteLength).toBe(textEncoder.encode('Montréal東京').byteLength);
+    expect(cityColumn.offsets).toEqual(new Uint32Array([0, 9, 15]));
+
+    const materialized = materializeRowBatch(batch).rows;
+    expect(materialized.map((row) => row.city)).toEqual(['Montréal', '東京']);
+    expect(materialized.map((row) => row.note)).toEqual(['emoji 🚀', 'café crème']);
   });
 });

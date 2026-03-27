@@ -13,6 +13,7 @@ import {
   evaluateFilterMenuMetadata,
   formatClipboardCellValue,
   getHeaderContextMenuColumnId,
+  isWithinGridContextMenu,
   buildSortStateFromColumnState,
   getNextRowIndex,
   getEmptyStateMessage,
@@ -195,6 +196,13 @@ describe('MarkdownTooltip', () => {
 
   it('returns null when value is null', () => {
     const mockParams = createMockParams(null);
+    const { container } = render(<MarkdownTooltip {...mockParams} />);
+
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('returns null for non-tag tooltip values', () => {
+    const mockParams = createMockParams('plain text' as unknown as TagCellValue);
     const { container } = render(<MarkdownTooltip {...mockParams} />);
 
     expect(container.firstChild).toBeNull();
@@ -437,5 +445,23 @@ describe('getHeaderContextMenuColumnId', () => {
     cell.setAttribute('col-id', 'status');
 
     expect(getHeaderContextMenuColumnId(cell)).toBeNull();
+  });
+});
+
+describe('isWithinGridContextMenu', () => {
+  it('returns true for descendants of the context menu overlay', () => {
+    const menu = document.createElement('div');
+    menu.setAttribute('data-grid-context-menu', 'true');
+    const child = document.createElement('button');
+    menu.appendChild(child);
+
+    expect(isWithinGridContextMenu(child)).toBe(true);
+  });
+
+  it('returns false for targets outside the context menu overlay', () => {
+    const outside = document.createElement('div');
+
+    expect(isWithinGridContextMenu(outside)).toBe(false);
+    expect(isWithinGridContextMenu(null)).toBe(false);
   });
 });

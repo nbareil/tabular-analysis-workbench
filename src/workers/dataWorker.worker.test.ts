@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createDataWorkerApi } from './dataWorker.worker';
 import { createDatasetFingerprint } from './datasetFingerprint';
+import { RowBatchStore } from './rowBatchStore';
 import type { LoadCompleteSummary } from './workerApiTypes';
 import type { FilterNode } from './types';
 import { createMockFileHandle } from './test/mockFileHandle';
@@ -196,5 +197,127 @@ describe('dataWorkerApi integration harness', () => {
 
     const searchWindow = await worker.fetchRows({ offset: 0, limit: 10 });
     expect(searchWindow.rows.map((row) => row.name)).toEqual(['Alice', 'Dave']);
+  });
+
+  it('returns column value distributions for repeated string values', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle('city\nParis\nLondon\nParis\nParis\nLondon\n');
+    await worker.loadFile({ handle }, {});
+
+    const distribution = await worker.getColumnValueDistribution({ column: 'city' });
+
+    expect(distribution).toEqual({
+      column: 'city',
+      totalRows: 5,
+      nonNullRows: 5,
+      distinctCount: 2,
+      skipped: false,
+      defaultSort: 'desc',
+      items: [
+        { value: 'Paris', count: 3 },
+        { value: 'London', count: 2 }
+      ]
+    });
+  });
+
+  it('preserves fetched UTF-8 string rows before and after frequency indexing traversal', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle(
+      'city,note\nMünchen,"emoji 🚀"\nQuébec,"café crème"\n東京,"night shift"\nMünchen,"repeat"\nQuébec,"follow up"\nMünchen,"late shift"\n'
+    );
+    await worker.loadFile({ handle, batchSize: 1 }, {});
+
+    const before = await worker.fetchRows({ offset: 0, limit: 6 });
+    expect(before.rows.map((row) => row.city)).toEqual([
+      'München',
+      'Québec',
+      '東京',
+      'München',
+      'Québec',
+      'München'
+    ]);
+    expect(before.rows.map((row) => row.note)).toEqual([
+      'emoji 🚀',
+      'café crème',
+      'night shift',
+      'repeat',
+      'follow up',
+      'late shift'
+    ]);
+
+    const distribution = await worker.getColumnValueDistribution({ column: 'city' });
+    expect(distribution.items[0]).toEqual({ value: 'München', count: 3 });
+
+    const after = await worker.fetchRows({ offset: 0, limit: 6 });
+    expect(after.rows.map((row) => row.city)).toEqual([
+      'München',
+      'Québec',
+      '東京',
+      'München',
+      'Québec',
+      'München'
+    ]);
+    expect(after.rows.map((row) => row.note)).toEqual([
+      'emoji 🚀',
+      'café crème',
+      'night shift',
+      'repeat',
+      'follow up',
+      'late shift'
+    ]);
+  });
+
+  it('reuses the cached value distribution for repeated requests on the same column', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle('city\nParis\nLondon\nParis\nParis\nLondon\n');
+    await worker.loadFile({ handle }, {});
+
+    const iterateSpy = vi.spyOn(RowBatchStore.prototype, 'iterateMaterializedBatches');
+
+    const first = await worker.getColumnValueDistribution({ column: 'city' });
+    const second = await worker.getColumnValueDistribution({ column: 'city' });
+
+    expect(second).toEqual(first);
+    expect(iterateSpy).toHaveBeenCalledTimes(1);
+
+    iterateSpy.mockRestore();
+  });
+
+  it('skips value distributions when distinct values exceed 50 percent of total rows', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle('name\nalpha\nbeta\ngamma\ndelta\nalpha\nzeta\n');
+    await worker.loadFile({ handle }, {});
+
+    const distribution = await worker.getColumnValueDistribution({ column: 'name' });
+
+    expect(distribution.skipped).toBe(true);
+    expect(distribution.distinctCount).toBe(5);
+    expect(distribution.items).toEqual([]);
+    expect(distribution.skipReason).toBe('Too many unique values');
+  });
+
+  it('keeps value distributions when distinct values stay at or below 50 percent', async () => {
+    const worker = createDataWorkerApi();
+    await worker.init({});
+
+    const handle = createMockFileHandle('active\ntrue\nfalse\ntrue\nfalse\n');
+    await worker.loadFile({ handle }, {});
+
+    const distribution = await worker.getColumnValueDistribution({ column: 'active' });
+
+    expect(distribution.skipped).toBe(false);
+    expect(distribution.distinctCount).toBe(2);
+    expect(distribution.items).toEqual([
+      { value: 'false', count: 2 },
+      { value: 'true', count: 2 }
+    ]);
   });
 });

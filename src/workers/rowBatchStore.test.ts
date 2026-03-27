@@ -1,9 +1,19 @@
+// @vitest-environment node
+
 import { describe, expect, it } from 'vitest';
 
 import { RowBatchStore } from './rowBatchStore';
 import type { RowBatch } from './types';
 
 const textEncoder = new TextEncoder();
+
+const toUint8Array = (source: BufferSource): Uint8Array => {
+  if (source instanceof ArrayBuffer) {
+    return new Uint8Array(source);
+  }
+
+  return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+};
 
 class MockWritable {
   public writes: BufferSource[] = [];
@@ -23,6 +33,24 @@ class MockFileHandle {
 
   async createWritable(): Promise<FileSystemWritableFileStream> {
     return this.writable as unknown as FileSystemWritableFileStream;
+  }
+
+  async getFile(): Promise<File> {
+    const chunks = this.writable.writes.map(toUint8Array);
+    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+    const arrayBuffer = new ArrayBuffer(totalLength);
+    const bytes = new Uint8Array(arrayBuffer);
+    let offset = 0;
+
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    return {
+      size: bytes.byteLength,
+      arrayBuffer: async () => arrayBuffer.slice(0)
+    } as unknown as File;
   }
 }
 
@@ -45,13 +73,13 @@ class MockDirectoryHandle {
 
 const createStringBatch = (rowId: number, value: string): RowBatch => {
   const encoded = textEncoder.encode(value);
-  const rowCount = 1;
-  const buffer = new ArrayBuffer((rowCount + 1) * Uint32Array.BYTES_PER_ELEMENT + encoded.byteLength);
-  const offsets = new Uint32Array(buffer, 0, rowCount + 1);
+  const offsets = new Uint32Array(2);
   offsets[0] = 0;
   offsets[1] = encoded.byteLength;
-  const dataView = new Uint8Array(buffer, offsets.byteLength);
-  dataView.set(encoded);
+  const data = encoded.buffer.slice(
+    encoded.byteOffset,
+    encoded.byteOffset + encoded.byteLength
+  );
 
   return {
     rowIds: new Uint32Array([rowId]),
@@ -59,7 +87,7 @@ const createStringBatch = (rowId: number, value: string): RowBatch => {
       value: {
         type: 'string',
         offsets,
-        data: buffer
+        data
       }
     },
     columnTypes: {
@@ -196,5 +224,24 @@ describe('RowBatchStore OPFS writes', () => {
     expect(nullMaskChunk.buffer).toBe(nullMask.buffer);
     expect(nullMaskChunk.byteOffset).toBe(nullMask.byteOffset);
     expect(nullMaskChunk.byteLength).toBe(nullMask.byteLength);
+  });
+
+  it('materializes evicted UTF-8 string batches correctly after disk reload', async () => {
+    const store = await RowBatchStore.create('opfs-eviction-dataset');
+    const directoryHandle = new MockDirectoryHandle();
+    (store as unknown as { useMemoryFallback: boolean }).useMemoryFallback = false;
+    (store as unknown as { directoryHandle: FileSystemDirectoryHandle | null }).directoryHandle =
+      directoryHandle as unknown as FileSystemDirectoryHandle;
+
+    const values = ['München', 'Québec', '東京', 'emoji 🚀', 'café crème'];
+
+    for (let index = 0; index < values.length; index += 1) {
+      await store.storeBatch(createStringBatch(index, values[index]!));
+    }
+
+    const rows = await store.materializeRows([0, 1, 2, 3, 4]);
+
+    expect(rows.map((row) => row.__rowId)).toEqual([0, 1, 2, 3, 4]);
+    expect(rows.map((row) => row.value)).toEqual(values);
   });
 });

@@ -107,10 +107,8 @@ const createStringColumnBatch = (values: string[]): StringColumnBatch => {
     offsets[index + 1] = byteOffset;
   }
 
-  const buffer = new ArrayBuffer(offsets.byteLength + byteOffset);
-  const offsetsView = new Uint32Array(buffer, 0, offsets.length);
-  offsetsView.set(offsets);
-  const dataView = new Uint8Array(buffer, offsets.byteLength);
+  const data = new ArrayBuffer(byteOffset);
+  const dataView = new Uint8Array(data);
 
   let writeOffset = 0;
   for (const encoded of encodedValues) {
@@ -120,8 +118,8 @@ const createStringColumnBatch = (values: string[]): StringColumnBatch => {
 
   return {
     type: 'string',
-    data: buffer,
-    offsets: offsetsView
+    data,
+    offsets
   };
 };
 
