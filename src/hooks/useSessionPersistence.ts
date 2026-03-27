@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useSessionStore, getSessionSnapshot, type SessionSnapshot } from '@state/sessionStore';
+import { isStoredDataFlushInProgress } from '@utils/persistenceReset';
 import { saveSessionSnapshot, loadSessionSnapshot } from '@utils/sessionPersistence';
 import { AutoSaveScheduler } from '@utils/autoSaveScheduler';
 
@@ -121,6 +122,10 @@ export const useSessionPersistence = (
   }, [enabled]);
 
   const persistSnapshot = useCallback(async () => {
+    if (isStoredDataFlushInProgress()) {
+      return;
+    }
+
     if (!dirtyRef.current || savingRef.current || !enabled) {
       return;
     }
@@ -174,7 +179,7 @@ export const useSessionPersistence = (
     }
 
     const handle = () => {
-      if (dirtyRef.current) {
+      if (dirtyRef.current && !isStoredDataFlushInProgress()) {
         void persistSnapshot();
       }
     };

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import {
@@ -12,9 +12,14 @@ import { useSessionStore } from '@state/sessionStore';
 interface OptionsPanelProps {
   open: boolean;
   onClose: () => void;
+  onFlushStoredData: () => Promise<void>;
 }
 
-const OptionsPanel = ({ open, onClose }: OptionsPanelProps): JSX.Element | null => {
+const OptionsPanel = ({
+  open,
+  onClose,
+  onFlushStoredData
+}: OptionsPanelProps): JSX.Element | null => {
   const interfaceFontFamily = useSessionStore((state) => state.interfaceFontFamily);
   const interfaceFontSize = useSessionStore((state) => state.interfaceFontSize);
   const dataFontFamily = useSessionStore((state) => state.dataFontFamily);
@@ -23,6 +28,8 @@ const OptionsPanel = ({ open, onClose }: OptionsPanelProps): JSX.Element | null 
   const setInterfaceFontSize = useSessionStore((state) => state.setInterfaceFontSize);
   const setDataFontFamily = useSessionStore((state) => state.setDataFontFamily);
   const setDataFontSize = useSessionStore((state) => state.setDataFontSize);
+  const [flushState, setFlushState] = useState<'idle' | 'pending' | 'done'>('idle');
+  const [flushError, setFlushError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -40,6 +47,13 @@ const OptionsPanel = ({ open, onClose }: OptionsPanelProps): JSX.Element | null 
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (open) {
+      setFlushState('idle');
+      setFlushError(null);
+    }
+  }, [open]);
 
   if (!open) {
     return null;
@@ -61,6 +75,23 @@ const OptionsPanel = ({ open, onClose }: OptionsPanelProps): JSX.Element | null 
   const handleDataFontSizeChange = (value: string) => {
     const parsed = Number.parseFloat(value);
     setDataFontSize(clampFontSize(Number.isFinite(parsed) ? parsed : NaN));
+  };
+
+  const handleFlushStoredData = async () => {
+    if (flushState === 'pending') {
+      return;
+    }
+
+    setFlushError(null);
+    setFlushState('pending');
+
+    try {
+      await onFlushStoredData();
+      setFlushState('done');
+    } catch (error) {
+      setFlushError(error instanceof Error ? error.message : 'Failed to delete stored data.');
+      setFlushState('idle');
+    }
   };
 
   const activeInterfaceFont = getFontOption(interfaceFontFamily);
@@ -180,6 +211,42 @@ const OptionsPanel = ({ open, onClose }: OptionsPanelProps): JSX.Element | null 
                 sample_value,2024-01-01T00:00:00Z,42
               </span>
             </div>
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-rose-900/60 pt-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-rose-300">
+              Stored data
+            </h3>
+            <p className="text-xs text-slate-400">
+              Delete saved session snapshots, cached row batches, row indexes, annotations, and
+              local browser settings for this app.
+            </p>
+            <div className="flex items-center justify-between gap-3 rounded border border-rose-900/60 bg-rose-950/20 px-3 py-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-rose-100">Flush stored data</p>
+                <p className="text-xs text-rose-200/80">
+                  Use this if stale browser storage is causing corrupted reloads.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="shrink-0 rounded border border-rose-600 px-3 py-2 text-xs font-semibold text-rose-100 hover:bg-rose-900/40 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={handleFlushStoredData}
+                disabled={flushState === 'pending' || flushState === 'done'}
+              >
+                {flushState === 'pending'
+                  ? 'Flushing…'
+                  : flushState === 'done'
+                    ? 'Reloading…'
+                    : 'Flush'}
+              </button>
+            </div>
+            {flushState === 'pending' && (
+              <p className="text-xs text-slate-500">
+                Clearing stored browser data and restarting the workspace…
+              </p>
+            )}
+            {flushError && <p className="text-xs text-rose-300">{flushError}</p>}
           </div>
         </section>
       </div>

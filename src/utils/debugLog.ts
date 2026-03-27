@@ -1,6 +1,6 @@
 type DebugPayload = Record<string, unknown>;
 
-const DEBUG_STORAGE_KEY = 'tabularWorkbenchDebug';
+export const DEBUG_STORAGE_KEY = 'tabularWorkbenchDebug';
 
 declare global {
   interface Window {

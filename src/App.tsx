@@ -31,12 +31,14 @@ import {
 import { saveBlobFile, saveJsonFile } from '@utils/fileAccess';
 import { buildTagExportFilename } from '@utils/tagExport';
 import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
+import { clearStoredData } from '@utils/clearStoredData';
 import { useSessionPersistence } from '@/hooks/useSessionPersistence';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useGlobalSearchSync } from '@/hooks/useGlobalSearchSync';
 import { useAutoFileLoader } from '@/hooks/useAutoFileLoader';
 import { formatBytes } from '@utils/formatBytes';
 import { reportAppError } from '@utils/diagnostics';
+import { isStoredDataFlushInProgress } from '@utils/persistenceReset';
 import { useDiagnosticsReporter } from '@/hooks/useDiagnosticsReporter';
 
 const formatTime = (timestamp: number): string => {
@@ -255,6 +257,10 @@ const AppShell = ({
 
           // Persist tags on page unload
           const handleBeforeUnload = async () => {
+            if (isStoredDataFlushInProgress()) {
+              return;
+            }
+
             try {
               await worker.persistTags();
             } catch (error) {
@@ -374,6 +380,22 @@ const AppShell = ({
         .map((column) => column.key),
     [columnLayout.visibility, columns]
   );
+
+  const handleFlushStoredData = useCallback(async () => {
+    await clearStoredData();
+    setOptionsOpen(false);
+    setLabelsOpen(false);
+    setColumnsOpen(false);
+    setNoteEditor(null);
+    setNoteSaving(false);
+    useTagStore.getState().reset();
+    useDataStore.getState().reset();
+    useSessionStore.getState().clear();
+
+    if (typeof window !== 'undefined') {
+      window.location.reload();
+    }
+  }, []);
 
   const addFilterFromShortcut = useCallback((): boolean => {
     const newFilter = buildNewFilter({
@@ -1051,7 +1073,11 @@ const AppShell = ({
           </footer>
         </section>
       </main>
-      <OptionsPanel open={optionsOpen} onClose={() => setOptionsOpen(false)} />
+      <OptionsPanel
+        open={optionsOpen}
+        onClose={() => setOptionsOpen(false)}
+        onFlushStoredData={handleFlushStoredData}
+      />
       <LabelsPanel open={labelsOpen} onClose={() => setLabelsOpen(false)} />
       <ColumnsPanel open={columnsOpen} onClose={() => setColumnsOpen(false)} />
       <TagNotePanel

@@ -8,7 +8,7 @@ interface AppState {
   toggleTheme: () => void;
 }
 
-const THEME_STORAGE_KEY = 'wlx:theme';
+export const THEME_STORAGE_KEY = 'wlx:theme';
 
 const readInitialTheme = (): ThemeMode => {
   if (typeof window === 'undefined') {

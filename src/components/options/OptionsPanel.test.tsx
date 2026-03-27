@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 
 import OptionsPanel from './OptionsPanel';
 import { useSessionStore } from '@state/sessionStore';
@@ -20,7 +20,7 @@ describe('OptionsPanel', () => {
   });
 
   it('renders font options when open', () => {
-    render(<OptionsPanel open onClose={() => {}} />);
+    render(<OptionsPanel open onClose={() => {}} onFlushStoredData={async () => {}} />);
 
     expect(screen.getByText('Options')).toBeInTheDocument();
     const select = screen.getByLabelText(/interface font/i);
@@ -29,7 +29,9 @@ describe('OptionsPanel', () => {
   });
 
   it('updates font preference through the dropdown', () => {
-    const { unmount } = render(<OptionsPanel open onClose={() => {}} />);
+    const { unmount } = render(
+      <OptionsPanel open onClose={() => {}} onFlushStoredData={async () => {}} />
+    );
 
     const interfaceSelect = screen.getByLabelText(/interface font/i);
     const dataSelect = screen.getByLabelText(/data font/i);
@@ -58,5 +60,17 @@ describe('OptionsPanel', () => {
     expect(useSessionStore.getState().dataFontSize).toBe(20);
 
     unmount();
+  });
+
+  it('calls the flush handler from the stored data section', async () => {
+    const flush = vi.fn().mockResolvedValue(undefined);
+
+    render(<OptionsPanel open onClose={() => {}} onFlushStoredData={flush} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Flush' }));
+    });
+
+    expect(flush).toHaveBeenCalledTimes(1);
   });
 });

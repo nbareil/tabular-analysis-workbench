@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useSessionPersistence } from './useSessionPersistence';
 import { useSessionStore, type SessionSnapshot } from '@state/sessionStore';
+import { resetStoredDataFlushStateForTests } from '@utils/persistenceReset';
 
 const mockLoadSessionSnapshot = vi.fn();
 const mockSaveSessionSnapshot = vi.fn();
@@ -43,6 +44,7 @@ const buildSnapshot = (
 
 describe('useSessionPersistence', () => {
   beforeEach(() => {
+    resetStoredDataFlushStateForTests();
     mockLoadSessionSnapshot.mockReset();
     mockSaveSessionSnapshot.mockReset();
     mockSaveSessionSnapshot.mockResolvedValue({ updatedAt: Date.now() });
