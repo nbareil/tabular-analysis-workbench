@@ -1,3 +1,5 @@
+import { buildDatasetStorageKey, createDatasetFingerprint } from './datasetFingerprint';
+
 const INDEX_DIRECTORY = 'row-index';
 const INDEX_VERSION = 1;
 const HEADER_WORDS = 5;
@@ -71,14 +73,12 @@ class NoopRowIndexStore implements RowIndexRecorder {
   }
 }
 
-const sanitizeFileName = (name: string): string => {
-  return name.replace(/[^a-zA-Z0-9._-]/g, '_') || 'row_index';
-};
-
 const getIndexFileHandle = async (source: FileSystemFileHandle): Promise<FileSystemFileHandle> => {
   const root = await navigator.storage.getDirectory();
   const dir = await root.getDirectoryHandle(INDEX_DIRECTORY, { create: true });
-  const fileName = `${sanitizeFileName(source.name)}.bin`;
+  const file = await source.getFile();
+  const fingerprint = createDatasetFingerprint(file, source);
+  const fileName = `${buildDatasetStorageKey(fingerprint)}.bin`;
   return dir.getFileHandle(fileName, { create: true });
 };
 

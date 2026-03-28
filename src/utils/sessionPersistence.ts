@@ -1,12 +1,18 @@
 import type { SessionSnapshot } from '@state/sessionStore';
 import { supportsOpfs } from './capabilities';
+import { clearPersistedFileData } from './clearStoredData';
 import { enforceOpfsBudget } from './opfsQuotaManager';
+import {
+  SESSION_RETENTION_LAST_ACTIVE_BY_FILE_STORAGE_KEY,
+  SESSION_RETENTION_MS
+} from './persistenceRetention';
 import {
   ACTIVE_HANDLE_KEY,
   clearActiveFileHandle,
   loadActiveFileHandle,
   persistActiveFileHandle
 } from './sessionHandleStore';
+import { buildDatasetStorageKey, createDatasetFingerprint } from '@workers/datasetFingerprint';
 
 const SESSION_DIRECTORY = 'sessions';
 const SESSION_FILE = 'latest.json';
@@ -28,8 +34,100 @@ interface SessionEnvelope {
   updatedAt: number;
   handleKey: string | null;
   fileName: string | null;
+  storageKey: string | null;
   snapshot: PersistableSnapshot;
 }
+
+const readLastActiveByFile = (): Record<string, number> => {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return {};
+  }
+
+  const rawValue = window.localStorage.getItem(SESSION_RETENTION_LAST_ACTIVE_BY_FILE_STORAGE_KEY);
+  if (!rawValue) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter((entry): entry is [string, number] => Number.isFinite(entry[1]))
+    );
+  } catch {
+    return {};
+  }
+};
+
+const writeLastActiveByFile = (value: Record<string, number>): void => {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(
+    SESSION_RETENTION_LAST_ACTIVE_BY_FILE_STORAGE_KEY,
+    JSON.stringify(value)
+  );
+};
+
+const touchLastActiveAt = (storageKey: string | null): void => {
+  if (!storageKey) {
+    return;
+  }
+
+  writeLastActiveByFile({
+    ...readLastActiveByFile(),
+    [storageKey]: Date.now()
+  });
+};
+
+const removeLastActiveAt = (storageKey: string | null): void => {
+  if (!storageKey) {
+    return;
+  }
+
+  const next = readLastActiveByFile();
+  delete next[storageKey];
+  writeLastActiveByFile(next);
+};
+
+const resolveSessionStorageKey = async (
+  fileHandle: FileSystemFileHandle | null
+): Promise<string | null> => {
+  if (!fileHandle) {
+    return null;
+  }
+
+  const file = await fileHandle.getFile();
+  return buildDatasetStorageKey(createDatasetFingerprint(file, fileHandle));
+};
+
+const pruneExpiredPersistedData = async (
+  activeStorageKey: string | null
+): Promise<{ activeStorageKeyExpired: boolean }> => {
+  const entries = Object.entries(readLastActiveByFile());
+  if (entries.length === 0) {
+    return { activeStorageKeyExpired: false };
+  }
+
+  const now = Date.now();
+  let activeStorageKeyExpired = false;
+
+  for (const [storageKey, lastActiveAt] of entries) {
+    if (now - lastActiveAt <= SESSION_RETENTION_MS) {
+      continue;
+    }
+
+    await clearPersistedFileData(storageKey, {
+      clearSessionSnapshots: storageKey === activeStorageKey
+    });
+    removeLastActiveAt(storageKey);
+    if (storageKey === activeStorageKey) {
+      activeStorageKeyExpired = true;
+    }
+  }
+
+  return { activeStorageKeyExpired };
+};
 
 const getSessionDirectory = async (): Promise<FileSystemDirectoryHandle | null> => {
   if (!supportsOpfs()) {
@@ -119,6 +217,7 @@ export const saveSessionSnapshot = async (
 
   try {
     const handleKey = await persistActiveFileHandle(snapshot.fileHandle);
+    const storageKey = await resolveSessionStorageKey(snapshot.fileHandle);
 
     // Rotate previous latest into history if it exists.
     try {
@@ -138,6 +237,7 @@ export const saveSessionSnapshot = async (
       updatedAt: Date.now(),
       handleKey: handleKey,
       fileName: snapshot.fileHandle?.name ?? null,
+      storageKey,
       snapshot: toPersistableSnapshot(snapshot)
     };
 
@@ -145,6 +245,7 @@ export const saveSessionSnapshot = async (
     await enforceOpfsBudget({
       preserve: (entry) => entry.directory === SESSION_DIRECTORY && entry.name === SESSION_FILE
     });
+    touchLastActiveAt(storageKey);
     return { updatedAt: envelope.updatedAt };
   } catch (error) {
     console.warn('[session] Failed to persist snapshot', error);
@@ -177,11 +278,20 @@ export const loadSessionSnapshot = async (): Promise<LoadedSessionSnapshot | nul
       return null;
     }
 
+    const { activeStorageKeyExpired } = await pruneExpiredPersistedData(envelope.storageKey ?? null);
+    if (activeStorageKeyExpired) {
+      return null;
+    }
+
     await enforceOpfsBudget({
       preserve: (entry) => entry.directory === SESSION_DIRECTORY && entry.name === SESSION_FILE
     });
 
     const activeHandle = envelope.handleKey ? await loadActiveFileHandle() : null;
+    const storageKey =
+      envelope.storageKey ??
+      (activeHandle ? await resolveSessionStorageKey(activeHandle) : null);
+    touchLastActiveAt(storageKey);
     return {
       snapshot: {
         ...envelope.snapshot,

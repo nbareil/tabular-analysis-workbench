@@ -1,5 +1,5 @@
 import { parseDelimitedStream, type ParserOptions } from '../csvParser';
-import { createDatasetFingerprint } from '../datasetFingerprint';
+import { buildDatasetStorageKey, createDatasetFingerprint } from '../datasetFingerprint';
 import { detectCompression } from '../utils/detectCompression';
 import { RowBatchStore } from '../rowBatchStore';
 import { RowIndexStore } from '../rowIndexStore';
@@ -85,7 +85,17 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
       }
     }
 
-    datasetKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const fileStart = now();
+    const file = await handle.getFile();
+    const fingerprint = createDatasetFingerprint(file, handle);
+    debugLog('handle.getFile resolved', {
+      durationMs: roundMs(now() - fileStart),
+      name: file.name ?? handle.name ?? 'unknown',
+      size: file.size,
+      type: file.type
+    });
+
+    datasetKey = buildDatasetStorageKey(fingerprint);
     const batchStoreStart = now();
     const batchStore = await RowBatchStore.create(datasetKey);
     debugLog('RowBatchStore.create completed', { durationMs: roundMs(now() - batchStoreStart) });
@@ -96,16 +106,7 @@ export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipe
       fileHandle: handle
     });
 
-    const fileStart = now();
-    const file = await handle.getFile();
-    debugLog('handle.getFile resolved', {
-      durationMs: roundMs(now() - fileStart),
-      name: file.name ?? handle.name ?? 'unknown',
-      size: file.size,
-      type: file.type
-    });
-
-    await state.hydrateTaggingStore(createDatasetFingerprint(file, handle));
+    await state.hydrateTaggingStore(fingerprint);
 
     const compression = detectCompression({
       fileName: file.name ?? handle.name,
