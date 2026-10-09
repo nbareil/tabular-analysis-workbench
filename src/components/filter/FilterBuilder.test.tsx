@@ -6,14 +6,17 @@ import { useDataStore } from '@state/dataStore';
 import type { FilterState } from '@state/sessionStore';
 import { useSessionStore } from '@state/sessionStore';
 import { useTagStore } from '@state/tagStore';
-import type { ColumnInference, LabelDefinition } from '@workers/types';
+import { useUndoStore } from '@state/undoStore';
+import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE, type ColumnInference, type LabelDefinition } from '@workers/types';
 import FilterBuilder, { buildNewFilter } from './FilterBuilder';
 
 const mockApplyFilter = vi.fn();
 const mockGetColumnValueDistribution = vi.fn();
 
-vi.mock('@workers/dataWorkerProxy', () => {
+vi.mock('@workers/dataWorkerProxy', async () => {
+  const actual = await vi.importActual<typeof import('@workers/dataWorkerProxy')>('@workers/dataWorkerProxy');
   return {
+    ...actual,
     getDataWorker: () => ({
       applyFilter: mockApplyFilter,
       getColumnValueDistribution: mockGetColumnValueDistribution
@@ -54,7 +57,8 @@ const datetimeColumn: GridColumn = {
 };
 
 const resetStores = () => {
-  useSessionStore.getState().clear();
+  useSessionStore.getState().openFiles([]);
+  useUndoStore.getState().clear();
   useTagStore.getState().reset();
   useDataStore.getState().reset();
   useTagStore.setState((state) => ({
@@ -95,6 +99,12 @@ describe('buildNewFilter', () => {
     expect(result?.value).toBe('');
   });
 
+  it('skips the label column when choosing the default column', () => {
+    const tagColumn: GridColumn = { ...stringColumn, key: TAG_COLUMN_ID, headerName: 'Label' };
+    const result = buildNewFilter({ columns: [tagColumn, stringColumn], columnInference: {}, tagLabels: [] });
+    expect(result?.column).toBe('name');
+  });
+
   it('initialises datetime filters with between operator and inference bounds', () => {
     const columnInference: Record<string, ColumnInference> = {
       created_at: {
@@ -121,6 +131,92 @@ describe('buildNewFilter', () => {
     expect(result?.value2).toBe(2_000);
     expect(result?.rawValue).toMatch(/T/);
     expect(result?.rawValue2).toMatch(/T/);
+  });
+});
+
+describe('FilterBuilder editing', () => {
+  beforeEach(() => {
+    resetStores();
+    mockApplyFilter.mockReset();
+    mockGetColumnValueDistribution.mockReset();
+    mockApplyFilter.mockResolvedValue({ matchedRows: 12, totalRows: 100, predicateMatchCounts: {} });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it('asks for a dataset when there are no columns', () => {
+    render(<FilterBuilder columns={[]} />);
+    expect(screen.getByText('Load a dataset to configure filters.')).toBeInTheDocument();
+  });
+
+  it('adds a filter as an undoable edit', async () => {
+    render(<FilterBuilder columns={[stringColumn]} />);
+    expect(screen.getByText(/No filters applied/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add Filter' }));
+
+    await waitFor(() => expect(useSessionStore.getState().filters).toHaveLength(1));
+    expect(useSessionStore.getState().filters[0]).toMatchObject({ column: 'name', operator: 'contains' });
+    expect(useUndoStore.getState().past).toHaveLength(1);
+    expect(screen.getByPlaceholderText('Value')).toBeInTheDocument();
+  });
+
+  it('shows per-filter match counts and removes filters', async () => {
+    const filter: FilterState = { id: 'f-1', column: 'name', operator: 'contains', value: 'a', enabled: true };
+    useSessionStore.getState().setFilters([filter]);
+    useDataStore.setState({ filterPredicateMatchCounts: { 'f-1': 1234 } });
+
+    render(<FilterBuilder columns={[stringColumn]} />);
+    expect(screen.getByText(`Matches ${(1234).toLocaleString()} rows`)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(useSessionStore.getState().filters).toEqual([]));
+    expect(mockApplyFilter).toHaveBeenCalledWith({ expression: null });
+  });
+
+  it('marks disabled filters', () => {
+    useSessionStore
+      .getState()
+      .setFilters([{ id: 'f-1', column: 'name', operator: 'contains', value: 'a', enabled: false }]);
+    render(<FilterBuilder columns={[stringColumn]} />);
+    expect(screen.getByText('Filter disabled')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Enabled' })).not.toBeChecked();
+  });
+
+  it('switching to the label column offers labels with exact-match operators', async () => {
+    useSessionStore
+      .getState()
+      .setFilters([{ id: 'f-1', column: 'name', operator: 'contains', value: '', enabled: true }]);
+    render(<FilterBuilder columns={[stringColumn]} />);
+
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: TAG_COLUMN_ID } });
+
+    await waitFor(() =>
+      expect(useSessionStore.getState().filters[0]).toMatchObject({
+        column: TAG_COLUMN_ID,
+        operator: 'eq',
+        value: 'label-1'
+      })
+    );
+    expect(screen.getByRole('option', { name: 'Important' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'No label' })).toHaveAttribute('value', TAG_NO_LABEL_FILTER_VALUE);
+    expect(screen.queryByRole('option', { name: 'contains' })).not.toBeInTheDocument();
+    expect(screen.getByText('Label filters use exact match')).toBeInTheDocument();
+  });
+
+it('switching a text filter with a value to the label column picks a real label', async () => {
+    useSessionStore
+      .getState()
+      .setFilters([{ id: 'f-1', column: 'name', operator: 'contains', value: 'x', enabled: true }]);
+    render(<FilterBuilder columns={[stringColumn]} />);
+
+    fireEvent.change(screen.getByDisplayValue('Name'), { target: { value: TAG_COLUMN_ID } });
+
+    await waitFor(() => expect(useSessionStore.getState().filters[0]?.column).toBe(TAG_COLUMN_ID));
+    expect(useSessionStore.getState().filters[0]?.value).toBe('label-1');
   });
 });
 
@@ -151,14 +247,13 @@ describe('FilterBuilder value distributions', () => {
       value: '',
       enabled: true
     };
-    useSessionStore.setState((state) => ({ ...state, filters: [filter] }));
+    useSessionStore.getState().setFilters([filter]);
     mockGetColumnValueDistribution.mockResolvedValue({
       column: 'name',
       totalRows: 100,
       nonNullRows: 10,
       distinctCount: 2,
       skipped: false,
-      defaultSort: 'desc',
       items: [
         { value: 'beta', count: 5 },
         { value: 'alpha', count: 2 }
@@ -181,14 +276,13 @@ describe('FilterBuilder value distributions', () => {
       value: '',
       enabled: true
     };
-    useSessionStore.setState((state) => ({ ...state, filters: [filter] }));
+    useSessionStore.getState().setFilters([filter]);
     mockGetColumnValueDistribution.mockResolvedValue({
       column: 'name',
       totalRows: 100,
       nonNullRows: 10,
       distinctCount: 2,
       skipped: false,
-      defaultSort: 'desc',
       items: [
         { value: 'beta', count: 5 },
         { value: 'alpha', count: 2 }
@@ -223,14 +317,13 @@ describe('FilterBuilder value distributions', () => {
       value: '',
       enabled: true
     };
-    useSessionStore.setState((state) => ({ ...state, filters: [filter] }));
+    useSessionStore.getState().setFilters([filter]);
     mockGetColumnValueDistribution.mockResolvedValue({
       column: 'active',
       totalRows: 100,
       nonNullRows: 10,
       distinctCount: 2,
       skipped: false,
-      defaultSort: 'desc',
       items: [
         { value: 'true', count: 6 },
         { value: 'false', count: 4 }
@@ -253,7 +346,7 @@ describe('FilterBuilder value distributions', () => {
       value: '',
       enabled: true
     };
-    useSessionStore.setState((state) => ({ ...state, filters: [filter] }));
+    useSessionStore.getState().setFilters([filter]);
     mockGetColumnValueDistribution.mockResolvedValue({
       column: 'name',
       totalRows: 100,
@@ -261,7 +354,6 @@ describe('FilterBuilder value distributions', () => {
       distinctCount: 75,
       skipped: true,
       skipReason: 'Too many unique values',
-      defaultSort: 'desc',
       items: []
     });
 
@@ -278,12 +370,57 @@ describe('FilterBuilder value distributions', () => {
       value: '',
       enabled: true
     };
-    useSessionStore.setState((state) => ({ ...state, filters: [filter] }));
+    useSessionStore.getState().setFilters([filter]);
 
     render(<FilterBuilder columns={[stringColumn]} />);
 
     expect(screen.queryByText('Value counts')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText('Value')).toBeInTheDocument();
+    expect(mockGetColumnValueDistribution).not.toHaveBeenCalled();
+  });
+
+  it('requests a column once even when several filters use it', async () => {
+    useSessionStore.getState().setFilters([
+      { id: 'a', column: 'name', operator: 'eq', value: '', enabled: true },
+      { id: 'b', column: 'name', operator: 'neq', value: '', enabled: true }
+    ]);
+    mockGetColumnValueDistribution.mockResolvedValue({
+      column: 'name',
+      totalRows: 100,
+      nonNullRows: 10,
+      distinctCount: 1,
+      skipped: false,
+      items: [{ value: 'beta', count: 5 }]
+    });
+
+    render(<FilterBuilder columns={[stringColumn]} />);
+
+    expect(await screen.findAllByRole('button', { name: /beta/i })).toHaveLength(2);
+    expect(mockGetColumnValueDistribution).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows load errors with a retry', async () => {
+    useSessionStore.getState().setFilters([{ id: 'a', column: 'name', operator: 'eq', value: '', enabled: true }]);
+    mockGetColumnValueDistribution.mockRejectedValueOnce(new Error('worker busy')).mockResolvedValueOnce({
+      column: 'name',
+      totalRows: 100,
+      nonNullRows: 10,
+      distinctCount: 1,
+      skipped: false,
+      items: [{ value: 'beta', count: 5 }]
+    });
+
+    render(<FilterBuilder columns={[stringColumn]} />);
+
+    expect(await screen.findByText('worker busy')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('button', { name: /beta/i })).toBeInTheDocument();
+  });
+
+  it('does not load value counts until the dataset is ready', () => {
+    useDataStore.setState({ status: 'loading' });
+    useSessionStore.getState().setFilters([{ id: 'a', column: 'name', operator: 'eq', value: '', enabled: true }]);
+    render(<FilterBuilder columns={[stringColumn]} />);
     expect(mockGetColumnValueDistribution).not.toHaveBeenCalled();
   });
 });

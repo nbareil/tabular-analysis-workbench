@@ -55,11 +55,10 @@ const normaliseImportedLabel = (label: LabelDefinition, fallbackTimestamp: numbe
 };
 
 export interface TaggingController {
-  init(): void;
-  clear(): void;
   loadTags(): Promise<TaggingSnapshot>;
   tagRows(request: TagRowsRequest): Promise<TagRowsResponse>;
   clearTag(rowIds: number[]): Promise<TagRowsResponse>;
+  restoreTags(records: Record<number, TagRecord | null>): Promise<TagRowsResponse>;
   updateLabel(request: UpdateLabelRequest): Promise<LabelDefinition>;
   deleteLabel(request: DeleteLabelRequest): Promise<DeleteLabelResponse>;
   exportTags(): Promise<ExportTagsResponse>;
@@ -70,14 +69,6 @@ export interface TaggingController {
 export const createTaggingController = (
   state: DataWorkerStateController
 ): TaggingController => {
-  const init = (): void => {
-    // No-op hook for lifecycle symmetry
-  };
-
-  const clear = (): void => {
-    state.resetTagging();
-  };
-
   const loadTags = async (): Promise<TaggingSnapshot> => ({
     labels: state.tagging.labels,
     tags: state.tagging.tags
@@ -100,40 +91,39 @@ export const createTaggingController = (
     const updated: TagRowsResponse['updated'] = {};
     let mutated = false;
 
-    state.updateTagging((tagging) => {
-      for (const rowId of rowIds) {
-        if (!Number.isFinite(rowId) || rowId < 0) {
-          continue;
-        }
-
-        const existing = tagging.tags[rowId];
-        const record = buildTagRecord({
-          existing,
-          labelIds: resolvedLabelIds,
-          note,
-          mode,
-          timestamp
-        });
-        record.labelIds = record.labelIds.filter((id) => validLabelIds.has(id));
-
-        if (isTagRecordEmpty(record)) {
-          if (existing) {
-            delete tagging.tags[rowId];
-            mutated = true;
-          }
-        } else {
-          const changed =
-            !existing ||
-            existing.note !== record.note ||
-            existing.labelIds.length !== record.labelIds.length ||
-            existing.labelIds.some((id, index) => id !== record.labelIds[index]);
-          tagging.tags[rowId] = record;
-          mutated = mutated || changed;
-        }
-
-        updated[rowId] = record;
+    const tagging = state.tagging;
+    for (const rowId of rowIds) {
+      if (!Number.isFinite(rowId) || rowId < 0) {
+        continue;
       }
-    });
+
+      const existing = tagging.tags[rowId];
+      const record = buildTagRecord({
+        existing,
+        labelIds: resolvedLabelIds,
+        note,
+        mode,
+        timestamp
+      });
+      record.labelIds = record.labelIds.filter((id) => validLabelIds.has(id));
+
+      if (isTagRecordEmpty(record)) {
+        if (existing) {
+          delete tagging.tags[rowId];
+          mutated = true;
+        }
+      } else {
+        const changed =
+          !existing ||
+          existing.note !== record.note ||
+          existing.labelIds.length !== record.labelIds.length ||
+          existing.labelIds.some((id, index) => id !== record.labelIds[index]);
+        tagging.tags[rowId] = record;
+        mutated = mutated || changed;
+      }
+
+      updated[rowId] = record;
+    }
 
     if (mutated) {
       state.markTaggingDirty();
@@ -147,28 +137,44 @@ export const createTaggingController = (
     const updated: TagRowsResponse['updated'] = {};
     let mutated = false;
 
-    state.updateTagging((tagging) => {
-      for (const rowId of rowIds) {
-        if (!Number.isFinite(rowId) || rowId < 0) {
-          continue;
-        }
-
-        if (tagging.tags[rowId]) {
-          delete tagging.tags[rowId];
-          mutated = true;
-        }
-
-        updated[rowId] = {
-          labelIds: [],
-          updatedAt: timestamp
-        };
+    const tagging = state.tagging;
+    for (const rowId of rowIds) {
+      if (!Number.isFinite(rowId) || rowId < 0) {
+        continue;
       }
-    });
+
+      if (tagging.tags[rowId]) {
+        delete tagging.tags[rowId];
+        mutated = true;
+      }
+
+      updated[rowId] = {
+        labelIds: [],
+        updatedAt: timestamp
+      };
+    }
 
     if (mutated) {
       state.markTaggingDirty();
     }
 
+    return { updated };
+  };
+
+  const restoreTags = async (records: Record<number, TagRecord | null>): Promise<TagRowsResponse> => {
+    const updated: TagRowsResponse['updated'] = {};
+    const timestamp = Date.now();
+    for (const [rowKey, record] of Object.entries(records)) {
+      const rowId = Number(rowKey);
+      if (record && !isTagRecordEmpty(record)) {
+        state.tagging.tags[rowId] = { ...record, labelIds: [...record.labelIds] };
+        updated[rowId] = state.tagging.tags[rowId]!;
+      } else {
+        delete state.tagging.tags[rowId];
+        updated[rowId] = { labelIds: [], updatedAt: timestamp };
+      }
+    }
+    state.markTaggingDirty();
     return { updated };
   };
 
@@ -195,14 +201,13 @@ export const createTaggingController = (
       updatedAt: timestamp
     };
 
-    state.updateTagging((tagging) => {
-      const existingIndex = tagging.labels.findIndex((entry) => entry.id === label.id);
-      if (existingIndex >= 0) {
-        tagging.labels[existingIndex] = nextLabel;
-      } else {
-        tagging.labels.push(nextLabel);
-      }
-    });
+    const tagging = state.tagging;
+    const existingIndex = tagging.labels.findIndex((entry) => entry.id === label.id);
+    if (existingIndex >= 0) {
+      tagging.labels[existingIndex] = nextLabel;
+    } else {
+      tagging.labels.push(nextLabel);
+    }
 
     state.markTaggingDirty();
 
@@ -214,30 +219,29 @@ export const createTaggingController = (
     const updated: Record<number, TagRecord> = {};
     let deleted = false;
 
-    state.updateTagging((tagging) => {
-      const before = tagging.labels.length;
-      tagging.labels = tagging.labels.filter((label) => label.id !== labelId);
-      deleted = tagging.labels.length < before;
+    const tagging = state.tagging;
+    const before = tagging.labels.length;
+    tagging.labels = tagging.labels.filter((label) => label.id !== labelId);
+    deleted = tagging.labels.length < before;
 
-      for (const [rowId, record] of Object.entries(tagging.tags)) {
-        const numericRowId = Number(rowId);
-        if (!Number.isFinite(numericRowId) || numericRowId < 0) {
-          continue;
-        }
-
-        if (!record.labelIds.includes(labelId)) {
-          continue;
-        }
-
-        const nextRecord = cascadeLabelDeletion(record, labelId, timestamp);
-        if (isTagRecordEmpty(nextRecord)) {
-          delete tagging.tags[numericRowId];
-        } else {
-          tagging.tags[numericRowId] = nextRecord;
-        }
-        updated[numericRowId] = nextRecord;
+    for (const [rowId, record] of Object.entries(tagging.tags)) {
+      const numericRowId = Number(rowId);
+      if (!Number.isFinite(numericRowId) || numericRowId < 0) {
+        continue;
       }
-    });
+
+      if (!record.labelIds.includes(labelId)) {
+        continue;
+      }
+
+      const nextRecord = cascadeLabelDeletion(record, labelId, timestamp);
+      if (isTagRecordEmpty(nextRecord)) {
+        delete tagging.tags[numericRowId];
+      } else {
+        tagging.tags[numericRowId] = nextRecord;
+      }
+      updated[numericRowId] = nextRecord;
+    }
 
     if (deleted || Object.keys(updated).length > 0) {
       state.markTaggingDirty();
@@ -248,7 +252,7 @@ export const createTaggingController = (
 
   const exportTags = async (): Promise<ExportTagsResponse> => {
     const exportedAt = Date.now();
-    const fileName = state.dataset.fileHandle?.name ?? null;
+    const fileName = state.dataset.fileName;
     const rowCount =
       typeof state.dataset.totalRows === 'number' && Number.isFinite(state.dataset.totalRows)
         ? Math.max(0, state.dataset.totalRows)
@@ -275,85 +279,52 @@ export const createTaggingController = (
   const importTags = async ({
     labels,
     tags,
-    mergeStrategy = 'merge'
+    mergeStrategy = 'merge',
+    source
   }: ImportTagsRequest): Promise<TaggingSnapshot> => {
-    const timestamp = Date.now();
-    const incomingLabels = Array.isArray(labels) ? labels : [];
-    const normalisedIncoming = incomingLabels.map((entry) => normaliseImportedLabel(entry, timestamp));
+    const totalRows = state.dataset.totalRows;
+    if (source?.rowCount != null && source.rowCount !== totalRows) {
+      throw new Error(
+        `These annotations were exported from a file with ${source.rowCount.toLocaleString()} rows, ` +
+          `but the open file has ${totalRows.toLocaleString()}. Row numbers would not line up.`
+      );
+    }
 
-    const labelMap: Map<string, LabelDefinition> = new Map();
+    const timestamp = Date.now();
+    const labelMap = new Map<string, LabelDefinition>();
     if (mergeStrategy === 'merge') {
       for (const label of state.tagging.labels) {
         labelMap.set(label.id, label);
       }
     }
-    for (const label of normalisedIncoming) {
-      labelMap.set(label.id, label);
+    for (const label of labels) {
+      const imported = normaliseImportedLabel(label, timestamp);
+      labelMap.set(imported.id, imported);
     }
 
-    const nextTags: Record<number, TagRecord> =
-      mergeStrategy === 'merge' ? { ...state.tagging.tags } : {};
-    const incomingTags = tags ?? {};
-
-    let mutated = mergeStrategy === 'replace';
-
-    for (const [rowKey, record] of Object.entries(incomingTags)) {
+    const nextTags: Record<number, TagRecord> = mergeStrategy === 'merge' ? { ...state.tagging.tags } : {};
+    for (const [rowKey, record] of Object.entries(tags ?? {})) {
       const rowId = Number(rowKey);
-      if (!Number.isFinite(rowId) || rowId < 0) {
+      if (!Number.isInteger(rowId) || rowId < 0 || rowId >= totalRows) {
         continue;
       }
-
-      const incomingLabelIds =
-        Array.isArray(record.labelIds) && record.labelIds.length > 0
-          ? normaliseLabelIds(record.labelIds).filter((id) => labelMap.has(id))
-          : typeof (record as any).labelId === 'string' && (record as any).labelId.trim().length > 0
-            ? normaliseLabelIds([(record as any).labelId]).filter((id) => labelMap.has(id))
-            : [];
-      const note = typeof record.note === 'string' ? record.note : undefined;
-      const recordTimestamp =
-        typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
-          ? record.updatedAt
-          : timestamp;
-      const existing = mergeStrategy === 'merge' ? nextTags[rowId] : undefined;
       const nextRecord = buildTagRecord({
-        existing,
-        labelIds: incomingLabelIds,
-        note,
-        timestamp: recordTimestamp
+        existing: nextTags[rowId],
+        labelIds: normaliseLabelIds(record.labelIds).filter((id) => labelMap.has(id)),
+        note: typeof record.note === 'string' && record.note.length > 0 ? record.note : undefined,
+        mode: 'append',
+        timestamp: Number.isFinite(record.updatedAt) ? record.updatedAt : timestamp
       });
-
-      if (isTagRecordEmpty(nextRecord)) {
-        if (nextTags[rowId]) {
-          delete nextTags[rowId];
-          mutated = true;
-        }
-        continue;
+      if (!isTagRecordEmpty(nextRecord)) {
+        nextTags[rowId] = nextRecord;
       }
-
-      const previous = nextTags[rowId];
-      const changed =
-        !previous ||
-        previous.note !== nextRecord.note ||
-        previous.labelIds.length !== nextRecord.labelIds.length ||
-        previous.labelIds.some((id, index) => id !== nextRecord.labelIds[index]);
-
-      nextTags[rowId] = nextRecord;
-      mutated = mutated || changed;
     }
 
-    state.updateTagging((tagging) => {
-      tagging.labels = Array.from(labelMap.values());
-      tagging.tags = nextTags;
-    });
+    state.tagging.labels = Array.from(labelMap.values());
+    state.tagging.tags = nextTags;
+    state.markTaggingDirty();
 
-    if (mutated || normalisedIncoming.length > 0) {
-      state.markTaggingDirty();
-    }
-
-    return {
-      labels: state.tagging.labels,
-      tags: state.tagging.tags
-    };
+    return { labels: state.tagging.labels, tags: state.tagging.tags };
   };
 
   const persistTags = async (): Promise<void> => {
@@ -361,11 +332,10 @@ export const createTaggingController = (
   };
 
   return {
-    init,
-    clear,
     loadTags,
     tagRows,
     clearTag,
+    restoreTags,
     updateLabel,
     deleteLabel,
     exportTags,

@@ -1,427 +1,232 @@
-import { parseDelimitedStream, type ParserOptions } from '../csvParser';
+import { encodeColumn, parseDelimitedStream } from '../csvParser';
 import { buildDatasetStorageKey, createDatasetFingerprint } from '../datasetFingerprint';
-import { detectCompression } from '../utils/detectCompression';
+import { isGzip } from '../utils/detectCompression';
 import { RowBatchStore } from '../rowBatchStore';
-import { RowIndexStore } from '../rowIndexStore';
 import { startPerformanceMeasure } from '../utils/performanceMarks';
 import { logDebug } from '../../utils/debugLog';
-import type { DataWorkerStateController } from '../state/dataWorkerState';
-import type {
-  LoadFileCallbacks,
-  LoadFileRequest,
-  LoadCompleteSummary
-} from '../workerApiTypes';
+import { StaleOperationError, type DataWorkerStateController, type DatasetState } from '../state/dataWorkerState';
 import type { ColumnInference, ColumnType } from '../types';
+import type { LoadFileCallbacks, LoadFileRequest } from '../workerApiTypes';
 
-const now = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+/** Column added when several files are merged, naming the file each row came from. */
+export const SOURCE_COLUMN = 'source_file';
 
-const roundMs = (value: number): number => {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.round(value * 100) / 100;
-};
+const now = (): number => performance.now();
 
 export interface IngestionPipeline {
-  init(): Promise<void>;
-  clear(): Promise<void>;
   run(request: LoadFileRequest, callbacks: LoadFileCallbacks): Promise<void>;
 }
 
-interface IngestionDeps {
-  state: DataWorkerStateController;
-}
-
-export const createIngestionPipeline = ({ state }: IngestionDeps): IngestionPipeline => {
-  const init = async (): Promise<void> => {
-    // No-op for now
-  };
-
-  const clear = async (): Promise<void> => {
-    if (state.dataset.batchStore) {
-      try {
-        await state.dataset.batchStore.clear();
-      } catch (error) {
-        console.warn('[data-worker][ingestion] Failed to clear batch store', error);
-      }
+/**
+ * Column types of a merged dataset: a column keeps its inferred type only when every file that
+ * has it agrees; otherwise it falls back to text.
+ */
+const mergeColumnTypes = (perFile: Array<Record<string, ColumnType>>): Record<string, ColumnType> => {
+  const merged: Record<string, ColumnType> = {};
+  for (const types of perFile) {
+    for (const [column, type] of Object.entries(types)) {
+      merged[column] = merged[column] == null || merged[column] === type ? type : 'string';
     }
-    state.resetDataset();
-    state.resetTagging();
-  };
+  }
+  return merged;
+};
+
+const sourceInference = (fileNames: string[], rows: number): ColumnInference => ({
+  type: 'string',
+  confidence: 1,
+  samples: rows,
+  nullCount: 0,
+  examples: fileNames.slice(0, 5)
+});
+
+/**
+ * Streams one or more files into a fresh RowBatchStore. Several files become one dataset whose
+ * columns are the union of their headers plus SOURCE_COLUMN. Starting another load supersedes this
+ * one: the superseded load cancels its reader, discards its store and rejects with StaleOperationError.
+ */
+export const createIngestionPipeline = (state: DataWorkerStateController): IngestionPipeline => {
+  let latestLoad = 0;
 
   const run = async (
-    { handle, delimiter, batchSize, encoding, checkpointInterval }: LoadFileRequest,
+    { handles, delimiter, batchSize, encoding }: LoadFileRequest,
     callbacks: LoadFileCallbacks
   ): Promise<void> => {
-    if (!handle) {
-      throw new Error('A file handle must be provided to loadFile.');
-    }
-
-    await state.persistTaggingNow();
-    state.resetTagging();
-
-    const debugEnabled = state.options.debugLogging;
-    const slowBatchThreshold = state.options.slowBatchThresholdMs;
-    let datasetKey = 'pending';
-    const debugLog = (event: string, payload?: Record<string, unknown>) => {
-      if (!debugEnabled) {
-        return;
-      }
-      logDebug(`data-worker][dataset:${datasetKey}`, event, payload);
-    };
-    const ingestionMeasure = startPerformanceMeasure('csv-ingest');
-
-    if (state.dataset.batchStore) {
-      const clearStart = now();
-      try {
-        await state.dataset.batchStore.clear();
-        debugLog('Cleared existing batch store', { durationMs: roundMs(now() - clearStart) });
-      } catch (error) {
-        console.warn('[data-worker] Failed to clear existing batch store', error);
-        debugLog('Failed clearing existing batch store', {
-          durationMs: roundMs(now() - clearStart),
-          message: error instanceof Error ? error.message : String(error)
-        });
-      }
-    }
-
-    const fileStart = now();
-    const file = await handle.getFile();
-    const fingerprint = createDatasetFingerprint(file, handle);
-    debugLog('handle.getFile resolved', {
-      durationMs: roundMs(now() - fileStart),
-      name: file.name ?? handle.name ?? 'unknown',
-      size: file.size,
-      type: file.type
-    });
-
-    datasetKey = buildDatasetStorageKey(fingerprint);
-    const batchStoreStart = now();
-    const batchStore = await RowBatchStore.create(datasetKey);
-    debugLog('RowBatchStore.create completed', { durationMs: roundMs(now() - batchStoreStart) });
-
-    state.prepareDatasetForLoad({
-      batchStore,
-      datasetKey,
-      fileHandle: handle
-    });
-
-    await state.hydrateTaggingStore(fingerprint);
-
-    const compression = detectCompression({
-      fileName: file.name ?? handle.name,
-      mimeType: file.type
-    });
-    debugLog('Compression detected', { compression: compression ?? 'none' });
-
-    let stream: ReadableStream<Uint8Array> = file.stream();
-
-    if (compression === 'gzip') {
-      if (typeof DecompressionStream === 'undefined') {
-        throw new Error('This browser does not support gzip decompression.');
-      }
-
-      try {
-        stream = stream.pipeThrough(new DecompressionStream('gzip') as any);
-        debugLog('Applied gzip DecompressionStream');
-      } catch (error) {
-        throw new Error(
-          error instanceof Error
-            ? `Failed to decompress gzip stream: ${error.message}`
-            : 'Failed to decompress gzip stream'
-        );
-      }
-    }
-
-    const reader = stream.getReader();
-    const targetCheckpointInterval = checkpointInterval ?? 50_000;
-    const parserOptions: ParserOptions = {
-      delimiter,
-      batchSize,
-      encoding,
-      checkpointInterval: targetCheckpointInterval
-    };
-
+    const measure = startPerformanceMeasure('csv-ingest');
     const startTime = now();
-    let finalRows = 0;
-    let finalBytes = 0;
-    let storedBatches = 0;
-    let previousRowsParsed = 0;
-    let previousBytesParsed = 0;
+    const loadId = ++latestLoad;
+    let batchStore: RowBatchStore | null = null;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
-    let totalStoreDurationMs = 0;
-    let longestStoreDurationMs = 0;
-    let slowStoreBatchCount = 0;
+    try {
+      if (!handles.length) {
+        throw new Error('Select at least one file to open.');
+      }
+      await state.persistTaggingNow();
+      state.resetTagging();
 
-    let totalProgressCallbackMs = 0;
-    let longestProgressCallbackMs = 0;
+      const previousStore = state.dataset.batchStore;
+      state.resetDataset();
+      void previousStore?.dispose();
 
-    let checkpointCount = 0;
-    let totalCheckpointMs = 0;
-    let longestCheckpointMs = 0;
+      const files = await Promise.all(handles.map((handle) => handle.getFile()));
+      const fingerprint = createDatasetFingerprint(files);
+      batchStore = await RowBatchStore.create(buildDatasetStorageKey(fingerprint));
+      if (loadId !== latestLoad) {
+        throw new StaleOperationError();
+      }
+      const merged = files.length > 1;
+      const dataset: DatasetState = state.startDataset({ batchStore, fileName: fingerprint.fileName });
+      const check = (): void => {
+        if (state.dataset !== dataset) {
+          throw new StaleOperationError();
+        }
+      };
 
-    let chunkCount = 0;
-    let totalReadMs = 0;
-    let longestReadMs = 0;
+      await state.hydrateTagging(fingerprint, dataset);
+      check();
 
-    const indexStoreStart = now();
-    const indexStore = await RowIndexStore.create(handle, {
-      checkpointInterval: targetCheckpointInterval
-    });
-    debugLog('RowIndexStore.create completed', { durationMs: roundMs(now() - indexStoreStart) });
+      const union: string[] = [];
+      const typesPerFile: Array<Record<string, ColumnType>> = [];
+      const inference: Record<string, ColumnInference> = {};
+      let bytesRead = 0;
+      let batchesStored = 0;
+      let malformedRows = 0;
 
-    const source: AsyncIterable<Uint8Array> = {
-      async *[Symbol.asyncIterator]() {
-        try {
-          while (true) {
-            const readStart = now();
-            const { value, done } = await reader.read();
-            const readDuration = now() - readStart;
+      const publishSchema = (): void => {
+        dataset.header = merged ? [SOURCE_COLUMN, ...union] : [...union];
+        dataset.columnTypes = merged
+          ? { [SOURCE_COLUMN]: 'string', ...mergeColumnTypes(typesPerFile) }
+          : { ...typesPerFile[0] };
+        dataset.columnInference = Object.fromEntries(
+          dataset.header.map((column) => [
+            column,
+            column === SOURCE_COLUMN && merged
+              ? sourceInference(files.map((file) => file.name), dataset.totalRows)
+              : { ...inference[column]!, type: dataset.columnTypes[column] ?? 'string' }
+          ])
+        );
+      };
 
-            if (done) {
-              return;
+      for (const [fileIndex, file] of files.entries()) {
+        let stream: ReadableStream<Uint8Array> = file.stream().pipeThrough(
+          new TransformStream<Uint8Array, Uint8Array>({
+            transform(chunk, controller) {
+              bytesRead += chunk.byteLength;
+              controller.enqueue(chunk);
             }
-
-            if (value) {
-              chunkCount += 1;
-              totalReadMs += readDuration;
-              if (readDuration > longestReadMs) {
-                longestReadMs = readDuration;
+          })
+        );
+        if (await isGzip(file)) {
+          stream = stream.pipeThrough(
+            new DecompressionStream('gzip') as unknown as TransformStream<Uint8Array, Uint8Array>
+          );
+        }
+        const activeReader = stream.getReader();
+        reader = activeReader;
+        const source: AsyncIterable<Uint8Array> = {
+          async *[Symbol.asyncIterator]() {
+            while (true) {
+              check();
+              const { value, done } = await activeReader.read();
+              if (done) {
+                return;
               }
-
-              if (debugEnabled && readDuration >= slowBatchThreshold) {
-                debugLog('Slow chunk read', {
-                  chunkIndex: chunkCount,
-                  readDurationMs: roundMs(readDuration)
-                });
-              }
-
               yield value;
             }
           }
-        } finally {
-          reader.releaseLock();
-        }
-      }
-    };
+        };
 
-    try {
-      debugLog('Starting parseDelimitedStream', {
-        delimiter: delimiter ?? 'auto',
-        batchSize: batchSize ?? 'default',
-        encoding: encoding ?? 'utf-8',
-        checkpointInterval: targetCheckpointInterval
-      });
-      const parseStartTime = now();
-      const parseMeasure = startPerformanceMeasure('csv-parse');
-
-      try {
+        typesPerFile[fileIndex] = {};
+        let fileMalformedRows = 0;
         await parseDelimitedStream(
           source,
           {
             onHeader: async (header) => {
-              state.updateDataset((dataset) => {
-                dataset.header = header;
-              });
-              if (callbacks.onStart) {
-                const callbackStart = now();
-                await callbacks.onStart({ columns: header });
-                const duration = now() - callbackStart;
-                debugLog('onStart callback completed', {
-                  durationMs: roundMs(duration),
-                  columnCount: header.length
-                });
-              } else {
-                debugLog('No onStart callback provided', { columnCount: header.length });
+              check();
+              for (const column of header) {
+                if (!union.includes(column)) {
+                  union.push(column);
+                  inference[column] = { type: 'string', confidence: 0, samples: 0, nullCount: 0, examples: [] };
+                }
+                typesPerFile[fileIndex]![column] = 'string';
               }
+              publishSchema();
+              await callbacks.onStart?.({ columns: dataset.header });
             },
             onBatch: async (batch) => {
-              finalRows = batch.stats.rowsParsed;
-              finalBytes = batch.stats.bytesParsed;
-              storedBatches += 1;
-
-              const rowsInBatch = Math.max(0, finalRows - previousRowsParsed);
-              const bytesInBatch = Math.max(0, finalBytes - previousBytesParsed);
-              previousRowsParsed = finalRows;
-              previousBytesParsed = finalBytes;
-
-              const storeStart = now();
-              await batchStore.storeBatch(batch);
-              const storeDuration = now() - storeStart;
-              totalStoreDurationMs += storeDuration;
-              if (storeDuration > longestStoreDurationMs) {
-                longestStoreDurationMs = storeDuration;
+              check();
+              if (merged) {
+                batch.columns[SOURCE_COLUMN] = encodeColumn(new Array<string>(batch.rowIds.length).fill(file.name));
               }
-
-              const shouldLogBatch =
-                storeDuration >= slowBatchThreshold ||
-                storedBatches <= 5 ||
-                storedBatches % 50 === 0;
-
-              if (storeDuration >= slowBatchThreshold) {
-                slowStoreBatchCount += 1;
+              await batchStore!.storeBatch(batch);
+              check();
+              batchesStored += 1;
+              fileMalformedRows = batch.stats.malformedRows;
+              typesPerFile[fileIndex] = batch.columnTypes;
+              for (const [column, columnInference] of Object.entries(batch.columnInference)) {
+                if (fileIndex === 0 || inference[column]!.samples === 0) {
+                  inference[column] = columnInference;
+                }
               }
-
-              if (shouldLogBatch) {
-                debugLog('Stored batch', {
-                  batchesStored: storedBatches,
-                  rowsInBatch,
-                  cumulativeRowsParsed: finalRows,
-                  cumulativeBytesParsed: finalBytes,
-                  storeDurationMs: roundMs(storeDuration),
-                  slowStore: storeDuration >= slowBatchThreshold,
-                  bytesInBatch
-                });
-              }
-
-              state.updateDataset((dataset) => {
-                dataset.columnTypes = {
-                  ...dataset.columnTypes,
-                  ...batch.columnTypes
-                } as Record<string, ColumnType>;
-                dataset.columnInference = {
-                  ...dataset.columnInference,
-                  ...batch.columnInference
-                } as Record<string, ColumnInference>;
-                dataset.totalRows = finalRows;
-                dataset.bytesParsed = finalBytes;
+              dataset.totalRows = batchStore!.totalRows;
+              dataset.bytesParsed = bytesRead;
+              publishSchema();
+              await callbacks.onProgress?.({
+                rowsParsed: dataset.totalRows,
+                bytesParsed: bytesRead,
+                batchesStored,
+                columnTypes: dataset.columnTypes
               });
-
-              if (callbacks.onProgress) {
-                const payload = {
-                  rowsParsed: finalRows,
-                  bytesParsed: finalBytes,
-                  batchesStored: storedBatches
-                };
-                const progressStart = now();
-                await callbacks.onProgress(payload);
-                const progressDuration = now() - progressStart;
-                totalProgressCallbackMs += progressDuration;
-                if (progressDuration > longestProgressCallbackMs) {
-                  longestProgressCallbackMs = progressDuration;
-                }
-
-                if (progressDuration >= slowBatchThreshold) {
-                  debugLog('Slow onProgress callback detected', {
-                    durationMs: roundMs(progressDuration),
-                    batchesStored: storedBatches
-                  });
-                }
-              }
-            },
-            onCheckpoint: async ({ rowIndex, byteOffset }) => {
-              const checkpointStart = now();
-              indexStore.record({ rowIndex, byteOffset });
-              const checkpointDuration = now() - checkpointStart;
-              checkpointCount += 1;
-              totalCheckpointMs += checkpointDuration;
-
-              if (checkpointDuration > longestCheckpointMs) {
-                longestCheckpointMs = checkpointDuration;
-              }
-
-              if (checkpointDuration >= slowBatchThreshold) {
-                debugLog('Slow checkpoint record detected', {
-                  rowIndex,
-                  byteOffset,
-                  checkpointDurationMs: roundMs(checkpointDuration)
-                });
-              }
             }
           },
-          parserOptions
+          { delimiter, batchSize, encoding, reservedColumns: merged ? [SOURCE_COLUMN] : [] }
         );
-      } finally {
-        parseMeasure?.();
+        malformedRows += fileMalformedRows;
+        check();
       }
 
-      debugLog('parseDelimitedStream completed', {
-        durationMs: roundMs(now() - parseStartTime),
-        storedBatches,
-        rowsParsed: finalRows,
-        bytesParsed: finalBytes
-      });
-
-      state.updateDataset((dataset) => {
-        dataset.totalRows = finalRows;
-        dataset.bytesParsed = finalBytes;
-      });
-
-      if (callbacks.onComplete) {
-        const endTime = now();
-        const summary: LoadCompleteSummary = {
-          rowsParsed: finalRows,
-          bytesParsed: finalBytes,
-          durationMs: endTime - startTime,
-          columnTypes: state.dataset.columnTypes,
-          columnInference: state.dataset.columnInference
-        };
-        const completeStart = now();
-        await callbacks.onComplete(summary);
-        const completeDuration = now() - completeStart;
-        debugLog('onComplete callback completed', {
-          durationMs: roundMs(completeDuration),
-          rowsParsed: finalRows,
-          bytesParsed: finalBytes
+      dataset.loading = false;
+      dataset.bytesParsed = bytesRead;
+      dataset.malformedRows = malformedRows;
+      publishSchema();
+      const durationMs = now() - startTime;
+      if (state.options.debugLogging) {
+        logDebug('data-worker', 'Load complete', {
+          files: files.length,
+          rows: dataset.totalRows,
+          bytes: bytesRead,
+          batchesStored,
+          malformedRows,
+          durationMs: Math.round(durationMs)
         });
-        if (completeDuration >= slowBatchThreshold) {
-          debugLog('Slow onComplete callback detected', {
-            durationMs: roundMs(completeDuration)
-          });
-        }
       }
-
-      const finalizeStart = now();
-      await indexStore.finalize({ rowCount: finalRows, bytesParsed: finalBytes });
-      debugLog('RowIndexStore.finalize completed', {
-        durationMs: roundMs(now() - finalizeStart),
-        rowCount: finalRows,
-        bytesParsed: finalBytes
-      });
-
-      debugLog('Load complete summary', {
-        totalDurationMs: roundMs(now() - startTime),
-        rowsParsed: finalRows,
-        bytesParsed: finalBytes,
-        storedBatches,
-        chunkCount,
-        slowStoreBatchCount,
-        longestStoreBatchMs: roundMs(longestStoreDurationMs),
-        averageStoreBatchMs:
-          storedBatches > 0 ? roundMs(totalStoreDurationMs / storedBatches) : 0,
-        checkpointCount,
-        longestCheckpointMs: roundMs(longestCheckpointMs),
-        averageCheckpointMs:
-          checkpointCount > 0 ? roundMs(totalCheckpointMs / checkpointCount) : 0,
-        longestReadMs: roundMs(longestReadMs),
-        averageReadMs: chunkCount > 0 ? roundMs(totalReadMs / chunkCount) : 0,
-        longestProgressCallbackMs: roundMs(longestProgressCallbackMs),
-        totalProgressCallbackMs: roundMs(totalProgressCallbackMs),
-        averageProgressCallbackMs:
-          storedBatches > 0 ? roundMs(totalProgressCallbackMs / storedBatches) : 0
+      await callbacks.onComplete?.({
+        rowsParsed: dataset.totalRows,
+        bytesParsed: bytesRead,
+        malformedRows,
+        durationMs,
+        columnTypes: dataset.columnTypes,
+        columnInference: dataset.columnInference
       });
     } catch (error) {
-      debugLog('loadFile encountered error', {
-        message: error instanceof Error ? error.message : String(error)
-      });
-      await indexStore.abort();
-      if (callbacks.onError) {
-        const normalised =
-          error instanceof Error
-            ? { message: error.message, name: error.name, stack: error.stack }
-            : { message: String(error) };
-        await callbacks.onError(normalised);
+      void reader?.cancel().catch(() => undefined);
+      if (error instanceof StaleOperationError) {
+        if (batchStore && state.dataset.batchStore !== batchStore) {
+          void batchStore.dispose();
+        }
+        throw error;
       }
-
+      state.dataset.loading = false;
+      await callbacks.onError?.(
+        error instanceof Error
+          ? { message: error.message, name: error.name, stack: error.stack }
+          : { message: String(error) }
+      );
       throw error;
     } finally {
-      ingestionMeasure?.();
+      measure?.();
     }
   };
 
-  return {
-    init,
-    clear,
-    run
-  };
+  return { run };
 };

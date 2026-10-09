@@ -1,91 +1,71 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { useSessionStore, getSessionSnapshot, type SessionSnapshot } from './sessionStore';
-import type { GroupAggregationDefinition, LabelDefinition, TagRecord } from '@workers/types';
+import { describeFiles, getSessionSnapshot, useSessionStore } from './sessionStore';
+import type { ColumnInference } from '@workers/types';
 
-const sampleAggregations: GroupAggregationDefinition[] = [
-  { operator: 'count', alias: 'rows' }
-];
+const handle = (name: string): FileSystemFileHandle => ({ name, kind: 'file' }) as unknown as FileSystemFileHandle;
 
-const sampleLabels: LabelDefinition[] = [
-  {
-    id: 'label-1',
-    name: 'Interesting',
-    color: '#ff6600',
-    description: 'Needs follow-up',
-    createdAt: 1,
-    updatedAt: 1
-  }
-];
-
-const sampleTags: Record<number, TagRecord> = {
-  42: {
-    labelIds: ['label-1'],
-    note: 'Check authentication timeline',
-    updatedAt: 2
-  }
-};
-
-const buildSnapshot = (): SessionSnapshot => ({
-  fileHandle: null,
-  filters: [
-    {
-      id: 'filter-1',
-      column: 'event_type',
-      operator: 'eq',
-      value: 'logon',
-      rawValue: 'logon',
-      caseSensitive: false,
-      enabled: true
-    }
-  ],
-  sorts: [{ column: 'timestamp', direction: 'desc' }],
-  groups: ['user'],
-  groupAggregations: sampleAggregations,
-  columnLayout: {
-    order: ['timestamp', 'user', 'event_type'],
-    visibility: {
-      timestamp: true,
-      user: true,
-      event_type: true
-    }
-  },
-  searchCaseSensitive: true,
-  interfaceFontFamily: 'inter',
-  interfaceFontSize: 14,
-  dataFontFamily: 'jetbrains-mono',
-  dataFontSize: 12,
-  labels: sampleLabels,
-  tags: sampleTags,
-  updatedAt: 123456789
+const inference = (nullCount: number): ColumnInference => ({
+  type: 'string',
+  confidence: 1,
+  samples: 10,
+  nullCount,
+  examples: []
 });
 
 describe('sessionStore', () => {
   beforeEach(() => {
-    useSessionStore.getState().clear();
+    useSessionStore.getState().openFiles([]);
   });
 
-  it('hydrates persisted snapshot into store state', () => {
-    const snapshot = buildSnapshot();
-    useSessionStore.getState().hydrate(snapshot);
+  it('openFiles stores the handles and resets all view state', () => {
+    const store = useSessionStore.getState();
+    store.setFilters([{ id: 'f', column: 'a', operator: 'eq', value: 'x' }]);
+    store.setSorts([{ column: 'a', direction: 'asc' }]);
+    store.setGroups(['a']);
+    store.setGroupAggregations([{ operator: 'sum', column: 'b', alias: 'total' }]);
+    store.setColumnLayout({ order: ['a'], visibility: { a: false } });
+
+    const handles = [handle('one.csv')];
+    useSessionStore.getState().openFiles(handles);
 
     const state = useSessionStore.getState();
-    expect(state.filters).toEqual(snapshot.filters);
-    expect(state.columnLayout.order).toEqual(snapshot.columnLayout.order);
-    expect(state.groupAggregations).toEqual(sampleAggregations);
-    expect(state.labels).toEqual(sampleLabels);
-    expect(state.tags).toEqual(sampleTags);
+    expect(state.fileHandles).toBe(handles);
+    expect(state.filters).toEqual([]);
+    expect(state.sorts).toEqual([]);
+    expect(state.groups).toEqual([]);
+    expect(state.groupAggregations).toEqual([{ operator: 'count', alias: 'count' }]);
+    expect(state.columnLayout).toEqual({ order: [], visibility: {} });
   });
 
-  it('produces serialisable snapshot via helper', () => {
-    const snapshot = buildSnapshot();
-    useSessionStore.getState().hydrate(snapshot);
+  it('initializeColumnLayout hides columns that are entirely empty', () => {
+    useSessionStore
+      .getState()
+      .initializeColumnLayout(['full', 'empty', 'unknown'], { full: inference(2), empty: inference(10) }, 10);
 
-    const exported = getSessionSnapshot();
-    expect(exported).toStrictEqual({
-      ...snapshot,
-      fileHandle: null
+    expect(useSessionStore.getState().columnLayout).toEqual({
+      order: ['full', 'empty', 'unknown'],
+      visibility: { full: true, empty: false, unknown: true }
     });
-    expect((exported as unknown as Record<string, unknown>).setFileHandle).toBeUndefined();
+  });
+
+  it('getSessionSnapshot exposes file names instead of handles and no actions', () => {
+    useSessionStore.getState().openFiles([handle('a.csv'), handle('b.csv')]);
+    useSessionStore.getState().setSorts([{ column: 'ts', direction: 'desc' }]);
+
+    expect(getSessionSnapshot()).toStrictEqual({
+      fileNames: ['a.csv', 'b.csv'],
+      filters: [],
+      sorts: [{ column: 'ts', direction: 'desc' }],
+      groups: [],
+      groupAggregations: [{ operator: 'count', alias: 'count' }],
+      columnLayout: { order: [], visibility: {} }
+    });
+  });
+
+  it('describeFiles names single and merged datasets', () => {
+    expect(describeFiles([])).toBe('');
+    expect(describeFiles([handle('a.csv')])).toBe('a.csv');
+    expect(describeFiles([handle('a.csv'), handle('b.csv'), handle('c.csv')])).toBe('a.csv + 2 more');
   });
 });

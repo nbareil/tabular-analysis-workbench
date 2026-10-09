@@ -1,5 +1,5 @@
-import { act, cleanup, render, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useDataStore } from '@state/dataStore';
 import { useSessionStore } from '@state/sessionStore';
@@ -8,70 +8,60 @@ import { useSortSync } from './useSortSync';
 
 const mockApplySorts = vi.fn();
 
-vi.mock('@workers/dataWorkerProxy', () => {
-  return {
-    getDataWorker: () => ({
-      applySorts: mockApplySorts
-    })
-  };
+vi.mock('@workers/dataWorkerProxy', async () => {
+  const actual = await vi.importActual<typeof import('@workers/dataWorkerProxy')>('@workers/dataWorkerProxy');
+  return { ...actual, getDataWorker: () => ({ applySorts: mockApplySorts }) };
 });
-
-const TestHarness = (): null => {
-  useSortSync();
-  return null;
-};
 
 describe('useSortSync', () => {
   beforeEach(() => {
     mockApplySorts.mockReset();
-    mockApplySorts.mockResolvedValue({
-      rows: [],
-      totalRows: 100,
-      matchedRows: 100,
-      sorts: [{ column: 'timestamp', direction: 'desc' }]
-    });
-    useSessionStore.setState((state) => ({
-      ...state,
-      sorts: [{ column: 'timestamp', direction: 'desc' }],
-      updatedAt: Date.now()
-    }));
-    useDataStore.setState((state) => ({
-      ...state,
-      status: 'idle',
-      totalRows: 0,
-      matchedRows: null
-    }));
+    useSessionStore.getState().openFiles([]);
+    useDataStore.getState().reset();
+    useDataStore.setState({ status: 'ready', totalRows: 100, matchedRows: 100 });
   });
 
-  afterEach(() => {
-    cleanup();
+  it('applies sorts and adopts the sorts the worker reports', async () => {
+    mockApplySorts.mockResolvedValue({ matchedRows: 40, sorts: [{ column: 'ts', direction: 'desc' }] });
+    const { result } = renderHook(() => useSortSync());
+    const viewVersion = useDataStore.getState().viewVersion;
+
+    await act(() =>
+      result.current.applySorts([
+        { column: 'ts', direction: 'desc' },
+        { column: 'missing', direction: 'asc' }
+      ])
+    );
+
+    expect(mockApplySorts).toHaveBeenCalledWith({
+      sorts: [
+        { column: 'ts', direction: 'desc' },
+        { column: 'missing', direction: 'asc' }
+      ]
+    });
+    expect(result.current.sorts).toEqual([{ column: 'ts', direction: 'desc' }]);
+    expect(useDataStore.getState().matchedRows).toBe(40);
+    expect(useDataStore.getState().viewVersion).toBe(viewVersion + 1);
   });
 
-  it('waits for the dataset to be ready before reapplying persisted sorts', async () => {
-    render(<TestHarness />);
+  it('ignores stale-operation rejections', async () => {
+    mockApplySorts.mockRejectedValue(Object.assign(new Error('stale'), { name: 'StaleOperationError' }));
+    const { result } = renderHook(() => useSortSync());
 
-    expect(mockApplySorts).not.toHaveBeenCalled();
+    await act(() => result.current.applySorts([{ column: 'ts', direction: 'asc' }]));
 
-    await act(async () => {
-      useDataStore.setState((state) => ({
-        ...state,
-        status: 'loading',
-        totalRows: 25
-      }));
-    });
+    expect(useDataStore.getState().errorDetails).toBeNull();
+  });
 
-    expect(mockApplySorts).not.toHaveBeenCalled();
+  it('reports other errors without changing the load status', async () => {
+    mockApplySorts.mockRejectedValue(new Error('boom'));
+    const { result } = renderHook(() => useSortSync());
 
-    await act(async () => {
-      useDataStore.setState((state) => ({
-        ...state,
-        status: 'ready',
-        totalRows: 100
-      }));
-    });
+    await act(() => result.current.applySorts([{ column: 'ts', direction: 'asc' }]));
 
-    await waitFor(() => {
-      expect(mockApplySorts).toHaveBeenCalledTimes(1);
-    });
+    const state = useDataStore.getState();
+    expect(state.status).toBe('ready');
+    expect(state.errorDetails?.message).toBe('Failed to apply sorts');
+    expect(state.errorDetails?.payload).toMatchObject({ operation: 'sorts.apply', retry: expect.any(Function) });
   });
 });

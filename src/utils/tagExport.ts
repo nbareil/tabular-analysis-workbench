@@ -13,7 +13,7 @@ export interface ParsedTagExport {
     version?: number;
     exportedAt?: number;
     source?: TagExportSource;
-  } | null;
+  };
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
@@ -40,11 +40,7 @@ const isTagRecord = (value: unknown): value is TagRecord => {
   }
 
   const { labelIds, note, updatedAt } = value as Partial<TagRecord>;
-  const legacyLabelId = (value as any).labelId;
-  const labelValid =
-    (Array.isArray(labelIds) && labelIds.every((id) => typeof id === 'string')) ||
-    legacyLabelId === null ||
-    typeof legacyLabelId === 'string';
+  const labelValid = Array.isArray(labelIds) && labelIds.every((id) => typeof id === 'string');
   const noteValid = note === undefined || typeof note === 'string';
   const timestampValid = typeof updatedAt === 'number' && Number.isFinite(updatedAt);
 
@@ -121,26 +117,11 @@ const normaliseLabelIds = (value: unknown): string[] => {
   return Array.from(unique.values());
 };
 
-const toTagRecord = (value: any): TagRecord => {
-  const labelIds =
-    Array.isArray(value?.labelIds) && value.labelIds.length > 0
-      ? normaliseLabelIds(value.labelIds)
-      : value?.labelId
-        ? normaliseLabelIds([value.labelId])
-        : [];
-
-  const record: TagRecord = {
-    labelIds,
-    updatedAt:
-      typeof value?.updatedAt === 'number' && Number.isFinite(value.updatedAt)
-        ? value.updatedAt
-        : Date.now()
-  };
-
-  if (typeof value?.note === 'string') {
+const toTagRecord = (value: TagRecord): TagRecord => {
+  const record: TagRecord = { labelIds: normaliseLabelIds(value.labelIds), updatedAt: value.updatedAt };
+  if (typeof value.note === 'string') {
     record.note = value.note;
   }
-
   return record;
 };
 
@@ -148,7 +129,7 @@ const toTaggingSnapshot = (value: TaggingSnapshot): TaggingSnapshot => {
   const tags: Record<number, TagRecord> = {};
   for (const [rowKey, record] of Object.entries(value.tags)) {
     const rowId = Number(rowKey);
-    if (!Number.isFinite(rowId) || rowId < 0 || !record) {
+    if (!Number.isInteger(rowId) || rowId < 0 || !record) {
       continue;
     }
     tags[rowId] = toTagRecord(record);
@@ -161,13 +142,6 @@ const toTaggingSnapshot = (value: TaggingSnapshot): TaggingSnapshot => {
 };
 
 export const parseTagExport = (input: unknown): ParsedTagExport => {
-  if (isTaggingSnapshot(input)) {
-    return {
-      snapshot: toTaggingSnapshot(input),
-      metadata: null
-    };
-  }
-
   if (isPlainObject(input) && 'payload' in input) {
     const envelope = input as Partial<ExportTagsResponse>;
     if (envelope.version !== TAG_EXPORT_VERSION) {

@@ -32,16 +32,13 @@
         devShells.default = pkgs.mkShell {
           packages =
             (with pkgs; [
-              nodejs_20
-              nodePackages.pnpm
+              nodejs_22
               watchman
               git
               amp-cli
             ]) ++ [ bd codexCli pkgs.caddy serveWithCaddy ];
 
           shellHook = ''
-            export PNPM_HOME=''${PNPM_HOME:-$HOME/.pnpm}
-            export PATH=$PNPM_HOME:$PATH
             export NODE_ENV=development
             echo "Loaded Tabular Analysis Workbench dev shell"
           '';

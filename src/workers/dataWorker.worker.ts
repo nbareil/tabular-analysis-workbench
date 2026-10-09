@@ -1,459 +1,215 @@
 import { expose } from 'comlink';
 
-import type { MaterializedRow } from './utils/materializeRowBatch';
-import { RowIndexStore, findNearestCheckpoint } from './rowIndexStore';
-import { groupMaterializedRows, normaliseGroupColumns } from './groupEngine';
-import { RowBatchStore } from './rowBatchStore';
-import type { GroupingRequest, GroupingResult } from './types';
-import { isDebugLoggingEnabled, logDebug, setDebugLoggingEnabled } from '../utils/debugLog';
-import { createDataWorkerState } from './state/dataWorkerState';
+import { groupRows } from './groupEngine';
+import { profileColumn, timeHistogram } from './columnStats';
+import { setDebugLoggingEnabled } from '../utils/debugLog';
+import { serializeCsvRow } from '../utils/csvExport';
+import { createDataWorkerState, type DataWorkerStateController } from './state/dataWorkerState';
 import { createIngestionPipeline } from './controllers/ingestionPipeline';
-import { createFilterController } from './controllers/filterController';
-import { createSortController } from './controllers/sortController';
-import { createSearchController } from './controllers/searchController';
+import { activeRowOrder, createViewController, rowMaskFrom } from './controllers/viewController';
 import { createTaggingController } from './controllers/taggingController';
 import type {
-  WorkerInitOptions,
-  LoadFileRequest,
-  LoadFileCallbacks,
-  SeekRowsRequest,
-  SeekRowsResult,
-  ApplySortRequest,
-  ApplySortResult,
-  ApplyFilterRequest,
-  ApplyFilterResult,
   ColumnValueDistributionRequest,
   ColumnValueDistributionResult,
-  FetchRowsRequest,
-  FetchRowsResult,
   DataWorkerApi,
-  SearchRequest,
-  ClearSearchRequest,
-  GlobalSearchResult,
-  TaggingSnapshot,
-  TagRowsRequest,
-  TagRowsResponse,
-  ExportTagsResponse,
-  UpdateLabelRequest,
-  DeleteLabelRequest,
-  DeleteLabelResponse,
-  ImportTagsRequest,
-  LabelDefinition
+  ExportCsvRequest
 } from './workerApiTypes';
 
-export type {
-  GroupingRequest,
-  GroupingResult,
-  TaggingSnapshot,
-  TagRowsRequest,
-  TagRowsResponse,
-  ExportTagsResponse,
-  UpdateLabelRequest,
-  DeleteLabelRequest,
-  DeleteLabelResponse,
-  ImportTagsRequest,
-  LabelDefinition,
-  TagRecord
-} from './types';
+const CSV_MIME_TYPE = 'text/csv;charset=utf-8;';
+// Columns with more distinct values than this share of rows are not worth listing in a picker.
+const DISTRIBUTION_DISTINCT_RATIO_LIMIT = 0.5;
 
+const computeValueDistribution = async (
+  state: DataWorkerStateController,
+  column: string
+): Promise<ColumnValueDistributionResult> => {
+  const dataset = state.dataset;
+  const counts = new Map<string, number>();
+  let nonNullRows = 0;
+  for await (const view of dataset.batchStore!.iterateBatches()) {
+    for (const value of view.column(column)) {
+      if (value.trim() === '') {
+        continue;
+      }
+      nonNullRows += 1;
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+  }
+
+  const totalRows = dataset.totalRows;
+  const base = { column, totalRows, nonNullRows, distinctCount: counts.size };
+  if (totalRows > 0 && counts.size / totalRows > DISTRIBUTION_DISTINCT_RATIO_LIMIT) {
+    return { ...base, skipped: true, skipReason: 'Too many unique values', items: [] };
+  }
+  const items = Array.from(counts, ([value, count]) => ({ value, count })).sort(
+    (left, right) => right.count - left.count || left.value.localeCompare(right.value)
+  );
+  return { ...base, skipped: false, items };
+};
 
 export const createDataWorkerApi = (): DataWorkerApi => {
   const state = createDataWorkerState();
+  const ingestion = createIngestionPipeline(state);
+  const view = createViewController(state);
+  const tagging = createTaggingController(state);
 
-  const ensureBatchStore = (): RowBatchStore => {
-    if (!state.dataset.batchStore) {
-      throw new Error('No dataset loaded');
-    }
-
-    return state.dataset.batchStore;
-  };
-
-  const getActiveRowOrder = (): Uint32Array | null => {
-    return (
-      state.dataset.sortedRowIds ?? state.dataset.searchRowIds ?? state.dataset.filterRowIds
-    );
-  };
-
-  const getActiveRowCount = (): number => {
-    const order = getActiveRowOrder();
-    return order ? order.length : state.dataset.totalRows;
-  };
-
-  const buildRowIdWindow = (offset: number, limit?: number): number[] => {
-    const order = getActiveRowOrder();
+  const viewRowIds = (offset: number, limit: number): ArrayLike<number> => {
+    const order = activeRowOrder(state.dataset);
     const total = order ? order.length : state.dataset.totalRows;
     const start = Math.max(0, offset);
-    const end = typeof limit === 'number' ? Math.min(total, start + Math.max(0, limit)) : total;
-
-    if (start >= end) {
-      return [];
-    }
-
+    const end = Math.min(total, start + Math.max(0, limit));
     if (order) {
-      const rowIds: number[] = [];
-      for (let index = start; index < end; index += 1) {
-        const rowId = order[index];
-        if (rowId != null) {
-          rowIds.push(rowId);
-        }
-      }
-      return rowIds;
+      return order.subarray(start, Math.max(start, end));
     }
-
-    const rowIds: number[] = [];
-    for (let index = start; index < end; index += 1) {
-      rowIds.push(index);
-    }
-    return rowIds;
+    return Array.from({ length: Math.max(0, end - start) }, (_, index) => start + index);
   };
-
-  const materializeViewWindow = async (offset: number, limit?: number): Promise<MaterializedRow[]> => {
-    const rowIds = buildRowIdWindow(offset, limit);
-    if (isDebugLoggingEnabled()) {
-      logDebug('data-worker', 'materializeViewWindow', {
-        offset,
-        limit,
-        requested: rowIds.length,
-        firstRowId: rowIds[0],
-        lastRowId: rowIds[rowIds.length - 1],
-        activeRowCount: getActiveRowCount()
-      });
-    }
-    if (!rowIds.length) {
-      return [];
-    }
-
-    const batchStore = ensureBatchStore();
-    const rows = await batchStore.materializeRows(rowIds);
-    if (isDebugLoggingEnabled()) {
-      logDebug('data-worker', 'materializeViewWindow resolved', {
-        offset,
-        limit,
-        resolved: rows.length
-      });
-    }
-    return rows;
-  };
-
-  const getColumnValueDistribution = async ({
-    column
-  }: ColumnValueDistributionRequest): Promise<ColumnValueDistributionResult> => {
-    const batchStore = state.dataset.batchStore;
-    const totalRows = state.dataset.totalRows;
-
-    if (!batchStore || !totalRows || state.dataset.columnTypes[column] == null) {
-      return {
-        column,
-        totalRows,
-        nonNullRows: 0,
-        distinctCount: 0,
-        skipped: false,
-        defaultSort: 'desc',
-        items: []
-      };
-    }
-
-    const cached = state.dataset.columnValueDistributionCache.get(column);
-    if (cached) {
-      return cached;
-    }
-
-    const inFlight = state.dataset.columnValueDistributionPromises.get(column);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const request = (async (): Promise<ColumnValueDistributionResult> => {
-      const counts = new Map<string, { value: string; count: number }>();
-      let nonNullRows = 0;
-
-      for await (const { rows } of batchStore.iterateMaterializedBatches()) {
-        for (const row of rows) {
-          const rawValue = row[column];
-          if (rawValue == null) {
-            continue;
-          }
-
-          nonNullRows += 1;
-          const value = String(rawValue);
-          const key = `${typeof rawValue}:${value}`;
-          const entry = counts.get(key);
-          if (entry) {
-            entry.count += 1;
-          } else {
-            counts.set(key, { value, count: 1 });
-          }
-        }
-      }
-
-      const distinctCount = counts.size;
-      const skipped = totalRows > 0 && distinctCount / totalRows > 0.5;
-
-      if (skipped) {
-        return {
-          column,
-          totalRows,
-          nonNullRows,
-          distinctCount,
-          skipped: true,
-          skipReason: 'Too many unique values',
-          defaultSort: 'desc',
-          items: []
-        };
-      }
-
-      const items = Array.from(counts.values()).sort((left, right) => {
-        if (right.count !== left.count) {
-          return right.count - left.count;
-        }
-
-        return left.value.localeCompare(right.value);
-      });
-
-      return {
-        column,
-        totalRows,
-        nonNullRows,
-        distinctCount,
-        skipped: false,
-        defaultSort: 'desc',
-        items
-      };
-    })();
-
-    state.updateDataset((dataset) => {
-      dataset.columnValueDistributionPromises.set(column, request);
-    });
-
-    try {
-      const result = await request;
-      state.updateDataset((dataset) => {
-        dataset.columnValueDistributionPromises.delete(column);
-        dataset.columnValueDistributionCache.set(column, result);
-      });
-      return result;
-    } catch (error) {
-      state.updateDataset((dataset) => {
-        dataset.columnValueDistributionPromises.delete(column);
-      });
-      throw error;
-    }
-  };
-
-  const ingestionPipeline = createIngestionPipeline({ state });
-  const filterController = createFilterController({
-    state,
-    materializeViewWindow
-  });
-  const sortController = createSortController({
-    state,
-    materializeViewWindow,
-    getActiveRowCount
-  });
-  const searchController = createSearchController({
-    state
-  });
-  const taggingController = createTaggingController(state);
-
-
-
-
-
-
 
   const api: DataWorkerApi = {
     async init(options) {
-      const threshold = options.slowBatchThresholdMs;
-
       setDebugLoggingEnabled(Boolean(options.debugLogging));
+      state.setOptions(options);
+    },
 
-      state.setOptions({
-        chunkSize: options.chunkSize,
-        debugLogging: options.debugLogging,
-        slowBatchThresholdMs: threshold
-      });
+    loadFile: (request, callbacks) => ingestion.run(request, callbacks),
+    applyFilter: (request) => view.applyFilter(request),
+    globalSearch: (request) => view.search(request),
+    applySorts: (request) => view.applySorts(request),
 
-      await ingestionPipeline.init();
-      filterController.init();
-      sortController.init();
-      searchController.init();
-      taggingController.init();
-    },
-    async ping() {
-      return 'pong';
-    },
-    async loadFile(request: LoadFileRequest, callbacks: LoadFileCallbacks) {
-      filterController.clear();
-      searchController.clear();
-      sortController.clear();
-      taggingController.clear();
-      await ingestionPipeline.run(request, callbacks);
-    },
-    async loadRowIndex(handle) {
-      return RowIndexStore.load(handle);
-    },
-    async seekRows({ handle, startRow, rowCount }) {
-      const index = await RowIndexStore.load(handle);
-      if (!index || rowCount <= 0) {
-        return null;
+    async fetchRows({ offset, limit }) {
+      const dataset = state.dataset;
+      const matchedRows = activeRowOrder(dataset)?.length ?? dataset.totalRows;
+      if (!dataset.batchStore) {
+        return { rows: [], totalRows: 0, matchedRows: 0 };
       }
+      const rows = await dataset.batchStore.getRows(viewRowIds(offset, limit));
+      return { rows, totalRows: dataset.totalRows, matchedRows };
+    },
 
-      const entries: Array<{ rowIndex: number; byteOffset: number }> = [];
-      const endRow = startRow + rowCount;
-      const startEntry = findNearestCheckpoint(index.entries, startRow);
+    async getRowsById(rowIds) {
+      return state.dataset.batchStore?.getRows(rowIds) ?? [];
+    },
 
-      if (startEntry) {
-        entries.push(startEntry);
+    async getTimeHistogram({ column, buckets }) {
+      const dataset = state.dataset;
+      if (!dataset.batchStore || !dataset.header.includes(column)) {
+        return { column, start: null, bucketMs: 0, counts: [], datedRows: 0 };
       }
+      const mask = rowMaskFrom(dataset.searchRowIds ?? dataset.filterRowIds, dataset.totalRows);
+      return timeHistogram(dataset.batchStore, mask, column, Math.max(1, Math.min(1_000, buckets)));
+    },
 
-      for (const entry of index.entries) {
-        if (entry.rowIndex > startRow && entry.rowIndex < endRow) {
-          entries.push(entry);
+    async profileColumn(column) {
+      const dataset = state.dataset;
+      if (!dataset.batchStore || !dataset.header.includes(column)) {
+        throw new Error(`Unknown column "${column}"`);
+      }
+      const mask = rowMaskFrom(dataset.searchRowIds ?? dataset.filterRowIds, dataset.totalRows);
+      return profileColumn(dataset.batchStore, mask, column, dataset.columnTypes[column] ?? 'string');
+    },
+
+    async findRowPosition(rowId) {
+      const order = activeRowOrder(state.dataset);
+      if (!order) {
+        return rowId >= 0 && rowId < state.dataset.totalRows ? rowId : -1;
+      }
+      return order.indexOf(rowId);
+    },
+
+    async findTaggedPosition(fromPosition, direction) {
+      const order = activeRowOrder(state.dataset);
+      const total = order ? order.length : state.dataset.totalRows;
+      const tags = state.tagging.tags;
+      const step = direction === 'next' ? 1 : -1;
+      for (let position = fromPosition + step; position >= 0 && position < total; position += step) {
+        if (tags[order ? order[position]! : position]) {
+          return position;
         }
       }
+      return -1;
+    },
 
-      return {
-        entries,
-        checkpointInterval: index.checkpointInterval
-      };
-    },
-    async applySorts(request: ApplySortRequest): Promise<ApplySortResult> {
-      return sortController.run(request);
-    },
-    async applyFilter(request: ApplyFilterRequest): Promise<ApplyFilterResult> {
-      return filterController.run(request);
-    },
-    async getColumnValueDistribution(
-      request: ColumnValueDistributionRequest
-    ): Promise<ColumnValueDistributionResult> {
-      return getColumnValueDistribution(request);
-    },
-    async fetchRows({ offset, limit }: FetchRowsRequest): Promise<FetchRowsResult> {
-      if (isDebugLoggingEnabled()) {
-        logDebug('data-worker', 'fetchRows request', {
-          offset,
-          limit,
-          hasBatchStore: Boolean(state.dataset.batchStore),
-          totalRows: state.dataset.totalRows,
-          activeRowCount: getActiveRowCount()
-        });
+    async getColumnValueDistribution({ column }: ColumnValueDistributionRequest) {
+      const dataset = state.dataset;
+      if (!dataset.batchStore || !dataset.header.includes(column)) {
+        return { column, totalRows: dataset.totalRows, nonNullRows: 0, distinctCount: 0, skipped: false, items: [] };
       }
-      if (!state.dataset.batchStore) {
-        if (isDebugLoggingEnabled()) {
-          console.warn('[data-worker] fetchRows received request before dataset ready');
+      // Distributions computed mid-load are partial, so only completed loads are cached.
+      if (dataset.loading) {
+        return computeValueDistribution(state, column);
+      }
+      let request = dataset.valueDistributions.get(column);
+      if (!request) {
+        request = computeValueDistribution(state, column);
+        dataset.valueDistributions.set(column, request);
+        request.catch(() => dataset.valueDistributions.delete(column));
+      }
+      return request;
+    },
+
+    groupBy: (request) =>
+      state.runViewOperation('group', async (check) => {
+        const dataset = state.dataset;
+        if (!dataset.batchStore) {
+          return { groupBy: [], rows: [], totalGroups: 0, totalRows: 0 };
         }
-        return {
-          rows: [],
-          totalRows: 0,
-          matchedRows: 0
-        };
+        const mask = rowMaskFrom(dataset.searchRowIds ?? dataset.filterRowIds, dataset.totalRows);
+        return groupRows(dataset.batchStore, mask, dataset.columnTypes, request, check);
+      }),
+
+    async exportCsv({ columns, scope }: ExportCsvRequest) {
+      const dataset = state.dataset;
+      const store = dataset.batchStore;
+      if (!store) {
+        throw new Error('No dataset loaded');
       }
+      const tags = state.tagging.tags;
+      const labelNames = new Map(state.tagging.labels.map((label) => [label.id, label.name]));
+      const order =
+        scope === 'labelled'
+          ? Uint32Array.from(
+              Object.keys(tags)
+                .map(Number)
+                .sort((left, right) => left - right)
+            )
+          : (activeRowOrder(dataset) ?? Uint32Array.from({ length: dataset.totalRows }, (_, index) => index));
 
-      const rows = await materializeViewWindow(offset, limit);
-      if (isDebugLoggingEnabled()) {
-        logDebug('data-worker', 'fetchRows resolved', {
-          offset,
-          limit,
-          rows: rows.length,
-          totalRows: state.dataset.totalRows,
-          matchedRows: getActiveRowCount()
-        });
+      const header = columns.map((column) => column.header);
+      if (scope === 'labelled') {
+        header.push('labels', 'note');
       }
-      return {
-        rows,
-        totalRows: state.dataset.totalRows,
-        matchedRows: getActiveRowCount()
-      };
-    },
-    async groupBy(request: GroupingRequest): Promise<GroupingResult> {
-      const batchStore = state.dataset.batchStore;
-      if (!batchStore) {
-        return {
-          groupBy: normaliseGroupColumns(request.groupBy),
-          rows: [],
-          totalGroups: 0,
-          totalRows: 0
-        };
-      }
-
-      const groupColumns = normaliseGroupColumns(request.groupBy);
-      const normalisedRequest: GroupingRequest = {
-        ...request,
-        groupBy: groupColumns
-      };
-
-      const currentOrder = getActiveRowOrder();
-      const collectedRows: MaterializedRow[] = [];
-
-      if (currentOrder) {
-        if (!currentOrder.length) {
-          return {
-            groupBy: groupColumns,
-            rows: [],
-            totalGroups: 0,
-            totalRows: 0
-          };
+      const parts: string[] = [serializeCsvRow(header)];
+      const chunkSize = 10_000;
+      for (let start = 0; start < order.length; start += chunkSize) {
+        const rows = await store.getRows(order.subarray(start, start + chunkSize));
+        let chunk = '';
+        for (const row of rows) {
+          const cells: unknown[] = columns.map((column) => row[column.key]);
+          if (scope === 'labelled') {
+            const record = tags[row.__rowId];
+            cells.push(
+              (record?.labelIds ?? []).map((id) => labelNames.get(id) ?? id).join('; '),
+              record?.note ?? ''
+            );
+          }
+          chunk += serializeCsvRow(cells);
         }
-
-        const idsArray = Array.from(currentOrder);
-        const chunkSize = 10_000;
-        for (let start = 0; start < idsArray.length; start += chunkSize) {
-          const slice = idsArray.slice(start, start + chunkSize);
-          const chunk = await batchStore.materializeRows(slice);
-          collectedRows.push(...chunk);
-        }
-      } else {
-        for await (const { rows } of batchStore.iterateMaterializedBatches()) {
-          collectedRows.push(...rows);
-        }
+        parts.push(chunk);
       }
+      return new Blob(parts, { type: CSV_MIME_TYPE });
+    },
 
-      if (!collectedRows.length) {
-        return {
-          groupBy: groupColumns,
-          rows: [],
-          totalGroups: 0,
-          totalRows: 0
-        };
-      }
-
-      return groupMaterializedRows(collectedRows, state.dataset.columnTypes, normalisedRequest);
-    },
-    async globalSearch(request: SearchRequest): Promise<GlobalSearchResult> {
-      return searchController.run(request);
-    },
-    async clearSearch(request?: ClearSearchRequest): Promise<void> {
-      searchController.clearSearch(request);
-    },
-    async loadTags(): Promise<TaggingSnapshot> {
-      return taggingController.loadTags();
-    },
-    async tagRows(request: TagRowsRequest): Promise<TagRowsResponse> {
-      return taggingController.tagRows(request);
-    },
-    async clearTag(rowIds: number[]): Promise<TagRowsResponse> {
-      return taggingController.clearTag(rowIds);
-    },
-    async updateLabel(request: UpdateLabelRequest): Promise<LabelDefinition> {
-      return taggingController.updateLabel(request);
-    },
-    async deleteLabel(request: DeleteLabelRequest): Promise<DeleteLabelResponse> {
-      return taggingController.deleteLabel(request);
-    },
-    async exportTags(): Promise<ExportTagsResponse> {
-      return taggingController.exportTags();
-    },
-    async importTags(request: ImportTagsRequest): Promise<TaggingSnapshot> {
-      return taggingController.importTags(request);
-    },
-    async persistTags(): Promise<void> {
-      await taggingController.persistTags();
-    }
+    loadTags: () => tagging.loadTags(),
+    tagRows: (request) => tagging.tagRows(request),
+    clearTag: (rowIds) => tagging.clearTag(rowIds),
+    restoreTags: (records) => tagging.restoreTags(records),
+    updateLabel: (request) => tagging.updateLabel(request),
+    deleteLabel: (request) => tagging.deleteLabel(request),
+    exportTags: () => tagging.exportTags(),
+    importTags: (request) => tagging.importTags(request),
+    persistTags: () => tagging.persistTags()
   };
+
   return api;
 };
 
-const api = createDataWorkerApi();
-
-
-expose(api);
+expose(createDataWorkerApi());

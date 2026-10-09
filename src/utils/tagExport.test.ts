@@ -55,22 +55,8 @@ describe('parseTagExport', () => {
     });
   });
 
-  it('supports legacy snapshot-only exports', () => {
-    const snapshot = createSnapshot();
-    // simulate legacy shape with single labelId
-    const legacy = {
-      ...snapshot,
-      tags: {
-        5: {
-          labelId: 'label-1',
-          note: 'check login event',
-          updatedAt: 3
-        }
-      }
-    };
-    const parsed = parseTagExport(legacy);
-    expect(parsed.snapshot.tags[5]?.labelIds).toEqual(['label-1']);
-    expect(parsed.metadata).toBeNull();
+  it('rejects bare snapshots without an export envelope', () => {
+    expect(() => parseTagExport(createSnapshot())).toThrow('File is not a valid annotations export.');
   });
 
   it('rejects invalid payloads', () => {

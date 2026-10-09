@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useMemo, useState } from 'react';
+
+import { Modal } from '@components/Modal';
+import { availableTimeZones } from '@utils/datetimeFormat';
 
 import {
   FONT_OPTIONS,
@@ -7,7 +9,7 @@ import {
   getFontOption,
   getFontStack
 } from '@constants/fonts';
-import { useSessionStore } from '@state/sessionStore';
+import { useAppStore } from '@state/appStore';
 
 interface OptionsPanelProps {
   open: boolean;
@@ -20,33 +22,19 @@ const OptionsPanel = ({
   onClose,
   onFlushStoredData
 }: OptionsPanelProps): JSX.Element | null => {
-  const interfaceFontFamily = useSessionStore((state) => state.interfaceFontFamily);
-  const interfaceFontSize = useSessionStore((state) => state.interfaceFontSize);
-  const dataFontFamily = useSessionStore((state) => state.dataFontFamily);
-  const dataFontSize = useSessionStore((state) => state.dataFontSize);
-  const setInterfaceFontFamily = useSessionStore((state) => state.setInterfaceFontFamily);
-  const setInterfaceFontSize = useSessionStore((state) => state.setInterfaceFontSize);
-  const setDataFontFamily = useSessionStore((state) => state.setDataFontFamily);
-  const setDataFontSize = useSessionStore((state) => state.setDataFontSize);
+  const interfaceFontFamily = useAppStore((state) => state.interfaceFontFamily);
+  const interfaceFontSize = useAppStore((state) => state.interfaceFontSize);
+  const dataFontFamily = useAppStore((state) => state.dataFontFamily);
+  const dataFontSize = useAppStore((state) => state.dataFontSize);
+  const setInterfaceFontFamily = useAppStore((state) => state.setInterfaceFontFamily);
+  const setInterfaceFontSize = useAppStore((state) => state.setInterfaceFontSize);
+  const setDataFontFamily = useAppStore((state) => state.setDataFontFamily);
+  const setDataFontSize = useAppStore((state) => state.setDataFontSize);
   const [flushState, setFlushState] = useState<'idle' | 'pending' | 'done'>('idle');
   const [flushError, setFlushError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [open, onClose]);
+  const displayTimeZone = useAppStore((state) => state.displayTimeZone);
+  const setDisplayTimeZone = useAppStore((state) => state.setDisplayTimeZone);
+  const timeZones = useMemo(() => availableTimeZones(), []);
 
   useEffect(() => {
     if (open) {
@@ -97,31 +85,9 @@ const OptionsPanel = ({
   const activeInterfaceFont = getFontOption(interfaceFontFamily);
   const activeDataFont = getFontOption(dataFontFamily);
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 backdrop-blur-sm"
-      role="dialog"
-      aria-modal
-      onClick={onClose}
-    >
-      <div
-        className="flex w-full max-w-lg flex-col gap-4 rounded-lg border border-slate-700 bg-slate-900 p-6 text-sm text-slate-200 shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <header className="flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-slate-100">Options</h2>
-            <p className="text-xs text-slate-400">Adjust workspace preferences for your current session.</p>
-          </div>
-          <button
-            type="button"
-            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
-            onClick={onClose}
-          >
-            Close
-          </button>
-        </header>
-
+  return (
+    <Modal title="Options" onClose={onClose}>
+        <p className="mb-4 text-xs text-slate-400">Preferences are saved in this browser and apply to every file.</p>
         <section className="flex flex-col gap-5">
           <div className="flex flex-col gap-3">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -213,20 +179,40 @@ const OptionsPanel = ({
             </div>
           </div>
 
+          <div className="flex flex-col gap-3 border-t border-slate-800 pt-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Timestamps</h3>
+            <label className="flex flex-col gap-2">
+              <span className="text-xs text-slate-400">Display time zone</span>
+              <select
+                className="rounded border border-slate-600 bg-slate-950 px-3 py-2 text-sm"
+                value={displayTimeZone}
+                onChange={(event) => setDisplayTimeZone(event.target.value)}
+              >
+                <option value="original">As written in the file</option>
+                {timeZones.map((zone) => (
+                  <option key={zone} value={zone}>
+                    {zone}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-500">
+                Converts datetime columns for display only. Timestamps without a zone are read as UTC.
+              </p>
+            </label>
+          </div>
+
           <div className="flex flex-col gap-3 border-t border-rose-900/60 pt-4">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-rose-300">
-              Stored data
+              Delete stored data
             </h3>
             <p className="text-xs text-slate-400">
-              Delete saved session snapshots, cached row batches, row indexes, annotations, and
-              local browser settings for this app.
+              Removes cached rows, all saved labels and notes, and these preferences from this browser,
+              then reloads. Your files are not touched.
             </p>
             <div className="flex items-center justify-between gap-3 rounded border border-rose-900/60 bg-rose-950/20 px-3 py-3">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-rose-100">Flush stored data</p>
-                <p className="text-xs text-rose-200/80">
-                  Use this if stale browser storage is causing corrupted reloads.
-                </p>
+                <p className="text-sm font-medium text-rose-100">Delete everything</p>
+                <p className="text-xs text-rose-200/80">Export labels first if you want to keep them.</p>
               </div>
               <button
                 type="button"
@@ -234,11 +220,7 @@ const OptionsPanel = ({
                 onClick={handleFlushStoredData}
                 disabled={flushState === 'pending' || flushState === 'done'}
               >
-                {flushState === 'pending'
-                  ? 'Flushing…'
-                  : flushState === 'done'
-                    ? 'Reloading…'
-                    : 'Flush'}
+                {flushState === 'pending' ? 'Deleting…' : flushState === 'done' ? 'Reloading…' : 'Delete'}
               </button>
             </div>
             {flushState === 'pending' && (
@@ -249,9 +231,7 @@ const OptionsPanel = ({
             {flushError && <p className="text-xs text-rose-300">{flushError}</p>}
           </div>
         </section>
-      </div>
-    </div>,
-    document.body
+    </Modal>
   );
 };
 

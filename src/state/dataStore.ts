@@ -1,9 +1,9 @@
 import { createWithEqualityFn } from 'zustand/traditional';
 
-import type { ColumnInference, ColumnType, GroupingResult, RowBatch } from '@workers/types';
+import type { ColumnInference, ColumnType, GroupingResult, ParseStats } from '@workers/types';
 import type { DidYouMeanInfo } from '@workers/didYouMean';
-import type { ColumnValueDistributionResult } from '@workers/workerApiTypes';
-import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
+import type { ColumnValueDistributionResult, LoadCompleteSummary } from '@workers/workerApiTypes';
+import { getDataWorker } from '@workers/dataWorkerProxy';
 import { formatBytes } from '@utils/formatBytes';
 
 export interface GridColumn {
@@ -22,18 +22,19 @@ export interface GridRow {
 export type LoaderStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 export interface ColumnValueDistributionCacheEntry {
-  status: 'idle' | 'loading' | 'ready' | 'error';
+  status: 'loading' | 'ready' | 'error';
   result?: ColumnValueDistributionResult;
   error?: string;
 }
 
-export interface ValueFrequencyIndexingState {
-  status: 'idle' | 'indexing' | 'ready';
-  totalColumns: number;
-  completedColumns: number;
-}
+/** A request for the grid to move its focus; `seq` makes repeated identical requests distinct. */
+export type GridNavigation =
+  | { kind: 'row'; rowId: number; seq: number }
+  | { kind: 'next' | 'previous' | 'nextLabelled' | 'previousLabelled'; seq: number };
 
 export interface DataState {
+  /** Increments for every load so late async results for a previous file can be discarded. */
+  loadId: number;
   fileName: string | null;
   columns: GridColumn[];
   columnInference: Record<string, ColumnInference>;
@@ -45,16 +46,18 @@ export interface DataState {
     payload?: unknown;
     timestamp: number;
   } | null;
-  stats: RowBatch['stats'] | null;
+  stats: ParseStats | null;
   totalRows: number;
+  /** Rows in the current view (after filter and search). */
   matchedRows: number | null;
-  filterMatchedRows: number | null;
+  filterActive: boolean;
+  searchActive: boolean;
   filterPredicateMatchCounts: Record<string, number> | null;
   columnValueDistributions: Record<string, ColumnValueDistributionCacheEntry>;
-  valueFrequencyIndexing: ValueFrequencyIndexingState;
-  searchMatchedRows: number | null;
   didYouMean: DidYouMeanInfo | null;
+  /** Increments whenever the worker's row order changes, so grids refetch. */
   viewVersion: number;
+  navigation: GridNavigation | null;
   grouping: {
     status: LoaderStatus;
     rows: GroupingResult['rows'];
@@ -66,14 +69,10 @@ export interface DataState {
   startLoading: (fileName: string) => void;
   setHeader: (header: string[]) => void;
   reportProgress: (progress: { rowsParsed: number; bytesParsed: number }) => void;
-  complete: (summary: {
-    rowsParsed: number;
-    bytesParsed: number;
-    durationMs: number;
-    columnTypes: Record<string, ColumnType>;
-    columnInference: Record<string, ColumnInference>;
-  }) => void;
+  complete: (summary: LoadCompleteSummary) => void;
+  /** Records an error for the diagnostics toast without changing the load status. */
   setError: (message: string, details?: unknown) => void;
+  failLoading: (message: string) => void;
   clearError: () => void;
   setFilterSummary: (payload: {
     matchedRows: number;
@@ -81,19 +80,14 @@ export interface DataState {
     didYouMean?: DidYouMeanInfo;
     filterMatchCounts?: Record<string, number>;
   }) => void;
-  clearFilterSummary: () => void;
-  setMatchedRowCount: (value: number | null) => void;
-  setColumnValueDistributionLoading: (column: string) => void;
-  setColumnValueDistributionResult: (result: ColumnValueDistributionResult) => void;
-  setColumnValueDistributionError: (column: string, error: string) => void;
-  clearColumnValueDistributions: () => void;
-  startValueFrequencyIndexing: (totalColumns: number) => void;
-  setValueFrequencyIndexingProgress: (completedColumns: number) => void;
-  completeValueFrequencyIndexing: () => void;
-  setDidYouMean: (didYouMean: DidYouMeanInfo | null) => void;
-  bumpViewVersion: () => void;
+  clearFilterSummary: (matchedRows: number) => void;
+  setMatchedRowCount: (value: number) => void;
   setSearchResult: (payload: { totalRows: number; matchedRows: number }) => void;
-  clearSearchResult: () => void;
+  clearSearchResult: (matchedRows?: number) => void;
+  /** Fetches a column's value counts once per load; concurrent callers share the request. */
+  loadColumnValueDistribution: (column: string) => Promise<void>;
+  bumpViewVersion: () => void;
+  navigateGrid: (request: { kind: 'row'; rowId: number } | { kind: Exclude<GridNavigation['kind'], 'row'> }) => void;
   setGroupingLoading: () => void;
   setGroupingResult: (result: GroupingResult) => void;
   setGroupingError: (message: string) => void;
@@ -101,35 +95,19 @@ export interface DataState {
   reset: () => void;
 }
 
-const confidenceLabel = (inference: ColumnInference): number => {
-  return Math.round(Math.min(1, Math.max(0, inference.confidence)) * 100);
-};
+const confidencePercent = (inference: ColumnInference): number =>
+  Math.round(Math.min(1, Math.max(0, inference.confidence)) * 100);
 
-const buildErrorDetails = (message: string, details?: unknown) => {
-  if (!details) {
-    return {
-      message,
-      timestamp: Date.now()
-    };
-  }
-
+const buildErrorDetails = (message: string, details?: unknown): DataState['errorDetails'] => {
   if (details instanceof Error) {
     return {
       message,
       stack: details.stack,
-      payload: {
-        name: details.name,
-        originalMessage: details.message
-      },
+      payload: { name: details.name, originalMessage: details.message },
       timestamp: Date.now()
     };
   }
-
-  return {
-    message,
-    payload: details,
-    timestamp: Date.now()
-  };
+  return details ? { message, payload: details, timestamp: Date.now() } : { message, timestamp: Date.now() };
 };
 
 const initialGroupingState = (): DataState['grouping'] => ({
@@ -141,306 +119,114 @@ const initialGroupingState = (): DataState['grouping'] => ({
   error: null
 });
 
-const initialValueFrequencyIndexingState = (): ValueFrequencyIndexingState => ({
-  status: 'idle',
-  totalColumns: 0,
-  completedColumns: 0
-});
-
-export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
+const emptyFileState = {
   fileName: null,
   columns: [],
   columnInference: {},
-  status: 'idle',
+  status: 'idle' as LoaderStatus,
   message: null,
   errorDetails: null,
   stats: null,
   totalRows: 0,
   matchedRows: null,
-  filterMatchedRows: null,
+  filterActive: false,
+  searchActive: false,
   filterPredicateMatchCounts: null,
   columnValueDistributions: {},
-  valueFrequencyIndexing: initialValueFrequencyIndexingState(),
-  searchMatchedRows: null,
-  didYouMean: null,
+  didYouMean: null
+};
+
+export const useDataStore = createWithEqualityFn<DataState>()((set, get) => ({
+  ...emptyFileState,
+  loadId: 0,
   viewVersion: 0,
+  navigation: null,
   grouping: initialGroupingState(),
   startLoading: (fileName) =>
     set((state) => ({
+      ...emptyFileState,
       fileName,
-      columns: [],
-      columnInference: {},
       status: 'loading',
-      message: null,
-      errorDetails: null,
-      stats: null,
-      totalRows: 0,
-      matchedRows: null,
-      filterMatchedRows: null,
-      filterPredicateMatchCounts: null,
-      columnValueDistributions: {},
-      valueFrequencyIndexing: initialValueFrequencyIndexingState(),
-      searchMatchedRows: null,
-      didYouMean: null,
+      loadId: state.loadId + 1,
       viewVersion: state.viewVersion + 1,
       grouping: initialGroupingState()
     })),
   setHeader: (header) =>
-    set((state) => {
-      if (isDebugLoggingEnabled()) {
-        logDebug('data-store', 'setHeader', {
-          headerCount: header.length,
-          previousColumnCount: state.columns.length
-        });
-      }
-      return {
-        columns: header.map((key, index) => ({
-          key,
-          headerName: key || `column_${index + 1}`,
-          type: 'string' as ColumnType,
-          confidence: 0,
-          examples: []
-        }))
-      };
+    set({
+      columns: header.map((key) => ({ key, headerName: key, type: 'string', confidence: 0, examples: [] }))
     }),
   reportProgress: (progress) =>
-    set((state) => {
-      if (isDebugLoggingEnabled()) {
-        logDebug('data-store', 'reportProgress', {
-          rowsParsed: progress.rowsParsed,
-          bytesParsed: progress.bytesParsed,
-          previousTotalRows: state.totalRows
-        });
-      }
-      return {
-        stats: {
-          rowsParsed: progress.rowsParsed,
-          bytesParsed: progress.bytesParsed,
-          eof: false
-        },
-        totalRows: progress.rowsParsed,
-        status: state.status === 'idle' ? 'loading' : state.status,
-        message: `Streaming… parsed ${progress.rowsParsed.toLocaleString()} rows (${formatBytes(progress.bytesParsed)})`
-      };
-    }),
+    set((state) => ({
+      stats: { rowsParsed: progress.rowsParsed, bytesParsed: progress.bytesParsed, malformedRows: 0, eof: false },
+      totalRows: progress.rowsParsed,
+      matchedRows: state.filterActive || state.searchActive ? state.matchedRows : progress.rowsParsed,
+      message: `Streaming… parsed ${progress.rowsParsed.toLocaleString()} rows (${formatBytes(progress.bytesParsed)})`
+    })),
   complete: (summary) =>
-    set((state) => {
-      if (isDebugLoggingEnabled()) {
-        console.info('[data-store] complete', {
-          rowsParsed: summary.rowsParsed,
-          bytesParsed: summary.bytesParsed,
-          previousStatus: state.status,
-          currentColumnCount: state.columns.length
-        });
-      }
-      const updatedColumns =
-        state.columns.length > 0
-          ? state.columns.map((column) => {
-              const type = summary.columnTypes[column.key];
-              const inference = summary.columnInference[column.key];
-
-              if (!type || !inference) {
-                return column;
-              }
-
-              return {
-                ...column,
-                type,
-                confidence: confidenceLabel(inference),
-                examples: inference.examples
-              };
-            })
-          : Object.keys(summary.columnTypes).map((key) => {
-              const type = summary.columnTypes[key]!;
-              const inference = summary.columnInference[key]!;
-              return {
-                key,
-                headerName: key,
-                type,
-                confidence: confidenceLabel(inference),
-                examples: inference.examples
-              };
-            });
-
-      const matchedRows =
-        state.searchMatchedRows != null
-          ? state.searchMatchedRows
-          : state.filterMatchedRows != null
-            ? state.filterMatchedRows
-            : summary.rowsParsed;
-
-      const nextState = {
-        status: 'ready' as LoaderStatus,
-        message: `Loaded ${summary.rowsParsed.toLocaleString()} rows in ${(summary.durationMs / 1000).toFixed(
-          1
-        )}s`,
-        stats: {
-          rowsParsed: summary.rowsParsed,
-          bytesParsed: summary.bytesParsed,
-          eof: true
-        },
-        totalRows: summary.rowsParsed,
-        matchedRows,
-        columns: updatedColumns,
-        columnInference: summary.columnInference,
-        columnValueDistributions: {},
-        valueFrequencyIndexing: initialValueFrequencyIndexingState()
-      };
-
-      if (isDebugLoggingEnabled()) {
-        logDebug('data-store', 'complete applied', {
-          status: nextState.status,
-          totalRows: nextState.totalRows,
-          matchedRows: nextState.matchedRows,
-          columnCount: nextState.columns.length
-        });
-      }
-
-      return nextState;
-    }),
-  setError: (message, details) =>
-    set((state) => {
-      if (isDebugLoggingEnabled()) {
-        console.error('[data-store] setError', { message, previousStatus: state.status, details });
-      }
-      return {
-        status: 'error',
-        message,
-        errorDetails: buildErrorDetails(message, details)
-      };
-    }),
-  clearError: () =>
     set((state) => ({
-      message: null,
-      errorDetails: null,
-      status: state.status === 'error' ? 'idle' : state.status
-    })),
-  setFilterSummary: ({ matchedRows, totalRows, didYouMean, filterMatchCounts }) =>
-    set(() => ({
-      filterMatchedRows: matchedRows,
-      matchedRows,
-      totalRows,
-      didYouMean: didYouMean ?? null,
-      filterPredicateMatchCounts: filterMatchCounts ?? null
-  })),
-  clearFilterSummary: () =>
-    set((state) => ({
-      filterMatchedRows: null,
-      didYouMean: null,
-      matchedRows: state.searchMatchedRows ?? state.totalRows,
-      filterPredicateMatchCounts: null
-  })),
-  setMatchedRowCount: (value) =>
-    set(() => ({
-      matchedRows: value
-    })),
-  setColumnValueDistributionLoading: (column) =>
-    set((state) => ({
-      columnValueDistributions: {
-        ...state.columnValueDistributions,
-        [column]: {
-          status: 'loading'
-        }
-      }
-    })),
-  setColumnValueDistributionResult: (result) =>
-    set((state) => ({
-      columnValueDistributions: {
-        ...state.columnValueDistributions,
-        [result.column]: {
-          status: 'ready',
-          result
-        }
-      }
-    })),
-  setColumnValueDistributionError: (column, error) =>
-    set((state) => ({
-      columnValueDistributions: {
-        ...state.columnValueDistributions,
-        [column]: {
-          status: 'error',
-          error
-        }
-      }
-    })),
-  clearColumnValueDistributions: () =>
-    set(() => ({
+      status: 'ready',
+      message:
+        `Loaded ${summary.rowsParsed.toLocaleString()} rows in ${(summary.durationMs / 1000).toFixed(1)}s` +
+        (summary.malformedRows > 0
+          ? ` (${summary.malformedRows.toLocaleString()} rows had the wrong number of fields)`
+          : ''),
+      stats: {
+        rowsParsed: summary.rowsParsed,
+        bytesParsed: summary.bytesParsed,
+        malformedRows: summary.malformedRows,
+        eof: true
+      },
+      totalRows: summary.rowsParsed,
+      matchedRows: state.filterActive || state.searchActive ? state.matchedRows : summary.rowsParsed,
+      columns: state.columns.map((column) => {
+        const inference = summary.columnInference[column.key];
+        return inference
+          ? { ...column, type: inference.type, confidence: confidencePercent(inference), examples: inference.examples }
+          : column;
+      }),
+      columnInference: summary.columnInference,
       columnValueDistributions: {}
     })),
-  startValueFrequencyIndexing: (totalColumns) =>
-    set(() => ({
-      valueFrequencyIndexing:
-        totalColumns > 0
-          ? {
-              status: 'indexing',
-              totalColumns,
-              completedColumns: 0
-            }
-          : {
-              status: 'ready',
-              totalColumns: 0,
-              completedColumns: 0
-            }
-    })),
-  setValueFrequencyIndexingProgress: (completedColumns) =>
-    set((state) => {
-      if (state.valueFrequencyIndexing.status !== 'indexing') {
-        return state;
-      }
-
-      return {
-        valueFrequencyIndexing: {
-          ...state.valueFrequencyIndexing,
-          completedColumns: Math.max(
-            0,
-            Math.min(completedColumns, state.valueFrequencyIndexing.totalColumns)
-          )
-        }
-      };
-    }),
-  completeValueFrequencyIndexing: () =>
-    set((state) => ({
-      valueFrequencyIndexing: {
-        status: 'ready',
-        totalColumns: state.valueFrequencyIndexing.totalColumns,
-        completedColumns: state.valueFrequencyIndexing.totalColumns
-      }
-    })),
-  setDidYouMean: (didYouMean) =>
-    set(() => ({
-      didYouMean
-    })),
-  bumpViewVersion: () =>
-    set((state) => ({
-      viewVersion: state.viewVersion + 1
-    })),
-  setSearchResult: ({ totalRows, matchedRows }) =>
-    set((state) => ({
+  setError: (message, details) => set({ errorDetails: buildErrorDetails(message, details) }),
+  failLoading: (message) => set({ status: 'error', message }),
+  clearError: () => set({ errorDetails: null }),
+  setFilterSummary: ({ matchedRows, didYouMean, filterMatchCounts }) =>
+    set({
       matchedRows,
-      totalRows,
-      status: 'ready',
-      searchMatchedRows: matchedRows,
-      message: `Found ${matchedRows.toLocaleString()} matches across ${totalRows.toLocaleString()} rows`
-    })),
-  clearSearchResult: () =>
-    set((state) => ({
-      matchedRows: state.filterMatchedRows ?? state.totalRows,
-      searchMatchedRows: null,
-      message:
-        state.filterMatchedRows != null
-          ? `Showing ${state.filterMatchedRows.toLocaleString()} of ${state.totalRows.toLocaleString()} rows`
-          : null
-    })),
-  setGroupingLoading: () =>
-    set((state) => ({
-      grouping: {
-        ...state.grouping,
-        status: 'loading',
-        error: null
+      filterActive: true,
+      didYouMean: didYouMean ?? null,
+      filterPredicateMatchCounts: filterMatchCounts ?? null
+    }),
+  clearFilterSummary: (matchedRows) =>
+    set({ matchedRows, filterActive: false, didYouMean: null, filterPredicateMatchCounts: null }),
+  setMatchedRowCount: (matchedRows) => set({ matchedRows }),
+  setSearchResult: ({ matchedRows }) => set({ matchedRows, searchActive: true }),
+  clearSearchResult: (matchedRows) =>
+    set((state) => ({ searchActive: false, matchedRows: matchedRows ?? state.matchedRows })),
+  async loadColumnValueDistribution(column) {
+    const { loadId, columnValueDistributions } = get();
+    const existing = columnValueDistributions[column];
+    if (existing && existing.status !== 'error') {
+      return;
+    }
+    const update = (entry: ColumnValueDistributionCacheEntry): void => {
+      if (get().loadId === loadId) {
+        set((state) => ({ columnValueDistributions: { ...state.columnValueDistributions, [column]: entry } }));
       }
-    })),
+    };
+    update({ status: 'loading' });
+    try {
+      update({ status: 'ready', result: await getDataWorker().getColumnValueDistribution({ column }) });
+    } catch (error) {
+      update({ status: 'error', error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+  bumpViewVersion: () => set((state) => ({ viewVersion: state.viewVersion + 1 })),
+  navigateGrid: (request) =>
+    set((state) => ({ navigation: { ...request, seq: (state.navigation?.seq ?? 0) + 1 } as GridNavigation })),
+  setGroupingLoading: () => set((state) => ({ grouping: { ...state.grouping, status: 'loading', error: null } })),
   setGroupingResult: (result) =>
-    set(() => ({
+    set({
       grouping: {
         status: 'ready',
         rows: result.rows,
@@ -449,39 +235,13 @@ export const useDataStore = createWithEqualityFn<DataState>()((set) => ({
         totalRows: result.totalRows,
         error: null
       }
-    })),
-  setGroupingError: (message) =>
-    set(() => ({
-      grouping: {
-        status: 'error',
-        rows: [],
-        groupBy: [],
-        totalGroups: 0,
-        totalRows: 0,
-        error: message
-      }
-    })),
-  clearGrouping: () =>
-    set(() => ({
-      grouping: initialGroupingState()
-    })),
+    }),
+  setGroupingError: (message) => set({ grouping: { ...initialGroupingState(), status: 'error', error: message } }),
+  clearGrouping: () => set({ grouping: initialGroupingState() }),
   reset: () =>
     set((state) => ({
-      fileName: null,
-      columns: [],
-      columnInference: {},
-      status: 'idle',
-      message: null,
-      errorDetails: null,
-      stats: null,
-      totalRows: 0,
-      matchedRows: null,
-      filterMatchedRows: null,
-      searchMatchedRows: null,
-      didYouMean: null,
-      filterPredicateMatchCounts: null,
-      columnValueDistributions: {},
-      valueFrequencyIndexing: initialValueFrequencyIndexingState(),
+      ...emptyFileState,
+      loadId: state.loadId + 1,
       viewVersion: state.viewVersion + 1,
       grouping: initialGroupingState()
     }))

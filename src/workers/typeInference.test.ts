@@ -2,87 +2,77 @@ import { describe, expect, it } from 'vitest';
 
 import { analyzeValue, TypeInferencer } from './typeInference';
 
+const infer = (values: string[]) => {
+  const inferencer = new TypeInferencer(['col']);
+  values.forEach((value) => inferencer.updateRow([value]));
+  return inferencer.resolveAll().columnInference.col!;
+};
+
 describe('analyzeValue', () => {
-  it('recognizes null for empty strings', () => {
-    expect(analyzeValue('')).toEqual({ kind: 'null' });
-    expect(analyzeValue('   ')).toEqual({ kind: 'null' });
-  });
-
-  it('recognizes datetime for ISO formats', () => {
-    expect(analyzeValue('2023-10-14')).toEqual({ kind: 'datetime', datetimeValue: Date.parse('2023-10-14') });
-    expect(analyzeValue('2023-10-14T12:34:56')).toEqual({ kind: 'datetime', datetimeValue: Date.parse('2023-10-14T12:34:56') });
-    expect(analyzeValue('2023-10-14T12:34:56Z')).toEqual({ kind: 'datetime', datetimeValue: Date.parse('2023-10-14T12:34:56Z') });
-  });
-
-  it('recognizes datetime for epoch timestamps', () => {
-    expect(analyzeValue('1697126463')).toEqual({ kind: 'datetime', datetimeValue: 1697126463000 });
-    expect(analyzeValue('1697126463000')).toEqual({ kind: 'datetime', datetimeValue: 1697126463000 });
-  });
-
-  it('recognizes datetime for common formats', () => {
-    expect(analyzeValue('Oct 14 2025 01:44:33')).toEqual({ kind: 'datetime', datetimeValue: Date.parse('Oct 14 2025 01:44:33') });
-    expect(analyzeValue('10/14/2025')).toEqual({ kind: 'datetime', datetimeValue: Date.parse('10/14/2025') });
-    expect(analyzeValue('14-Oct-2025')).toEqual({ kind: 'datetime', datetimeValue: Date.parse('14-Oct-2025') });
-    expect(analyzeValue('October 14, 2025')).toEqual({ kind: 'datetime', datetimeValue: Date.parse('October 14, 2025') });
-  });
-
-  it('recognizes boolean values', () => {
-    expect(analyzeValue('true')).toEqual({ kind: 'boolean', booleanValue: true });
-    expect(analyzeValue('false')).toEqual({ kind: 'boolean', booleanValue: false });
-    expect(analyzeValue('yes')).toEqual({ kind: 'boolean', booleanValue: true });
-    expect(analyzeValue('no')).toEqual({ kind: 'boolean', booleanValue: false });
-    expect(analyzeValue('1')).toEqual({ kind: 'boolean', booleanValue: true });
-    expect(analyzeValue('0')).toEqual({ kind: 'boolean', booleanValue: false });
-  });
-
-  it('recognizes numbers', () => {
-    expect(analyzeValue('42')).toEqual({ kind: 'number', numberValue: 42 });
-    expect(analyzeValue('3.14')).toEqual({ kind: 'number', numberValue: 3.14 });
-    expect(analyzeValue('-123')).toEqual({ kind: 'number', numberValue: -123 });
-  });
-
-  it('recognizes strings for non-parseable values', () => {
-    expect(analyzeValue('hello')).toEqual({ kind: 'string' });
-    expect(analyzeValue('random text')).toEqual({ kind: 'string' });
-  });
-
-  it('prioritizes datetime over other types', () => {
-    // Epoch timestamps are classified as datetime
-    expect(analyzeValue('1697126463000')).toEqual({ kind: 'datetime', datetimeValue: 1697126463000 });
+  it('classifies values with the strict parsers', () => {
+    expect(analyzeValue('  ').kind).toBe('null');
+    expect(analyzeValue('yes').kind).toBe('boolean');
+    expect(analyzeValue('1').kind).toBe('number');
+    expect(analyzeValue('0x10').kind).toBe('string');
+    expect(analyzeValue('Infinity').kind).toBe('string');
+    expect(analyzeValue('1700000000')).toEqual({ kind: 'datetime', datetimeValue: 1_700_000_000_000 });
+    expect(analyzeValue('2024-01-01 00:00')).toEqual({ kind: 'datetime', datetimeValue: Date.UTC(2024, 0, 1) });
   });
 });
 
 describe('TypeInferencer', () => {
-  it('infers datetime type for column with datetime values', () => {
-    const inferencer = new TypeInferencer(['timestamp']);
-    inferencer.updateRow(['2023-10-14']);
-    inferencer.updateRow(['Oct 14 2025 01:44:33']);
-    inferencer.updateRow(['1697126463000']);
-
-    const result = inferencer.resolve('timestamp');
-    expect(result.type).toBe('datetime');
-    expect(result.confidence).toBeGreaterThan(0.6);
+  it('infers numbers, not booleans, for 0/1 columns', () => {
+    expect(infer(['1', '0', '1', '0']).type).toBe('number');
   });
 
-  it('infers string type when confidence is low', () => {
-    const inferencer = new TypeInferencer(['mixed']);
-    inferencer.updateRow(['2023-10-14']);
-    inferencer.updateRow(['hello']);
-    inferencer.updateRow(['world']);
-
-    const result = inferencer.resolve('mixed');
-    expect(result.type).toBe('string');
+  it('infers booleans from word forms', () => {
+    expect(infer(['true', 'false', 'TRUE']).type).toBe('boolean');
   });
 
-  it('tracks min/max datetime values', () => {
-    const inferencer = new TypeInferencer(['timestamp']);
-    inferencer.updateRow(['2023-10-14T12:00:00Z']); // Date.parse('2023-10-14T12:00:00Z')
-    inferencer.updateRow(['2023-10-15T12:00:00Z']);
-    inferencer.updateRow(['2023-10-13T12:00:00Z']);
-
-    const result = inferencer.resolve('timestamp');
+  it('infers datetime and tracks the UTC range', () => {
+    const result = infer(['2024-01-02 10:00', '2024-01-01 09:00', '']);
     expect(result.type).toBe('datetime');
-    expect(result.minDatetime).toBe(Date.parse('2023-10-13T12:00:00Z'));
-    expect(result.maxDatetime).toBe(Date.parse('2023-10-15T12:00:00Z'));
+    expect(result.minDatetime).toBe(Date.UTC(2024, 0, 1, 9));
+    expect(result.maxDatetime).toBe(Date.UTC(2024, 0, 2, 10));
+    expect(result.nullCount).toBe(1);
+    expect(result.samples).toBe(3);
+  });
+
+  it('treats a column mixing epoch-like integers with small integers as numeric', () => {
+    expect(infer(['1700000000', '5', '12', '1700000001']).type).toBe('number');
+  });
+
+  it('requires 90% of non-empty values to parse before typing a column', () => {
+    const tenPercentText = [...Array.from({ length: 9 }, (_, i) => String(i)), 'n/a'];
+    expect(infer(tenPercentText).type).toBe('number');
+    const twentyPercentText = [...Array.from({ length: 8 }, (_, i) => String(i)), 'n/a', 'x'];
+    expect(infer(twentyPercentText).type).toBe('string');
+  });
+
+  it('ignores empty cells when computing ratios', () => {
+    expect(infer(['', '', '', '3', '4']).type).toBe('number');
+  });
+
+  it('defaults all-empty columns to string', () => {
+    expect(infer(['', ' ']).type).toBe('string');
+  });
+
+  it('keeps hex and Infinity columns as text', () => {
+    expect(infer(['0x1', '0x2', '0xff']).type).toBe('string');
+    expect(infer(['Infinity', '-Infinity']).type).toBe('string');
+  });
+
+  it('collects up to five distinct trimmed examples', () => {
+    const result = infer(['a', ' a ', 'b', 'c', 'd', 'e', 'f']);
+    expect(result.examples).toEqual(['a', 'b', 'c', 'd', 'e']);
+  });
+
+  it('resolves several columns independently and treats missing cells as empty', () => {
+    const inferencer = new TypeInferencer(['n', 's']);
+    inferencer.updateRow(['1']);
+    inferencer.updateRow(['2', 'x']);
+    const { columnTypes, columnInference } = inferencer.resolveAll();
+    expect(columnTypes).toEqual({ n: 'number', s: 'string' });
+    expect(columnInference.s!.nullCount).toBe(1);
   });
 });

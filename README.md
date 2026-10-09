@@ -12,55 +12,59 @@ https://nbareil.github.io/tabular-analysis-workbench/
 ## Why This Tool Exists
 - 100% local analysis: zero ingestion services, no telemetry, and no data leaves
   the user’s machine.
-- Built for very large CSV/TSV and `.gz` variants with back-pressure-aware
+- Built for very large CSV/TSV files, compressed or not, with back-pressure-aware
   streaming and incremental rendering.
-- Feels like a spreadsheet tuned for DFIR workflows: global search, grouping,
-  annotations, and persistence designed around long-form timelines.
+- Feels like a spreadsheet tuned for DFIR workflows: global search, timelines,
+  grouping, labels and notes.
+- Never alters your data: every cell keeps its original text; type inference only
+  changes how filters, sorts and aggregates read a column.
 
 ## Feature Overview
 
 | Capability | Description |
 | --- | --- |
-| Streaming ingestion | Streams files up to ~2 GB with gzip support, chunked workers, and checkpointed byte offsets for random access. |
-| Filtering & search | Rich filter builder, regex operators, per-cell context menu shortcuts, and exact-value suggestions when equality filters miss. |
-| Grouping & aggregations | Worker-powered pivoting and aggregations over the active filtered row set. |
-| Tagging & notes | Color-coded tags, markdown notes, and import/export flows persisted to the Origin Private File System (OPFS). |
-| Session persistence | Auto-saves filters, layouts, and annotation state to OPFS so sessions resume instantly. |
-| UI polish | Column chooser, collapsible filter panel, keyboard shortcuts, accessibility fixes, and global search. |
+| Streaming ingestion | Streams multi-GB files (gzip detected automatically) into an OPFS row cache; the grid shows rows while the file is still loading. |
+| Super-timelines | Open several files at once to merge them into one dataset with a `source_file` column. |
+| Filtering & search | Filter builder (equals, contains, starts with, regex, ranges), cell context menu shortcuts, time-window filters, highlighted global search, and exact-value suggestions when an equality filter matches nothing. |
+| Timelines & profiling | Timeline histogram per datetime column (click or drag to filter) and column profiles (empties, distinct values, min/max, top values). |
+| Grouping & aggregations | Worker-powered pivot over the current view with count, sum, min, max and average. |
+| Labels & notes | Any number of colour labels per row (MITRE ATT&CK tactics by default), markdown notes, undo/redo, JSON import/export, and saving to the Origin Private File System (OPFS). |
+| Time zones | Show timestamps as written in the file, or converted to UTC or any time zone. Timestamps without a zone are treated as UTC. |
+| Export | Current view or labelled rows only, as `.csv` or `.csv.gz`, with spreadsheet formula injection neutralised. |
 
 ### Detailed Capabilities
-- **File support:** `.csv`, `.tsv`, `.csv.gz`, `.tsv.gz` with delimiter detection.
-  Files never leave the device thanks to the File System Access API.
-- **Multi-threaded parsing:** Type inference, ingestion batching, and byte-offset
-  indexing run in a dedicated worker, keeping the UI responsive as data streams
-  in.
-- **Filters and grouping:** Combine equals/contains/range/regex predicates,
-  toggle case sensitivity, and pivot over one or more columns with counts,
-  min/max, sum, and average.
-- **Exact-value suggestions:** When an equality filter returns zero rows, the
+- **File support:** delimited text (`.csv`, `.tsv`, `.txt`) and their gzip
+  variants. The delimiter (tab, comma, semicolon or pipe) is detected from the
+  header line. Files never leave the device thanks to the File System Access API.
+- **Robust parsing:** quoted fields with embedded delimiters, quotes and newlines;
+  stray quotes inside unquoted fields (`12" disk`) stay literal; blank lines are
+  skipped; rows with too many or too few fields are kept and counted in the
+  status bar; duplicate header names are renamed.
+- **Strict types:** numbers, booleans and ISO-like timestamps (plus epoch
+  seconds/milliseconds between 2000 and 2100) are recognised. Text such as
+  `Event 4624` is never mistaken for a date, and `007` stays `007` on screen.
+- **Exact-value suggestions:** when an equality filter returns zero rows, the
   worker suggests nearby exact values without changing the result set.
-- **Tagging & annotation workflow:** Apply labels, open the Tag/Note dialog, and
-  synchronize markdown notes; exports honor OPFS storage limits and deliver JSON
-  bundles ready for sharing.
-- **Session restore:** Auto-saves every minute, reloads the previous dataset,
-  filters, column sizing, and annotation state after the user grants the file
-  handle again.
-- **Security posture:** All work stays local, markdown rendering is sanitized,
-  and capability checks enforce Chromium-only APIs.
+- **Labels & notes:** labels and notes are saved per file within seconds of an
+  edit, and kept for 21 days after the file was last opened. Imports from a file
+  with a different row count are rejected so labels never land on the wrong rows.
+- **Security posture:** all work stays local, markdown is sanitised, CSV exports
+  neutralise formulas, and capability checks enforce Chromium-only APIs.
 
 ## Architecture Snapshot
 - **React 18 + Vite** UI with Tailwind theming and AG Grid virtualization.
-- **Workers everywhere:** Comlink-powered data worker handles parsing, query
-  execution, search, and grouping so the UI just receives row batches.
-- **Origin Private File System (OPFS):** Persists session metadata, annotation
-  maps, and byte-offset checkpoints for fast resume.
-- **Testing stack:** Vitest + Testing Library for unit/component coverage with
-  Playwright-based end-to-end tests on the roadmap.
+- **One data worker** (Comlink) parses files, stores raw cell text in OPFS, and
+  runs filter → search → sort as a serial pipeline in which newer requests cancel
+  older ones.
+- **Origin Private File System (OPFS):** holds the row cache for the open dataset
+  and the per-file annotation snapshots.
+- **Testing stack:** Vitest + Testing Library for unit, worker integration and
+  component tests. See `TDD.md` for the design.
 
 ## Installation
 
 ### Prerequisites
-- Node.js 20+ and npm (or use the provided Nix flake: `nix develop`).
+- Node.js 22+ and npm (or use the provided Nix flake: `nix develop`).
 - A Chromium-based browser (Chrome, Edge, Brave) ≥ 119 with File System Access,
   Streams API, and OPFS support.
 - (Optional) `bd` CLI if you plan to interact with the beads issue tracker.
@@ -82,47 +86,50 @@ npm run preview   # Serves dist/ for local smoke tests
 ## Usage Guide
 
 ### Loading Data
-1. Launch the app and choose **Open file**.
-2. Select a CSV/TSV (optionally gzipped). The ingestion log in the status bar
-   shows streaming progress as batches arrive.
-3. The grid renders as soon as the first batch finishes parsing so you can start
-   triaging before ingestion completes.
+1. Choose **Open Files** and pick one file, or several to merge them into a
+   single timeline.
+2. The status bar shows streaming progress. The grid renders as soon as the
+   first batch is parsed, so you can start triaging before ingestion completes.
 
 ### Filtering & Search
-- Use the **Filter Builder** to add predicates per column. Context menus (right
-  click) provide “Filter in/out” shortcuts.
-- Toggle case sensitivity, match mode (equals/contains/regex), or default time
-  ranges for datetime fields.
-- Run a **Global Search** across visible columns. Exact equality filters show a
-  **Did you mean** banner when nearby exact values exist.
+- Use the **Filter Builder** (`f` toggles it, `a` adds a filter) to add
+  predicates per column, each with an optional **Case sensitive** toggle.
+- Right-click a cell for **Filter in / Filter out**, or, on a timestamp,
+  **Filter time window around this value**.
+- Right-click a column header for value counts with checkbox filters, a
+  **column profile**, and, for datetime columns, a **timeline** histogram.
+- **Global search** (`/` or `Ctrl/Cmd+K`) scans visible columns and highlights
+  matches; Enter / Shift+Enter jump to the next / previous match.
+- Undo and redo filter or label changes with `Ctrl/Cmd+Z` and `Ctrl/Cmd+Shift+Z`.
 
 ### Grouping & Aggregations
-- Open the **Pivot** panel to drag columns into rows/values, or trigger worker
-  aggregations from the column sidebar. Counts, sum, min, max, and averages are
-  streamed back to the grid.
+- Open **Pivot View**, choose group-by columns and aggregations (count, sum,
+  min, max, average). Results cover the current filtered/searched rows.
 
-### Tagging & Notes
-- Select rows and press `T` to open the Tag/Note dialog. Tags carry color
-  palettes and optional markdown notes.
-- Use the Labels panel in the left sidebar to batch-apply or remove tags and to
-  import/export the annotation JSON bundle.
+### Labels & Notes
+- Select rows, then right-click the **Labels** column to apply or remove labels.
+  With the grid focused, `T` edits the focused row's labels and note, and
+  `[` / `]` jump to the previous / next labelled row.
+- Use the **Labels** panel to manage labels and to import annotation bundles.
 
-### Session Persistence & OPFS
-- Sessions auto-save every minute (and within ~5 seconds of edits) plus when you
-  close the file picker. Reloading prompts you to re-authorize the last dataset
-  so filters, tags, and layout return instantly.
-- The OPFS cache (sessions, row indexes, annotations, row-cache) is capped at
-  roughly 200 MB. Oldest files are pruned on load/save to stay within quota.
+### Navigation
+- `g` focuses **Go to row**, which jumps to a row by its number in the file.
+- Arrow keys move through rows, Shift+Arrow extends the selection and Space
+  toggles it.
+
+### Persistence & Storage
+- Labels and notes are saved automatically per file. Filters, sorts and layout
+  apply to the current visit only.
+- Preferences (theme, fonts, case sensitivity, display time zone) are kept in
+  the browser.
+- **Options → Delete stored data** removes cached rows, annotations and
+  preferences from this browser.
 
 ### Exporting Results
-- Use **Export → Filtered rows** to write the visible dataset to `.csv` or
-  `.csv.gz` without mutating the source file.
-- Use **Export → Tags/Notes** to capture annotations for sharing or archival.
-
-### Keyboard & Accessibility
-- Common shortcuts: `Ctrl/Cmd+K` for global search, `T` for tagging, arrow keys
-  for navigation, `/` to focus filter search.
-- The filter sidebar can be collapsed to maximize the grid.
+- **Export → Rows in current view** writes the filtered, searched and sorted
+  rows to `.csv` or `.csv.gz` without touching the source file.
+- **Export → Labelled rows only** adds `labels` and `note` columns.
+- **Export → Labels & notes** saves the annotation bundle as JSON.
 
 ## Development Commands
 - `npm run lint` – ESLint across `ts`/`tsx` files.

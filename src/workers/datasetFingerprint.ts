@@ -32,11 +32,9 @@ export const buildDatasetStorageKey = (fingerprint: DatasetFingerprint): string 
   return `${fileName}-${fileSize}-${lastModified}`;
 };
 
-export const createDatasetFingerprint = (
-  file: File,
-  handle: FileSystemFileHandle
-): DatasetFingerprint => ({
-  fileName: file.name ?? handle.name ?? 'unknown',
-  fileSize: file.size ?? 0,
-  lastModified: typeof file.lastModified === 'number' ? file.lastModified : 0
+/** Identifies a dataset by its files' names, sizes and modification times. */
+export const createDatasetFingerprint = (files: File[]): DatasetFingerprint => ({
+  fileName: files.map((file) => file.name).join('+'),
+  fileSize: files.reduce((total, file) => total + file.size, 0),
+  lastModified: Math.max(0, ...files.map((file) => file.lastModified))
 });

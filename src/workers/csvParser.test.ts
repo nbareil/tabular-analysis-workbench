@@ -1,161 +1,208 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseDelimitedStream } from './csvParser';
-import { materializeRowBatch } from './utils/materializeRowBatch';
-import type {
-  ColumnBatch,
-  NumberColumnBatch,
-  RowBatch,
-  StringColumnBatch
-} from './types';
+import { dedupeHeader, parseDelimitedStream, sniffDelimiter, type ParserOptions } from './csvParser';
+import type { ColumnBatch, RowBatch } from './types';
 
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
-const decodeStringColumn = (column: ColumnBatch): string[] => {
-  expect(column.type).toBe('string');
-  const stringColumn = column as StringColumnBatch;
-  const offsets = stringColumn.offsets;
-  const values: string[] = [];
-  const dataView = new Uint8Array(stringColumn.data);
-
-  for (let index = 0; index < offsets.length - 1; index += 1) {
-    const start = offsets[index]!;
-    const end = offsets[index + 1]!;
-    const slice = dataView.subarray(start, end);
-    values.push(textDecoder.decode(slice));
+async function* chunksOf(parts: Uint8Array[]): AsyncGenerator<Uint8Array> {
+  for (const part of parts) {
+    yield part;
   }
+}
 
-  return values;
+const decodeColumn = (column: ColumnBatch): string[] => {
+  const bytes = new Uint8Array(column.data);
+  return Array.from({ length: column.offsets.length - 1 }, (_, index) =>
+    decoder.decode(bytes.subarray(column.offsets[index]!, column.offsets[index + 1]!))
+  );
 };
 
-const decodeNumberColumn = (column: ColumnBatch): number[] => {
-  expect(column.type).toBe('number');
-  const numberColumn = column as NumberColumnBatch;
-  return Array.from(numberColumn.data);
-};
+interface ParseResult {
+  header: string[];
+  rows: string[][];
+  batches: RowBatch[];
+}
 
-const iterableFromStrings = (chunks: string[]): AsyncIterable<Uint8Array> => ({
-  async *[Symbol.asyncIterator]() {
-    for (const chunk of chunks) {
-      yield textEncoder.encode(chunk);
-    }
-  }
-});
-
-const collectBatches = async (
-  chunks: string[],
-  options?: Parameters<typeof parseDelimitedStream>[2]
-): Promise<{ header: string[]; batches: RowBatch[] }> => {
-  const source = iterableFromStrings(chunks);
-  const batches: RowBatch[] = [];
+const parseBytes = async (parts: Uint8Array[], options?: ParserOptions): Promise<ParseResult> => {
   let header: string[] = [];
-
+  const batches: RowBatch[] = [];
   await parseDelimitedStream(
-    source,
+    chunksOf(parts),
     {
-      onHeader: async (cols) => {
-        header = cols;
+      onHeader: (value) => {
+        header = value;
       },
-      onBatch: async (batch) => {
+      onBatch: (batch) => {
         batches.push(batch);
       }
     },
     options
   );
+  const rows: string[][] = [];
+  for (const batch of batches) {
+    const columns = header.map((name) => decodeColumn(batch.columns[name]!));
+    for (let index = 0; index < batch.rowIds.length; index += 1) {
+      rows.push(columns.map((values) => values[index]!));
+    }
+  }
+  return { header, rows, batches };
+};
 
-  return { header, batches };
+const parse = (text: string, options?: ParserOptions) => parseBytes([encoder.encode(text)], options);
+
+/** Parses `text` split into two byte chunks at every possible position. */
+const parseAtEverySplit = async (text: string): Promise<ParseResult[]> => {
+  const bytes = encoder.encode(text);
+  const results: ParseResult[] = [];
+  for (let split = 0; split <= bytes.length; split += 1) {
+    results.push(await parseBytes([bytes.subarray(0, split), bytes.subarray(split)]));
+  }
+  return results;
 };
 
 describe('parseDelimitedStream', () => {
-  it('parses comma separated data with quoted fields and emits batches', async () => {
-    const csvChunks = ['name,age,notes\r\n"Alice, A.",30,"Loves ""quoted"" text"\r\n', 'Bob,25,\r\n'];
-
-    const { header, batches } = await collectBatches(csvChunks, { batchSize: 1 });
-    expect(header).toEqual(['name', 'age', 'notes']);
-    expect(batches).toHaveLength(2);
-
-    const [firstBatch, secondBatch] = batches;
-    expect(Array.from(firstBatch.rowIds)).toEqual([0]);
-    expect(firstBatch.stats.eof).toBe(false);
-    expect(Array.from(secondBatch.rowIds)).toEqual([1]);
-    expect(secondBatch.stats.eof).toBe(true);
-
-    expect(firstBatch.columnTypes.age).toBe('number');
-    expect(firstBatch.columnTypes.name).toBe('string');
-    expect(firstBatch.columnInference.age.type).toBe('number');
-    expect(firstBatch.columnInference.age.confidence).toBeGreaterThan(0.9);
-
-    const namesFirst = decodeStringColumn(firstBatch.columns.name);
-    const agesFirst = decodeNumberColumn(firstBatch.columns.age);
-    const notesFirst = decodeStringColumn(firstBatch.columns.notes);
-
-    expect(namesFirst).toEqual(['Alice, A.']);
-    expect(agesFirst).toEqual([30]);
-    expect(notesFirst).toEqual(['Loves "quoted" text']);
-
-    const namesSecond = decodeStringColumn(secondBatch.columns.name);
-    const agesSecond = decodeNumberColumn(secondBatch.columns.age);
-    const notesSecond = decodeStringColumn(secondBatch.columns.notes);
-
-    expect(namesSecond).toEqual(['Bob']);
-    expect(agesSecond).toEqual([25]);
-    expect(notesSecond).toEqual(['']);
+  it('parses quoted fields with delimiters, newlines and escaped quotes', async () => {
+    const { header, rows } = await parse('a,b,c\n"x,y","line1\nline2","say ""hi"""\n');
+    expect(header).toEqual(['a', 'b', 'c']);
+    expect(rows).toEqual([['x,y', 'line1\nline2', 'say "hi"']]);
   });
 
-  it('auto-detects tab delimiters and handles chunk boundaries inside quotes', async () => {
-    const chunks = ['title\tcomment\n"New', 'line"\t"Spans\nchunks"\nSecond\tRow\n'];
-
-    const { header, batches } = await collectBatches(chunks, { batchSize: 5 });
-    expect(header).toEqual(['title', 'comment']);
-    expect(batches).toHaveLength(1);
-
-    const batch = batches[0]!;
-    expect(Array.from(batch.rowIds)).toEqual([0, 1]);
-    expect(batch.stats.eof).toBe(true);
-
-    expect(batch.columnTypes.title).toBe('string');
-    expect(batch.columnTypes.comment).toBe('string');
-    expect(batch.columnInference.title.type).toBe('string');
-
-    expect(decodeStringColumn(batch.columns.title)).toEqual(['Newline', 'Second']);
-    expect(decodeStringColumn(batch.columns.comment)).toEqual(['Spans\nchunks', 'Row']);
+  it('treats a quote inside an unquoted field as literal text', async () => {
+    const { rows } = await parse('item,size\n12" disk,big\nfoo"bar,"baz"\n');
+    expect(rows).toEqual([
+      ['12" disk', 'big'],
+      ['foo"bar', 'baz']
+    ]);
   });
 
-  it('auto-detects semicolon delimiters', async () => {
-    const chunks = [
-      'col1;col2;col3\n',
-      '"Value;One";Second;Third\nFourth;"Fifth;Value";Sixth\n'
-    ];
-
-    const { header, batches } = await collectBatches(chunks, { batchSize: 10 });
-    expect(header).toEqual(['col1', 'col2', 'col3']);
-    expect(batches).toHaveLength(1);
-
-    const batch = batches[0]!;
-    expect(Array.from(batch.rowIds)).toEqual([0, 1]);
-    expect(batch.stats.eof).toBe(true);
-
-    expect(decodeStringColumn(batch.columns.col1)).toEqual(['Value;One', 'Fourth']);
-    expect(decodeStringColumn(batch.columns.col2)).toEqual(['Second', 'Fifth;Value']);
-    expect(decodeStringColumn(batch.columns.col3)).toEqual(['Third', 'Sixth']);
+  it.each([
+    ['tab', 'a\tb\n1,5\t2\n', ['1,5', '2']],
+    ['semicolon', 'a;b\n1,5;2\n', ['1,5', '2']],
+    ['pipe', 'a|b\n1,5|2\n', ['1,5', '2']],
+    ['comma', 'a,b\n1;5,2\n', ['1;5', '2']]
+  ])('sniffs a %s delimiter from the header line', async (_name, text, row) => {
+    const { header, rows } = await parse(text);
+    expect(header).toEqual(['a', 'b']);
+    expect(rows).toEqual([row]);
   });
 
-  it('round-trips UTF-8 string columns through materialization with separate offsets and data', async () => {
-    const chunks = ['city,note\nMontréal,"emoji 🚀"\n東京,"café crème"\n'];
+  it('sniffs the delimiter even when the header line spans several chunks', async () => {
+    const parts = ['na', 'me\tval', 'ue\n', 'x,1\t2\n'].map((part) => encoder.encode(part));
+    const { header, rows } = await parseBytes(parts);
+    expect(header).toEqual(['name', 'value']);
+    expect(rows).toEqual([['x,1', '2']]);
+  });
 
-    const { batches } = await collectBatches(chunks, { batchSize: 10 });
-    expect(batches).toHaveLength(1);
+  it('honours an explicit delimiter', async () => {
+    const { rows } = await parse('a;b\n1;2\n', { delimiter: ',' });
+    expect(rows).toEqual([['1;2']]);
+  });
 
-    const batch = batches[0]!;
-    expect(batch.columns.city.type).toBe('string');
+  it('ignores delimiters inside quoted header cells when sniffing', async () => {
+    const { header } = await parse('"a,b,c";d;e\n1;2;3\n');
+    expect(header).toEqual(['a,b,c', 'd', 'e']);
+  });
 
-    const cityColumn = batch.columns.city as StringColumnBatch;
-    expect(cityColumn.data.byteLength).toBe(textEncoder.encode('Montréal東京').byteLength);
-    expect(cityColumn.offsets).toEqual(new Uint32Array([0, 9, 15]));
+  it('handles CRLF, lone CR, blank lines and a missing trailing newline', async () => {
+    const { rows } = await parse('\r\na,b\r\n1,2\r\n\r\n3,4\r5,6\n\n7,8');
+    expect(rows).toEqual([
+      ['1', '2'],
+      ['3', '4'],
+      ['5', '6'],
+      ['7', '8']
+    ]);
+  });
 
-    const materialized = materializeRowBatch(batch).rows;
-    expect(materialized.map((row) => row.city)).toEqual(['Montréal', '東京']);
-    expect(materialized.map((row) => row.note)).toEqual(['emoji 🚀', 'café crème']);
+  it('keeps rows made of empty fields', async () => {
+    const { rows } = await parse('a,b\n,\n""\n');
+    expect(rows).toEqual([
+      ['', ''],
+      ['', '']
+    ]);
+  });
+
+  it('pads short rows and folds extra fields into the last column, counting both as malformed', async () => {
+    const { rows, batches } = await parse('a,b,c\n1\n1,2,3,4,5\n1,2,3\n');
+    expect(rows).toEqual([
+      ['1', '', ''],
+      ['1', '2', '3,4,5'],
+      ['1', '2', '3']
+    ]);
+    expect(batches.at(-1)!.stats.malformedRows).toBe(2);
+  });
+
+  it('strips a UTF-8 BOM, even when split across chunks', async () => {
+    const bytes = encoder.encode('\uFEFFid,name\n1,é\n');
+    for (const split of [1, 2, 3]) {
+      const { header, rows } = await parseBytes([bytes.subarray(0, split), bytes.subarray(split)]);
+      expect(header).toEqual(['id', 'name']);
+      expect(rows).toEqual([['1', 'é']]);
+    }
+  });
+
+  it('produces identical output wherever the chunk boundary falls', async () => {
+    const text = 'id;note;city\r\n1;"a ""quoted"" ;\r\nvalue";Zürich 🚀\r\n2;12" disk;"x"\r\n\r\n3;;"end"""\r\n';
+    const expected = await parse(text);
+    expect(expected.header).toEqual(['id', 'note', 'city']);
+    expect(expected.rows).toEqual([
+      ['1', 'a "quoted" ;\r\nvalue', 'Zürich 🚀'],
+      ['2', '12" disk', 'x'],
+      ['3', '', 'end"']
+    ]);
+    for (const result of await parseAtEverySplit(text)) {
+      expect(result.header).toEqual(expected.header);
+      expect(result.rows).toEqual(expected.rows);
+    }
+  });
+
+  it('produces identical output when fed one byte at a time', async () => {
+    const text = 'a,b\n"x""y",ü\r\n"1\n2",3\n';
+    const bytes = encoder.encode(text);
+    const single = await parseBytes(Array.from(bytes, (_, index) => bytes.subarray(index, index + 1)));
+    expect(single.rows).toEqual((await parse(text)).rows);
+  });
+
+  it('emits batches of batchSize with consecutive row ids and running stats', async () => {
+    const text = `n\n${Array.from({ length: 5 }, (_, index) => index).join('\n')}\n`;
+    const { batches } = await parse(text, { batchSize: 2 });
+    expect(batches.map((batch) => Array.from(batch.rowIds))).toEqual([[0, 1], [2, 3], [4]]);
+    expect(batches.map((batch) => batch.stats.rowsParsed)).toEqual([2, 4, 5]);
+    expect(batches.at(-1)!.stats.eof).toBe(true);
+    expect(batches.at(-1)!.stats.bytesParsed).toBe(encoder.encode(text).length);
+    expect(batches.at(-1)!.columnTypes).toEqual({ n: 'number' });
+  });
+
+  it('stores raw cell text and infers types over all rows', async () => {
+    const { rows, batches } = await parse('when,flag,n\n2024-01-01 00:00, yes ,007\n');
+    expect(rows).toEqual([['2024-01-01 00:00', ' yes ', '007']]);
+    expect(batches[0]!.columnTypes).toEqual({ when: 'datetime', flag: 'boolean', n: 'number' });
+  });
+
+  it('renames duplicate, empty and reserved header names', async () => {
+    const { header } = await parse('id,id,,__rowId,__tag,__proto__,extra\n1,2,3,4,5,6,7\n', {
+      reservedColumns: ['extra']
+    });
+    expect(new Set(header).size).toBe(header.length);
+    expect(header).toEqual(['id', 'id_2', 'column_3', '__rowId_2', '__tag_2', '__proto___2', 'extra_2']);
+  });
+});
+
+describe('dedupeHeader', () => {
+  it('never produces a name that collides with a later header cell', () => {
+    const header = dedupeHeader(['a', 'a', 'a_2']);
+    expect(new Set(header).size).toBe(3);
+    expect(header[0]).toBe('a');
+  });
+
+  it('trims names', () => {
+    expect(dedupeHeader([' a ', 'b'])).toEqual(['a', 'b']);
+  });
+});
+
+describe('sniffDelimiter', () => {
+  it('defaults to comma for a single-column header', () => {
+    expect(sniffDelimiter('value')).toBe(',');
   });
 });

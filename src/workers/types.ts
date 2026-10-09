@@ -1,39 +1,20 @@
 export type ColumnType = 'string' | 'number' | 'datetime' | 'boolean';
-export type Delimiter = ',' | '\t' | ';';
+export type Delimiter = ',' | '\t' | ';' | '|';
 
 export interface ParseStats {
   rowsParsed: number;
   bytesParsed: number;
+  /** Rows whose field count did not match the header (padded or folded into the last column). */
+  malformedRows: number;
   eof: boolean;
 }
 
-interface ColumnBatchBase<TType extends ColumnType> {
-  type: TType;
-  nullMask?: Uint8Array;
-}
-
-export interface StringColumnBatch extends ColumnBatchBase<'string'> {
-  /** Concatenated UTF-8 encoded string data */
+/** Raw cell text for one column of a batch, stored Apache Arrow style. */
+export interface ColumnBatch {
+  /** Concatenated UTF-8 encoded cell text */
   data: ArrayBuffer;
-  /**
-   * Offsets into the {@link data} buffer.
-   * The length is `rowCount + 1`, Apache Arrow style,
-   * so offsets[i] - offsets[i - 1] is the byte-length of row i - 1.
-   */
+  /** Length is `rowCount + 1`; offsets[i + 1] - offsets[i] is the byte length of row i. */
   offsets: Uint32Array;
-}
-
-export interface NumberColumnBatch extends ColumnBatchBase<'number'> {
-  data: Float64Array;
-}
-
-export interface BooleanColumnBatch extends ColumnBatchBase<'boolean'> {
-  data: Uint8Array;
-}
-
-export interface DatetimeColumnBatch extends ColumnBatchBase<'datetime'> {
-  /** Milliseconds since epoch */
-  data: Float64Array;
 }
 
 export interface ColumnInference {
@@ -74,12 +55,6 @@ export interface FilterExpression {
 }
 
 export type FilterNode = FilterPredicate | FilterExpression;
-
-export type ColumnBatch =
-  | StringColumnBatch
-  | NumberColumnBatch
-  | BooleanColumnBatch
-  | DatetimeColumnBatch;
 
 export interface SortDefinition {
   column: string;
@@ -179,6 +154,8 @@ export interface ImportTagsRequest {
   labels: LabelDefinition[];
   tags: Record<number, TagRecord>;
   mergeStrategy?: 'replace' | 'merge';
+  /** Where the export came from; a row count that differs from the open file is rejected. */
+  source?: TagExportSource;
 }
 
 export interface RowBatch {

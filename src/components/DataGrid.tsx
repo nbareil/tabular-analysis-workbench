@@ -1,666 +1,162 @@
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type MouseEvent as ReactMouseEvent
-} from 'react';
-import { createPortal } from 'react-dom';
-
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type {
   CellContextMenuEvent,
-  ColumnState,
-  SortChangedEvent,
-  IDatasource,
-  IHeaderParams,
-  IGetRowsParams,
-  GridApi,
-  ColumnApi,
-  GridReadyEvent,
-  SelectionChangedEvent,
   ColDef,
-  ICellRendererParams
+  GridApi,
+  GridReadyEvent,
+  IDatasource,
+  IGetRowsParams,
+  SortChangedEvent,
+  ValueFormatterParams
 } from 'ag-grid-community';
 
 import { useAppStore } from '@state/appStore';
 import { useDataStore, type GridColumn, type GridRow, type LoaderStatus } from '@state/dataStore';
 import { useTagStore } from '@state/tagStore';
-import type { FilterState, SessionSnapshot } from '@state/sessionStore';
-import { useSessionStore } from '@state/sessionStore';
+import { useSessionStore, type FilterState } from '@state/sessionStore';
 import { getDataWorker } from '@workers/dataWorkerProxy';
-import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
-import { buildTagCellValue, type TagCellValue, type TagLabelView } from '@utils/tagCells';
-import { renderMarkdownToSafeHtml } from '@utils/markdown';
+import { parseDatetime } from '@workers/valueParsing';
+import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
+import { buildTagCellValue, type TagCellValue } from '@utils/tagCells';
+import { formatDatetimeForDisplay } from '@utils/datetimeFormat';
+import { reportAppError } from '@utils/diagnostics';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useSortSync } from '@/hooks/useSortSync';
-import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
-import { reportAppError } from '@utils/diagnostics';
+import { DataGridHeader, HighlightCell, MarkdownTooltip, TagCellRenderer } from './grid/GridCells';
+import { CellContextMenu } from './grid/CellContextMenu';
+import { HeaderContextMenu } from './grid/HeaderContextMenu';
+import { TimeWindowDialog } from './grid/TimeWindowDialog';
+import { ColumnProfileDialog } from './grid/ColumnProfileDialog';
+import { TimelinePanel } from './grid/TimelinePanel';
+import { useAutoColumnWidths } from './grid/useAutoColumnWidths';
+import { useGridSelection } from './grid/useGridSelection';
+import {
+  MIN_COLUMN_WIDTH,
+  buildSortStateFromColumnState,
+  evaluateFilterMenuMetadata,
+  formatClipboardCellValue,
+  getEmptyStateMessage,
+  getHeaderContextMenuColumnId,
+  isWithinGridContextMenu,
+  serializeRowsForClipboard,
+  shouldShowEmptyOverlay,
+  shouldShowInitialPlaceholder,
+  sortsEqual,
+  type GridContextMenuState
+} from './grid/gridUtils';
 
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-quartz.css';
 
-export interface FilterMenuMetadata {
-  eqIndex: number;
-  eqMatchesValue: boolean;
-  neqExists: boolean;
-}
-
-export const evaluateFilterMenuMetadata = (
-  filters: FilterState[],
-  columnId: string,
-  valueAsString: string
-): FilterMenuMetadata => {
-  const eqIndex = filters.findIndex(
-    (filter) => filter.enabled !== false && filter.column === columnId && filter.operator === 'eq'
-  );
-
-  const eqMatchesValue =
-    eqIndex >= 0 &&
-    String(filters[eqIndex]!.value ?? '') === valueAsString;
-
-  const neqExists = filters.some(
-    (filter) =>
-      filter.enabled !== false &&
-      filter.column === columnId &&
-      filter.operator === 'neq' &&
-      String(filter.value ?? '') === valueAsString
-  );
-
-  return {
-    eqIndex,
-    eqMatchesValue,
-    neqExists
-  };
-};
-
-type SortState = SessionSnapshot['sorts'][number];
-
-const sortsEqual = (left: SortState[], right: SortState[]): boolean => {
-  if (left.length !== right.length) {
-    return false;
-  }
-
-  return left.every(
-    (sort, index) =>
-      sort.column === right[index]?.column && sort.direction === right[index]?.direction
-  );
-};
-
-export const buildSortStateFromColumnState = (columnState: ColumnState[]): SortState[] =>
-  columnState
-    .filter((state) => state.sort != null)
-    .sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0))
-    .map((state) => ({
-      column: state.colId ?? '',
-      direction: state.sort === 'desc' ? ('desc' as const) : ('asc' as const)
-    }))
-    .filter((sort) => Boolean(sort.column));
-
-interface HeaderContextMenuState {
-  kind: 'header';
-  x: number;
-  y: number;
-  columnId: string;
-}
-
-interface CellContextMenuState {
-  kind: 'cell';
-  x: number;
-  y: number;
-  columnId: string;
-  displayValue: string;
-  filterValue: string | null;
-  rowId: number | null;
-  cellClipboardText: string;
-  rowClipboardText: string;
-}
-
-type GridContextMenuState = HeaderContextMenuState | CellContextMenuState;
-type DistributionSortOrder = 'asc' | 'desc';
-
-const AUTO_WIDTH_MAX_SAMPLE_ROWS = 1_000;
-const AUTO_WIDTH_BLOCK_SIZE = 250;
-const CELL_HORIZONTAL_PADDING_PX = 32;
-const MIN_COLUMN_WIDTH = 80;
-const MAX_COLUMN_WIDTH = 520;
-const DISTRIBUTION_SUPPORTED_TYPES = new Set<GridColumn['type']>(['string', 'boolean']);
-
-export const computeMedianWidth = (samples: number[]): number => {
-  if (!samples.length) {
-    return MIN_COLUMN_WIDTH;
-  }
-
-  const sorted = [...samples].sort((a, b) => a - b);
-  const middleIndex = Math.floor(sorted.length / 2);
-
-  if (sorted.length % 2 === 1) {
-    return sorted[middleIndex] ?? MIN_COLUMN_WIDTH;
-  }
-
-  const left = sorted[middleIndex - 1] ?? MIN_COLUMN_WIDTH;
-  const right = sorted[middleIndex] ?? MIN_COLUMN_WIDTH;
-  return (left + right) / 2;
-};
-
-export const computeAutoColumnWidth = ({
-  valueSamples,
-  headerWidth
-}: {
-  valueSamples: number[];
-  headerWidth: number;
-}): number => {
-  const medianValueWidth = valueSamples.length
-    ? computeMedianWidth(valueSamples)
-    : MIN_COLUMN_WIDTH;
-  const measuredWidth = Math.max(headerWidth, medianValueWidth);
-  return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, Math.ceil(measuredWidth)));
-};
-
-export const getNextRowIndex = ({
-  rowCount,
-  currentIndex,
-  direction
-}: {
-  rowCount: number;
-  currentIndex: number | null;
-  direction: 'up' | 'down';
-}): number | null => {
-  if (rowCount <= 0) {
-    return null;
-  }
-
-  if (currentIndex == null || Number.isNaN(currentIndex)) {
-    return direction === 'down' ? 0 : rowCount - 1;
-  }
-
-  const delta = direction === 'down' ? 1 : -1;
-  const nextIndex = Math.max(0, Math.min(rowCount - 1, currentIndex + delta));
-  return nextIndex;
-};
-
-export const getEmptyStateMessage = ({
-  status,
-  totalRows,
-  matchedRows
-}: {
-  status: LoaderStatus;
-  totalRows: number;
-  matchedRows: number | null;
-}): string => {
-  if (status === 'loading') {
-    return 'Loading rows…';
-  }
-
-  if (totalRows > 0 && matchedRows === 0) {
-    return 'No rows match the current filters or search.';
-  }
-
-  return 'Select a CSV or TSV file to begin.';
-};
-
-export const shouldShowInitialPlaceholder = ({
-  status,
-  totalRows,
-  columnCount
-}: {
-  status: LoaderStatus;
-  totalRows: number;
-  columnCount: number;
-}): boolean => status !== 'loading' && totalRows === 0 && columnCount === 0;
-
-export const shouldShowEmptyOverlay = ({
-  status,
-  totalRows,
-  matchedRows,
-  columnCount
-}: {
-  status: LoaderStatus;
-  totalRows: number;
-  matchedRows: number | null;
-  columnCount: number;
-}): boolean =>
-  status !== 'loading' && totalRows > 0 && matchedRows === 0 && columnCount > 0;
-
-export const toggleRowSelection = (gridApi: GridApi | null, rowId: number | null): boolean => {
-  if (!gridApi || rowId == null) {
-    return false;
-  }
-
-  const rowNode = gridApi.getRowNode(String(rowId));
-  if (!rowNode || typeof rowNode.setSelected !== 'function') {
-    return false;
-  }
-
-  const currentlySelected =
-    typeof rowNode.isSelected === 'function' ? rowNode.isSelected() : false;
-  rowNode.setSelected(!currentlySelected, false, 'api');
-  return true;
-};
-
-interface ClipboardColumnValue {
-  headerName: string;
-  value: unknown;
-}
-
-const normalizeClipboardText = (value: string): string => value.replace(/[\t\r\n]+/g, ' ');
-
-const isTagCellValue = (value: unknown): value is TagCellValue =>
-  value != null &&
-  typeof value === 'object' &&
-  ('labels' in value || 'note' in value);
-
-export const formatClipboardCellValue = (value: unknown): string => {
-  if (value == null) {
-    return '';
-  }
-
-  if (isTagCellValue(value)) {
-    const labels = value.labels.map((label) => label.name).filter(Boolean);
-    const segments: string[] = [];
-
-    if (labels.length > 0) {
-      segments.push(labels.join(', '));
-    }
-
-    if (typeof value.note === 'string' && value.note.trim().length > 0) {
-      segments.push(`note: ${value.note}`);
-    }
-
-    return normalizeClipboardText(segments.join(' | '));
-  }
-
-  if (Array.isArray(value)) {
-    return normalizeClipboardText(value.map((item) => formatClipboardCellValue(item)).join(', '));
-  }
-
-  if (typeof value === 'object') {
-    return normalizeClipboardText(JSON.stringify(value));
-  }
-
-  return normalizeClipboardText(String(value));
-};
-
-const sortDistributionItems = (
-  items: Array<{ value: string; count: number }>,
-  direction: DistributionSortOrder
-): Array<{ value: string; count: number }> =>
-  [...items].sort((left, right) => {
-    if (left.count !== right.count) {
-      return direction === 'asc' ? left.count - right.count : right.count - left.count;
-    }
-
-    return left.value.localeCompare(right.value);
-  });
-
-export const serializeRowForClipboard = (columns: ClipboardColumnValue[]): string => {
-  if (columns.length === 0) {
-    return '';
-  }
-
-  const headers = columns.map((column) => normalizeClipboardText(column.headerName));
-  const values = columns.map((column) => formatClipboardCellValue(column.value));
-  return `${headers.join('\t')}\n${values.join('\t')}`;
-};
-
-export const serializeRowsForClipboard = (rows: ClipboardColumnValue[][]): string => {
-  if (rows.length === 0) {
-    return '';
-  }
-
-  const [firstRow] = rows;
-  if (!firstRow || firstRow.length === 0) {
-    return '';
-  }
-
-  const headers = firstRow.map((column) => normalizeClipboardText(column.headerName));
-  const serializedRows = rows.map((row) =>
-    row.map((column) => formatClipboardCellValue(column.value)).join('\t')
-  );
-
-  return `${headers.join('\t')}\n${serializedRows.join('\n')}`;
-};
-
-export const getHeaderContextMenuColumnId = (target: EventTarget | null): string | null => {
-  if (!(target instanceof Element)) {
-    return null;
-  }
-
-  const headerCell = target.closest<HTMLElement>('.ag-header-cell[col-id]');
-  return headerCell?.getAttribute('col-id') ?? null;
-};
-
-export const isWithinGridContextMenu = (target: EventTarget | null): boolean =>
-  target instanceof Element && target.closest('[data-grid-context-menu="true"]') != null;
-
-interface DataGridHeaderParams extends IHeaderParams {
-  openHeaderMenu: (columnId: string, anchorRect: DOMRect) => void;
-}
-
-const DataGridHeader = ({
-  column,
-  displayName,
-  enableSorting,
-  progressSort,
-  openHeaderMenu
-}: DataGridHeaderParams): JSX.Element => {
-  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
-  const columnId = typeof column?.getColId === 'function' ? column.getColId() : '';
-  const sortDirection = typeof column?.getSort === 'function' ? column.getSort() : null;
-
-  return (
-    <div className="flex h-full min-w-0 items-center gap-2 pr-1">
-      <button
-        type="button"
-        className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden bg-transparent text-left text-inherit"
-        onClick={(event) => {
-          if (!enableSorting || typeof progressSort !== 'function') {
-            return;
-          }
-
-          progressSort(event.shiftKey);
-        }}
-      >
-        <span className="truncate">{displayName}</span>
-        {sortDirection === 'asc' ? <span aria-hidden>↑</span> : null}
-        {sortDirection === 'desc' ? <span aria-hidden>↓</span> : null}
-      </button>
-      <button
-        ref={menuButtonRef}
-        type="button"
-        aria-label={`Open ${displayName} menu`}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-200/10 hover:text-slate-200"
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-
-          if (!columnId || !menuButtonRef.current) {
-            return;
-          }
-
-          openHeaderMenu(columnId, menuButtonRef.current.getBoundingClientRect());
-        }}
-      >
-        ☰
-      </button>
-    </div>
-  );
-};
-
-const TagCellRenderer = ({
-  value
-}: ICellRendererParams<TagCellValue | null>): JSX.Element => {
-  if (!value) {
-    return (
-      <span className="flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-400">
-        <span
-          className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-400 dark:border-slate-600"
-          aria-hidden
-        />
-        Add label
-      </span>
-    );
-  }
-
-  const note = value.note;
-  const primaryLabel = value.labels[0];
-  const extraCount = Math.max(0, value.labels.length - 1);
-  const text = primaryLabel?.name ?? (note ? 'No label' : 'Tagged');
-
-  return (
-    <span className="flex items-center gap-2 truncate text-xs text-slate-900 dark:text-slate-100">
-      <span
-        className="h-2.5 w-2.5 shrink-0 rounded-full"
-        style={
-          primaryLabel?.color
-            ? { backgroundColor: primaryLabel.color }
-            : { border: '1px solid rgb(71 85 105)', backgroundColor: 'transparent' }
-        }
-        aria-hidden
-      />
-      <span className="truncate">{text}</span>
-      {extraCount > 0 ? (
-        <span className="text-[10px] uppercase tracking-wide text-slate-600 dark:text-slate-400">
-          +{extraCount} more
-        </span>
-      ) : null}
-      {note ? (
-        <span className="text-[10px] uppercase tracking-wide text-slate-600 dark:text-slate-400">
-          Note
-        </span>
-      ) : null}
-    </span>
-  );
-};
-
-export const MarkdownTooltip = ({
-  value
-}: ICellRendererParams<TagCellValue | null>): JSX.Element | null => {
-  if (!isTagCellValue(value)) {
-    return null;
-  }
-
-  const { labels, note } = value;
-
-  if (note) {
-    const html = renderMarkdownToSafeHtml(note);
-    return <div dangerouslySetInnerHTML={{ __html: html }} />;
-  }
-
-  if (labels.length > 0) {
-    return <div>{labels.map((label: TagLabelView) => label.name).join(', ')}</div>;
-  }
-
-  return null;
-};
+const CACHE_BLOCK_SIZE = 500;
+const MAX_BLOCKS_IN_CACHE = 40;
 
 interface DataGridProps {
   status: LoaderStatus;
+  searchQuery: string;
   onEditTagNote?: (payload: { rowId: number }) => void;
 }
 
-const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
-  const debugLoggingEnabled = isDebugLoggingEnabled();
+const placeMenu = (x: number, y: number, width: number, height: number) => ({
+  x: Math.max(0, Math.min(x, window.innerWidth - width - 8)),
+  y: Math.max(0, Math.min(y, window.innerHeight - height - 8))
+});
+
+const datetimeFilter = (column: string, start: number, end: number): FilterState => ({
+  id: crypto.randomUUID(),
+  column,
+  operator: 'between',
+  value: start,
+  value2: end,
+  rawValue: new Date(start).toISOString().slice(0, 16),
+  rawValue2: new Date(end).toISOString().slice(0, 16),
+  enabled: true
+});
+
+const DataGrid = ({ status, searchQuery, onEditTagNote }: DataGridProps): JSX.Element => {
   const columns = useDataStore((state) => state.columns);
   const matchedRows = useDataStore((state) => state.matchedRows);
   const viewVersion = useDataStore((state) => state.viewVersion);
   const totalRows = useDataStore((state) => state.totalRows);
-  const setColumnValueDistributionLoading = useDataStore(
-    (state) => state.setColumnValueDistributionLoading
-  );
-  const setColumnValueDistributionResult = useDataStore(
-    (state) => state.setColumnValueDistributionResult
-  );
-  const setColumnValueDistributionError = useDataStore(
-    (state) => state.setColumnValueDistributionError
-  );
-  const startValueFrequencyIndexing = useDataStore((state) => state.startValueFrequencyIndexing);
-  const setValueFrequencyIndexingProgress = useDataStore(
-    (state) => state.setValueFrequencyIndexingProgress
-  );
-  const completeValueFrequencyIndexing = useDataStore(
-    (state) => state.completeValueFrequencyIndexing
-  );
+  const loadId = useDataStore((state) => state.loadId);
+  const navigation = useDataStore((state) => state.navigation);
+  const loadColumnValueDistribution = useDataStore((state) => state.loadColumnValueDistribution);
   const theme = useAppStore((state) => state.theme);
-  const { filters, applyFilters } = useFilterSync();
-  const { sorts, applySorts } = useSortSync();
-  const [contextMenu, setContextMenu] = useState<GridContextMenuState | null>(null);
-  const activeHeaderDistributionEntry = useDataStore((state) =>
-    contextMenu?.kind === 'header'
-      ? state.columnValueDistributions[contextMenu.columnId]
-      : undefined
-  );
-  const [headerDistributionSort, setHeaderDistributionSort] = useState<
-    Record<string, DistributionSortOrder>
-  >({});
-  const [hoveredDistributionValue, setHoveredDistributionValue] = useState<{
-    columnId: string;
-    value: string;
-  } | null>(null);
+  const displayTimeZone = useAppStore((state) => state.displayTimeZone);
+  const searchCaseSensitive = useAppStore((state) => state.searchCaseSensitive);
   const columnLayout = useSessionStore((state) => state.columnLayout);
   const setColumnLayout = useSessionStore((state) => state.setColumnLayout);
-  const [gridApi, setGridApi] = useState<GridApi | null>(null);
-  const [columnApi, setColumnApi] = useState<ColumnApi | null>(null);
-  const [autoColumnWidths, setAutoColumnWidths] = useState<Record<string, number>>({});
   const tagLabels = useTagStore((state) => state.labels);
   const tagRecords = useTagStore((state) => state.tags);
-  const tagStatus = useTagStore((state) => state.status);
-  const tagError = useTagStore((state) => state.error);
-  const loadTags = useTagStore((state) => state.load);
   const applyTagToRows = useTagStore((state) => state.applyTag);
   const clearTagFromRows = useTagStore((state) => state.clearTag);
-  const initialRowsRequestedRef = useRef(false);
-  const loadingVersionRef = useRef<number | null>(null);
-  const computedVersionRef = useRef<number | null>(null);
-  const distributionPreloadVersionRef = useRef<number | null>(null);
-  const distributionRequestsRef = useRef<Map<string, Promise<void>>>(new Map());
-  const gridContainerRef = useRef<HTMLDivElement | null>(null);
-  const [tagMutationPending, setTagMutationPending] = useState(false);
-  const [keyboardFocusedRowId, setKeyboardFocusedRowId] = useState<number | null>(null);
-  const keyboardFocusedRowIdRef = useRef<number | null>(null);
-  const lastRenderSnapshotRef = useRef<string | null>(null);
-  const viewStateRef = useRef({
-    status,
-    matchedRows,
-    totalRows
-  });
+  const { filters, applyFilters } = useFilterSync();
+  const { sorts, applySorts } = useSortSync();
+
+  const [gridApi, setGridApi] = useState<GridApi<GridRow> | null>(null);
+  const [contextMenu, setContextMenu] = useState<GridContextMenuState | null>(null);
+  const [timeWindow, setTimeWindow] = useState<{ column: string; center: number } | null>(null);
+  const [profiledColumn, setProfiledColumn] = useState<string | null>(null);
+  const [timelineColumn, setTimelineColumn] = useState<string | null>(null);
+  const [tagBusy, setTagBusy] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const selection = useGridSelection(gridApi, containerRef);
+  const autoWidths = useAutoColumnWidths(columns, status, totalRows, loadId);
+  const headerDistributionEntry = useDataStore((state) =>
+    contextMenu?.kind === 'header' ? state.columnValueDistributions[contextMenu.columnId] : undefined
+  );
 
   useEffect(() => {
-    if (!columns.length) {
+    setTimelineColumn(null);
+    setProfiledColumn(null);
+    setTimeWindow(null);
+  }, [loadId]);
+
+  // Columns that appear later (or a reset layout) join the layout at the end, visible.
+  useEffect(() => {
+    const missing = columns.filter((column) => !columnLayout.order.includes(column.key));
+    if (!missing.length) {
       return;
     }
-
-    const existingOrder = columnLayout.order.length
-      ? [...columnLayout.order]
-      : [];
-    const seen = new Set(existingOrder);
-    let changed = false;
-
-    for (const column of columns) {
-      if (!seen.has(column.key)) {
-        existingOrder.push(column.key);
-        seen.add(column.key);
-        changed = true;
+    setColumnLayout({
+      order: [...columnLayout.order, ...missing.map((column) => column.key)],
+      visibility: {
+        ...Object.fromEntries(missing.map((column) => [column.key, true])),
+        ...columnLayout.visibility
       }
-    }
-
-    const nextVisibility: Record<string, boolean> = { ...columnLayout.visibility };
-    for (const column of columns) {
-      if (!(column.key in nextVisibility)) {
-        nextVisibility[column.key] = true;
-        changed = true;
-      }
-    }
-
-    if (changed) {
-      setColumnLayout({
-        order: existingOrder,
-        visibility: nextVisibility
-      });
-    }
-  }, [columnLayout.order, columnLayout.visibility, columns, setColumnLayout]);
+    });
+  }, [columnLayout, columns, setColumnLayout]);
 
   const orderedColumns = useMemo(() => {
-    const baseOrder = columnLayout.order.length
-      ? columnLayout.order
-      : columns.map((column) => column.key);
-    const additions = columns
-      .map((column) => column.key)
-      .filter((key) => !baseOrder.includes(key));
-    const finalOrder = [...baseOrder, ...additions];
-
-    return finalOrder
-      .map((key) => columns.find((column) => column.key === key))
-      .filter((column): column is (typeof columns)[number] => Boolean(column));
+    const byKey = new Map(columns.map((column) => [column.key, column]));
+    return columnLayout.order
+      .map((key) => byKey.get(key))
+      .filter((column): column is GridColumn => Boolean(column));
   }, [columnLayout.order, columns]);
 
   useEffect(() => {
-    if (!columnApi && !gridApi) {
-      return;
-    }
-
-    const state = orderedColumns.map((column, index) => ({
-      colId: column.key,
-      hide: columnLayout.visibility[column.key] === false,
-      order: index,
-      ...(autoColumnWidths[column.key] != null
-        ? { width: Math.round(autoColumnWidths[column.key]!) }
-        : {})
-    }));
-
-    if (gridApi && typeof gridApi.applyColumnState === 'function') {
-      gridApi.applyColumnState({
-        state,
-        applyOrder: true
-      });
-      return;
-    }
-
-    columnApi?.applyColumnState({
-      state,
+    gridApi?.applyColumnState({
+      state: orderedColumns.map((column) => ({
+        colId: column.key,
+        hide: columnLayout.visibility[column.key] === false,
+        ...(autoWidths[column.key] != null ? { width: Math.round(autoWidths[column.key]!) } : {})
+      })),
       applyOrder: true
     });
-  }, [autoColumnWidths, columnApi, gridApi, orderedColumns, columnLayout.visibility]);
+  }, [autoWidths, columnLayout.visibility, gridApi, orderedColumns]);
 
-  const mapColumnTypeToAgDataType = useMemo(() => {
-    const mapping: Record<GridColumn['type'], 'text' | 'number' | 'boolean' | 'dateString'> = {
-      string: 'text',
-      number: 'number',
-      boolean: 'boolean',
-      datetime: 'text'
-    };
-    return (type: GridColumn['type']) => mapping[type] ?? 'text';
-  }, []);
-
-  const labelLookup = useMemo(() => {
-    const map = new Map<string, (typeof tagLabels)[number]>();
-    for (const label of tagLabels) {
-      map.set(label.id, label);
-    }
-    return map;
-  }, [tagLabels]);
-
-  const tagDataRef = useRef({
-    tags: tagRecords,
-    labels: labelLookup
-  });
-
+  const tagDataRef = useRef({ tags: tagRecords, labels: new Map(tagLabels.map((label) => [label.id, label])) });
   useEffect(() => {
-    tagDataRef.current = {
-      tags: tagRecords,
-      labels: labelLookup
-    };
-  }, [labelLookup, tagRecords]);
-
-  useEffect(() => {
-    viewStateRef.current = {
-      status,
-      matchedRows,
-      totalRows
-    };
-  }, [matchedRows, status, totalRows]);
-
-  useEffect(() => {
-    if (status === 'ready' && tagStatus === 'idle') {
-      void loadTags();
-    }
-  }, [loadTags, status, tagStatus]);
-
-  useEffect(() => {
-    if (!gridApi) {
-      return;
-    }
-
-    gridApi.refreshCells({
-      columns: [TAG_COLUMN_ID],
-      force: true,
-      suppressFlash: true
-    });
+    tagDataRef.current = { tags: tagRecords, labels: new Map(tagLabels.map((label) => [label.id, label])) };
+    gridApi?.refreshCells({ columns: [TAG_COLUMN_ID], force: true, suppressFlash: true });
   }, [gridApi, tagLabels, tagRecords]);
 
-  const tagColumnDef = useMemo<ColDef>(
+  const handleOpenHeaderMenu = useCallback((columnId: string, anchorRect: DOMRect) => {
+    setContextMenu({ kind: 'header', ...placeMenu(anchorRect.left, anchorRect.bottom + 4, 288, 360), columnId });
+  }, []);
+
+  const tagColumnDef = useMemo<ColDef<GridRow>>(
     () => ({
       colId: TAG_COLUMN_ID,
       headerName: 'Labels',
@@ -668,7 +164,6 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       pinned: 'left',
       lockPosition: true,
       checkboxSelection: true,
-      suppressHeaderMenuButton: true,
       sortable: false,
       resizable: false,
       suppressSizeToFit: true,
@@ -676,123 +171,59 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
       minWidth: 140,
       maxWidth: 220,
       cellRenderer: TagCellRenderer,
-      valueGetter: (params) => {
-        const { tags, labels } = tagDataRef.current;
-        return buildTagCellValue(params.data?.__rowId, tags, labels);
-      },
+      valueGetter: (params) =>
+        buildTagCellValue(params.data?.__rowId, tagDataRef.current.tags, tagDataRef.current.labels),
       tooltipComponent: MarkdownTooltip
     }),
     []
   );
 
-  const handleOpenHeaderMenu = useCallback((columnId: string, anchorRect: DOMRect) => {
-    setContextMenu({
-      kind: 'header',
-      x: anchorRect.left,
-      y: anchorRect.bottom + 4,
-      columnId
-    });
-  }, []);
-
-  const dataColumnDefs = useMemo(
+  const dataColumnDefs = useMemo<ColDef<GridRow>[]>(
     () =>
-      orderedColumns.map((column) => ({
-        field: column.key,
-        headerName: column.headerName,
-        cellDataType: mapColumnTypeToAgDataType(column.type),
-        sortable: true,
-        filter: true,
-        suppressHeaderMenuButton: true,
-        headerComponent: DataGridHeader,
-        headerComponentParams: {
-          openHeaderMenu: handleOpenHeaderMenu
-        },
-        headerTooltip:
-          column.confidence > 0
-            ? `${column.type} • ${column.confidence}% confidence`
-            : column.type,
-        hide: columnLayout.visibility[column.key] === false,
-        ...((): { sort?: 'asc' | 'desc'; sortIndex?: number } => {
-          const sortPosition = sorts.findIndex((sort) => sort.column === column.key);
-          if (sortPosition < 0) {
-            return {};
-          }
-
-          return {
-            sort: sorts[sortPosition]?.direction,
-            sortIndex: sortPosition
-          };
-        })()
-      })),
-    [
-      columnLayout.visibility,
-      handleOpenHeaderMenu,
-      mapColumnTypeToAgDataType,
-      orderedColumns,
-      sorts
-    ]
+      orderedColumns.map((column) => {
+        const sortIndex = sorts.findIndex((sort) => sort.column === column.key);
+        return {
+          field: column.key,
+          colId: column.key,
+          headerName: column.headerName,
+          cellDataType: false,
+          sortable: true,
+          headerComponent: DataGridHeader,
+          headerComponentParams: { openHeaderMenu: handleOpenHeaderMenu },
+          headerTooltip: column.confidence > 0 ? `${column.type} • ${column.confidence}% confidence` : column.type,
+          hide: columnLayout.visibility[column.key] === false,
+          valueFormatter:
+            column.type === 'datetime' && displayTimeZone !== 'original'
+              ? (params: ValueFormatterParams<GridRow>) =>
+                  formatDatetimeForDisplay(String(params.value ?? ''), displayTimeZone)
+              : undefined,
+          cellRenderer: searchQuery.trim() ? HighlightCell : undefined,
+          cellRendererParams: { query: searchQuery, caseSensitive: searchCaseSensitive },
+          ...(sortIndex >= 0 ? { sort: sorts[sortIndex]!.direction, sortIndex } : { sort: null })
+        };
+      }),
+    [columnLayout.visibility, displayTimeZone, handleOpenHeaderMenu, orderedColumns, searchCaseSensitive, searchQuery, sorts]
   );
 
-  const columnDefs = useMemo(
-    () => [tagColumnDef, ...dataColumnDefs],
-    [dataColumnDefs, tagColumnDef]
-  );
+  const columnDefs = useMemo(() => [tagColumnDef, ...dataColumnDefs], [dataColumnDefs, tagColumnDef]);
+  const defaultColDef = useMemo(() => ({ minWidth: MIN_COLUMN_WIDTH, resizable: true }), []);
 
-  const defaultColDef = useMemo(
-    () => ({
-      minWidth: MIN_COLUMN_WIDTH,
-      resizable: true
-    }),
-    []
-  );
-
+  // A new datasource per view version: the worker's row order changed, so cached blocks are stale.
   useEffect(() => {
-    if (!gridApi) {
+    if (!gridApi || gridApi.isDestroyed()) {
       return;
     }
-
-    if (
-      typeof (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed === 'function' &&
-      (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed?.()
-    ) {
-      if (debugLoggingEnabled) {
-        logDebug('grid', 'skipping datasource update because grid is destroyed');
-      }
-      return;
-    }
-
+    selection.clear();
     const datasource: IDatasource = {
       getRows: async (params: IGetRowsParams) => {
         try {
-          if (debugLoggingEnabled) {
-            const currentView = viewStateRef.current;
-            logDebug('grid', 'getRows request', {
-              startRow: params.startRow,
-              endRow: params.endRow,
-              status: currentView.status,
-              matchedRows: currentView.matchedRows,
-              totalRows: currentView.totalRows
-            });
-          }
-
-          const worker = getDataWorker();
-          const requestSize = params.endRow - params.startRow;
-          const response = await worker.fetchRows({
+          const response = await getDataWorker().fetchRows({
             offset: params.startRow,
-            limit: requestSize
+            limit: params.endRow - params.startRow
           });
           params.successCallback(response.rows as GridRow[], response.matchedRows);
-          if (debugLoggingEnabled) {
-            logDebug('grid', 'Worker fetchRows response', {
-              offset: params.startRow,
-              limit: requestSize,
-              rowsReceived: response.rows.length,
-              matchedRows: response.matchedRows,
-              totalRows: response.totalRows
-            });
-          }
+          selection.restoreSelection(response.rows as GridRow[]);
         } catch (error) {
-          console.error('Failed to fetch rows for grid', error);
           reportAppError('Failed to fetch rows', error, {
             operation: 'grid.fetchRows',
             context: { startRow: params.startRow, endRow: params.endRow }
@@ -801,1340 +232,467 @@ const DataGrid = ({ status, onEditTagNote }: DataGridProps): JSX.Element => {
         }
       }
     };
+    gridApi.setGridOption('datasource', datasource);
+    // selection's callbacks are stable; listing the object would reset the datasource every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gridApi, viewVersion]);
 
-    if (typeof gridApi.setGridOption === 'function') {
-      gridApi.setGridOption('datasource', datasource);
-    } else if (typeof gridApi.setDatasource === 'function') {
-      gridApi.setDatasource(datasource);
-    }
-  }, [debugLoggingEnabled, gridApi, viewVersion]);
-
+  // While streaming, show the first rows as soon as they exist, then refresh once loading completes.
+  const shownRowsRef = useRef<{ loadId: number; streamed: boolean } | null>(null);
   useEffect(() => {
-    if (status !== 'ready') {
+    if (!gridApi || gridApi.isDestroyed() || totalRows <= 0) {
       return;
     }
-
-    if (
-      gridApi &&
-      typeof gridApi.refreshInfiniteCache === 'function' &&
-      !(
-        typeof (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed === 'function' &&
-        (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed?.()
-      )
-    ) {
-      if (debugLoggingEnabled) {
-        logDebug('grid', 'refreshing infinite cache after ready status');
-      }
+    const shown = shownRowsRef.current;
+    if (status === 'loading' && shown?.loadId !== loadId) {
+      shownRowsRef.current = { loadId, streamed: true };
+      gridApi.refreshInfiniteCache();
+    } else if (status === 'ready' && (shown?.loadId !== loadId || shown.streamed)) {
+      shownRowsRef.current = { loadId, streamed: false };
       gridApi.refreshInfiniteCache();
     }
-  }, [debugLoggingEnabled, gridApi, status]);
+  }, [gridApi, loadId, status, totalRows]);
+
+  const focusPosition = useCallback(
+    (position: number) => {
+      if (!gridApi || position < 0) {
+        return;
+      }
+      gridApi.ensureIndexVisible(position, 'middle');
+      const select = () => {
+        const node = gridApi.getDisplayedRowAtIndex(position);
+        if (!node?.data) {
+          return false;
+        }
+        gridApi.deselectAll();
+        node.setSelected(true, false, 'api');
+        const firstColumn = gridApi.getAllDisplayedColumns()[0];
+        if (firstColumn) {
+          gridApi.setFocusedCell(position, firstColumn);
+        }
+        return true;
+      };
+      if (!select()) {
+        // The block holding this row is still loading.
+        setTimeout(select, 150);
+      }
+    },
+    [gridApi]
+  );
 
   useEffect(() => {
-    if (status === 'loading') {
-      loadingVersionRef.current = viewVersion;
-      computedVersionRef.current = null;
-      setAutoColumnWidths({});
-      initialRowsRequestedRef.current = false;
-      setKeyboardFocusedRowId(null);
-    }
-  }, [status, viewVersion]);
-
-  useEffect(() => {
-    if (
-      status !== 'loading' ||
-      initialRowsRequestedRef.current ||
-      !gridApi ||
-      typeof gridApi.refreshInfiniteCache !== 'function' ||
-      (
-        typeof (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed === 'function' &&
-        (gridApi as GridApi & { isDestroyed?: () => boolean }).isDestroyed?.()
-      ) ||
-      totalRows <= 0
-    ) {
+    if (!navigation || !gridApi) {
       return;
     }
+    const worker = getDataWorker();
+    const focusedRowId = selection.focusedRowId();
+    const currentPosition = async (): Promise<number> =>
+      focusedRowId == null ? -1 : worker.findRowPosition(focusedRowId);
 
-    initialRowsRequestedRef.current = true;
-    gridApi.refreshInfiniteCache();
-  }, [gridApi, status, totalRows]);
-
-  useEffect(() => {
-    if (status !== 'ready' || !gridApi || !columns.length || totalRows <= 0) {
-      return;
-    }
-
-    const targetVersion = loadingVersionRef.current ?? viewVersion;
-    if (computedVersionRef.current === targetVersion) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const computeAutoWidths = async () => {
-      try {
-        const worker = getDataWorker();
-        const effectiveTotalRows = Math.max(0, totalRows);
-        const maxSamples = Math.min(AUTO_WIDTH_MAX_SAMPLE_ROWS, effectiveTotalRows);
-        const blockSize = Math.min(AUTO_WIDTH_BLOCK_SIZE, maxSamples || AUTO_WIDTH_BLOCK_SIZE);
-        const blockCount = Math.max(1, Math.ceil((maxSamples || 1) / Math.max(1, blockSize)));
-        const offsets: number[] = [];
-
-        if (blockCount === 1) {
-          offsets.push(0);
-        } else {
-          const maxOffset = Math.max(0, effectiveTotalRows - blockSize);
-          const step = blockCount > 1 ? Math.max(1, Math.floor(maxOffset / (blockCount - 1))) : 0;
-          for (let index = 0; index < blockCount; index += 1) {
-            const offset = Math.min(maxOffset, index * step);
-            offsets.push(offset);
+    const run = async () => {
+      switch (navigation.kind) {
+        case 'row': {
+          const position = await worker.findRowPosition(navigation.rowId);
+          if (position < 0) {
+            reportAppError(`Row ${navigation.rowId + 1} is not in the current view`, null, { operation: 'grid.jump' });
           }
-        }
-
-        const sampledRows: GridRow[] = [];
-        for (const offset of offsets) {
-          if (cancelled) {
-            return;
-          }
-          const limit = Math.min(blockSize, effectiveTotalRows - offset);
-          if (limit <= 0) {
-            continue;
-          }
-          const response = await worker.fetchRows({ offset, limit });
-          if (cancelled) {
-            return;
-          }
-          sampledRows.push(...((response.rows as GridRow[]) ?? []));
-          if (sampledRows.length >= AUTO_WIDTH_MAX_SAMPLE_ROWS) {
-            break;
-          }
-        }
-
-        if (cancelled) {
+          focusPosition(position);
           return;
         }
-
-        if (!sampledRows.length) {
-          const response = await worker.fetchRows({
-            offset: 0,
-            limit: Math.min(blockSize, effectiveTotalRows)
-          });
-          sampledRows.push(...((response.rows as GridRow[]) ?? []));
-        }
-
-        if (!sampledRows.length) {
-          computedVersionRef.current = targetVersion;
+        case 'next':
+        case 'previous': {
+          const from = await currentPosition();
+          const target = navigation.kind === 'next' ? from + 1 : Math.max(0, from - 1);
+          focusPosition(Math.min(target, gridApi.getDisplayedRowCount() - 1));
           return;
         }
-
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        if (!context) {
-          computedVersionRef.current = targetVersion;
-          return;
-        }
-
-        const rootStyle = window.getComputedStyle(document.documentElement);
-        const fontFamilyValue = rootStyle.getPropertyValue('--data-font-family').trim();
-        const fontSizeValue = rootStyle.getPropertyValue('--data-font-size').trim();
-        const fallbackFontFamily = fontFamilyValue || 'Inter, sans-serif';
-        const parsedFontSize = parseFloat(fontSizeValue || '');
-        const fontSize = Number.isFinite(parsedFontSize) && parsedFontSize > 0 ? parsedFontSize : 13;
-        context.font = `${fontSize}px ${fallbackFontFamily}`;
-
-        const measureCache = new Map<string, number>();
-        const columnWidthSamples: Record<string, number[]> = {};
-        const headerWidths: Record<string, number> = {};
-
-        const measureText = (text: string): number => {
-          const cached = measureCache.get(text);
-          if (cached != null) {
-            return cached;
-          }
-          const width = context.measureText(text).width + CELL_HORIZONTAL_PADDING_PX;
-          measureCache.set(text, width);
-          return width;
-        };
-
-        for (const column of columns) {
-          columnWidthSamples[column.key] = [];
-        }
-
-        for (const row of sampledRows) {
-          for (const column of columns) {
-            const rawValue = row[column.key];
-            const text = rawValue == null ? '' : String(rawValue);
-            columnWidthSamples[column.key]!.push(measureText(text));
-          }
-        }
-
-        for (const column of columns) {
-          const headerText = column.headerName || column.key;
-          headerWidths[column.key] = measureText(headerText);
-        }
-
-        const nextWidths: Record<string, number> = {};
-
-        for (const column of columns) {
-          const samples = columnWidthSamples[column.key] ?? [];
-          nextWidths[column.key] = computeAutoColumnWidth({
-            valueSamples: samples,
-            headerWidth: headerWidths[column.key] ?? MIN_COLUMN_WIDTH
-          });
-        }
-
-        if (cancelled) {
-          return;
-        }
-
-        setAutoColumnWidths(nextWidths);
-        computedVersionRef.current = targetVersion;
-      } catch (error) {
-        if (debugLoggingEnabled) {
-          console.warn('[grid] Failed to compute auto column widths', error);
+        default: {
+          const from = await currentPosition();
+          const position = await worker.findTaggedPosition(
+            navigation.kind === 'nextLabelled' ? from : from < 0 ? gridApi.getDisplayedRowCount() : from,
+            navigation.kind === 'nextLabelled' ? 'next' : 'previous'
+          );
+          focusPosition(position);
         }
       }
     };
+    void run();
+    // Only a new navigation request should trigger a move.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation]);
 
-    void computeAutoWidths();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [columns, debugLoggingEnabled, gridApi, status, totalRows, viewVersion]);
-
-  const themeClass = theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz';
-  const showPlaceholder = shouldShowInitialPlaceholder({
-    status,
-    totalRows,
-    columnCount: columns.length
-  });
-  const showEmptyOverlay = shouldShowEmptyOverlay({
-    status,
-    totalRows,
-    matchedRows,
-    columnCount: columns.length
-  });
-  const emptyStateMessage = getEmptyStateMessage({
-    status,
-    totalRows,
-    matchedRows
-  });
-
-  useEffect(() => {
-    if (!debugLoggingEnabled) {
-      return;
-    }
-
-    const snapshot = JSON.stringify({
-      status,
-      matchedRows,
-      totalRows,
-      viewVersion,
-      showPlaceholder,
-      showEmptyOverlay,
-      emptyStateMessage,
-      columnCount: columns.length,
-      gridReady: Boolean(gridApi)
-    });
-    if (snapshot === lastRenderSnapshotRef.current) {
-      return;
-    }
-    lastRenderSnapshotRef.current = snapshot;
-    console.info(`[grid] render state ${snapshot}`);
-  }, [
-    columns.length,
-    debugLoggingEnabled,
-    emptyStateMessage,
-    gridApi,
-    matchedRows,
-    showEmptyOverlay,
-    showPlaceholder,
-    status,
-    totalRows,
-    viewVersion
-  ]);
-
-  const menuMetadata = useMemo(() => {
-    if (!contextMenu || contextMenu.kind !== 'cell') {
-      return null;
-    }
-
-    const value = contextMenu.filterValue ?? '';
-    return evaluateFilterMenuMetadata(filters, contextMenu.columnId, String(value));
-  }, [contextMenu, filters]);
-
-  const closeMenu = useCallback(() => {
-    setContextMenu(null);
-    setHoveredDistributionValue(null);
-  }, []);
+  const closeMenu = useCallback(() => setContextMenu(null), []);
 
   useEffect(() => {
     if (!contextMenu) {
-      return;
+      return undefined;
     }
-
-    const handleGlobalMouseDown = (event: MouseEvent) => {
-      if (!(event.target instanceof Element)) {
-        closeMenu();
-        return;
-      }
-
-      if (isWithinGridContextMenu(event.target)) {
-        return;
-      }
-
-      closeMenu();
-    };
-
-    const handleGlobalKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+    const handleMouseDown = (event: MouseEvent) => {
+      if (!isWithinGridContextMenu(event.target)) {
         closeMenu();
       }
     };
-
     const handleScroll = (event: Event) => {
-      if (isWithinGridContextMenu(event.target)) {
-        return;
+      if (!isWithinGridContextMenu(event.target)) {
+        closeMenu();
       }
-
-      closeMenu();
     };
-
-    window.addEventListener('mousedown', handleGlobalMouseDown);
-    window.addEventListener('keydown', handleGlobalKeyDown);
+    window.addEventListener('mousedown', handleMouseDown);
     window.addEventListener('scroll', handleScroll, true);
-
     return () => {
-      window.removeEventListener('mousedown', handleGlobalMouseDown);
-      window.removeEventListener('keydown', handleGlobalKeyDown);
+      window.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('scroll', handleScroll, true);
     };
   }, [closeMenu, contextMenu]);
 
   useEffect(() => {
-    if (!contextMenu && tagMutationPending) {
-      setTagMutationPending(false);
+    if (contextMenu?.kind === 'header') {
+      void loadColumnValueDistribution(contextMenu.columnId);
     }
-  }, [contextMenu, tagMutationPending]);
+  }, [contextMenu, loadColumnValueDistribution]);
 
-  useEffect(() => {
-    const container = gridContainerRef.current;
-    if (!gridApi || !container) {
-      return;
-    }
-
-    const resolveFocusColumnId = (): string | null => {
-      if (columnApi && typeof columnApi.getAllDisplayedColumns === 'function') {
-        const displayedColumns = columnApi.getAllDisplayedColumns();
-        if (displayedColumns.length > 0) {
-          const firstColumn = displayedColumns[0];
-          const colId =
-            firstColumn && typeof firstColumn.getColId === 'function'
-              ? firstColumn.getColId()
-              : null;
-          if (colId) {
-            return colId;
-          }
-        }
-      }
-
-      const fallback = columnDefs[0];
-      if (fallback?.field) {
-        return fallback.field;
-      }
-      return TAG_COLUMN_ID;
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) {
-        return;
-      }
-
-      const key = event.key;
-      const isArrowKey = key === 'ArrowDown' || key === 'ArrowUp';
-      const isSpaceKey = key === ' ' || key === 'Spacebar';
-
-      if (!isArrowKey && !isSpaceKey) {
-        return;
-      }
-
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        return;
-      }
-
-      const targetElement = event.target as HTMLElement | null;
-      if (targetElement?.closest('input, textarea, select, [contenteditable="true"]')) {
-        return;
-      }
-
-      if (isSpaceKey) {
-        const toggled = toggleRowSelection(gridApi, keyboardFocusedRowIdRef.current);
-        if (toggled) {
-          event.preventDefault();
-        }
-        return;
-      }
-
-      const rowCount = gridApi.getDisplayedRowCount();
-      if (rowCount <= 0) {
-        return;
-      }
-
-      const selectedNodes = gridApi.getSelectedNodes();
-      const anchorNode = selectedNodes[selectedNodes.length - 1];
-      const direction = key === 'ArrowDown' ? 'down' : 'up';
-      const targetIndex = getNextRowIndex({
-        rowCount,
-        currentIndex: anchorNode?.rowIndex ?? null,
-        direction
-      });
-
-      if (targetIndex == null) {
-        return;
-      }
-
-      event.preventDefault();
-
-      const focusColumnId = resolveFocusColumnId();
-
-      const selectIndex = (index: number): boolean => {
-        const node = gridApi.getDisplayedRowAtIndex(index);
-        if (!node) {
-          return false;
-        }
-
-        gridApi.deselectAll();
-        node.setSelected(true, undefined, 'api');
-        gridApi.ensureIndexVisible(index, 'middle');
-        if (focusColumnId && typeof gridApi.setFocusedCell === 'function') {
-          gridApi.setFocusedCell(index, focusColumnId);
-        }
-        const nodeRowId =
-          typeof node.data?.__rowId === 'number' && Number.isFinite(node.data.__rowId)
-            ? node.data.__rowId
-            : null;
-        setKeyboardFocusedRowId(nodeRowId);
-        return true;
-      };
-
-      if (selectIndex(targetIndex)) {
-        return;
-      }
-
-      gridApi.ensureIndexVisible(targetIndex, 'middle');
-      requestAnimationFrame(() => {
-        selectIndex(targetIndex);
-      });
-    };
-
-    container.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      container.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [columnApi, columnDefs, gridApi]);
-
-  useEffect(() => {
-    keyboardFocusedRowIdRef.current = keyboardFocusedRowId;
-  }, [keyboardFocusedRowId]);
-
-  useEffect(() => {
-    if (!gridApi) {
-      return;
-    }
-
-    if (typeof gridApi.redrawRows === 'function') {
-      gridApi.redrawRows();
-    } else {
-      gridApi.refreshCells?.({ force: true });
-    }
-  }, [gridApi, keyboardFocusedRowId]);
+  const targetRowIds = useCallback(
+    (rowId: number | null): number[] => {
+      const selected = selection.getSelectedRowIds();
+      return rowId == null || selected.includes(rowId) ? selected : [rowId];
+    },
+    [selection]
+  );
 
   const handleCellContextMenu = useCallback(
     (params: CellContextMenuEvent<GridRow>) => {
-      const mouseEvent = params.event as MouseEvent;
-      mouseEvent.preventDefault();
-
+      const event = params.event as MouseEvent;
+      event.preventDefault();
       const columnId = params.column?.getColId();
       if (!columnId) {
         return;
       }
-
       const isTagColumn = columnId === TAG_COLUMN_ID;
-      if (isTagColumn && tagStatus === 'idle') {
-        void loadTags();
-      }
-
-      if (gridApi && params.node && typeof params.node.setSelected === 'function') {
-        const alreadySelected = params.node.isSelected?.() ?? false;
-        if (!alreadySelected) {
-          gridApi.deselectAll();
-          params.node.setSelected(true, undefined, 'api');
-        }
-      }
-
-      const rawValue = params.value as TagCellValue | unknown;
-      if (!isTagColumn && rawValue == null) {
-        return;
+      const rowId = typeof params.data?.__rowId === 'number' ? params.data.__rowId : null;
+      if (rowId != null && !selection.getSelectedRowIds().includes(rowId)) {
+        params.api.deselectAll();
+        params.node.setSelected(true, false, 'api');
       }
 
       let displayValue: string;
       let filterValue: string | null;
-
       if (isTagColumn) {
-        const tagValue = (rawValue as TagCellValue | null) ?? null;
-        const labelNames = tagValue?.labels.map((label) => label.name).filter(Boolean) ?? [];
-        displayValue =
-          labelNames.length > 0
-            ? labelNames.join(', ')
-            : tagValue?.note
-              ? 'No label'
-              : 'No label';
+        const tagValue = (params.value as TagCellValue | null) ?? null;
+        const names = tagValue?.labels.map((label) => label.name).filter(Boolean) ?? [];
+        displayValue = names.length ? names.join(', ') : 'No label';
         filterValue = tagValue?.labels[0]?.id ?? TAG_NO_LABEL_FILTER_VALUE;
       } else {
-        const valueString = typeof rawValue === 'string' ? rawValue : String(rawValue);
-        displayValue = valueString;
-        filterValue = valueString;
-      }
-
-      const rowId = Number.isFinite(params.data?.__rowId) ? Number(params.data?.__rowId) : null;
-      const cellClipboardText = formatClipboardCellValue(rawValue);
-      const displayedColumns = params.api.getAllDisplayedColumns?.() ?? [];
-      const selectedNodes = params.api.getSelectedNodes?.() ?? [];
-      const selectionIncludesContext = selectedNodes.some((node) => node === params.node);
-      const rowNodesToCopy = selectionIncludesContext
-        ? [...selectedNodes].sort((left, right) => (left.rowIndex ?? 0) - (right.rowIndex ?? 0))
-        : [params.node];
-      const rowClipboardText = serializeRowsForClipboard(
-        rowNodesToCopy.map((node) =>
-          displayedColumns.map((column) => {
-            const columnId = column.getColId();
-            const headerName = String(column.getColDef().headerName ?? columnId);
-            return {
-              headerName,
-              value: params.api.getValue(column, node)
-            };
-          })
-        )
-      );
-
-      const menuWidth = 220;
-      const estimatedHeight = isTagColumn
-        ? 140 + Math.min(tagLabels.length || 1, 6) * 28
-        : 96;
-      let x = mouseEvent.clientX;
-      let y = mouseEvent.clientY;
-
-      if (x + menuWidth > window.innerWidth) {
-        x = Math.max(0, window.innerWidth - menuWidth - 8);
-      }
-
-      if (y + estimatedHeight > window.innerHeight) {
-        y = Math.max(0, window.innerHeight - estimatedHeight - 8);
+        displayValue = String(params.value ?? '');
+        filterValue = displayValue;
       }
 
       setContextMenu({
         kind: 'cell',
-        x,
-        y,
+        ...placeMenu(event.clientX, event.clientY, 240, isTagColumn ? 160 + tagLabels.length * 28 : 220),
         columnId,
         displayValue,
         filterValue,
         rowId,
-        cellClipboardText,
-        rowClipboardText
+        cellClipboardText: formatClipboardCellValue(params.value)
       });
     },
-    [gridApi, loadTags, tagLabels.length, tagStatus]
+    [selection, tagLabels.length]
   );
 
   const handleContainerContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
-
     const columnId = getHeaderContextMenuColumnId(event.target);
     if (!columnId) {
       return;
     }
-
-    setContextMenu({
-      kind: 'header',
-      x: event.clientX,
-      y: event.clientY,
-      columnId
-    });
+    event.preventDefault();
+    setContextMenu({ kind: 'header', ...placeMenu(event.clientX, event.clientY, 288, 360), columnId });
   }, []);
 
-  const loadColumnValueDistribution = useCallback(
-    async (column: string) => {
-      const currentEntry = useDataStore.getState().columnValueDistributions[column];
-      if (currentEntry?.status === 'ready') {
-        return;
-      }
-
-      const inFlightRequest = distributionRequestsRef.current.get(column);
-      if (currentEntry?.status === 'loading' && inFlightRequest) {
-        await inFlightRequest;
-        return;
-      }
-
-      setColumnValueDistributionLoading(column);
-
-      const request = (async () => {
-        try {
-          const worker = getDataWorker();
-          const result = await worker.getColumnValueDistribution({ column });
-          setColumnValueDistributionResult(result);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : 'Failed to load column value counts';
-          setColumnValueDistributionError(column, message);
-          reportAppError('Failed to load column value counts', error, {
-            operation: 'grid.headerValueDistribution',
-            context: { column },
-            retry: () => loadColumnValueDistribution(column)
-          });
-        } finally {
-          distributionRequestsRef.current.delete(column);
-        }
-      })();
-
-      distributionRequestsRef.current.set(column, request);
-      await request;
+  const hideColumn = useCallback(
+    (columnId: string) => {
+      setColumnLayout({ order: columnLayout.order, visibility: { ...columnLayout.visibility, [columnId]: false } });
+      closeMenu();
     },
-    [
-      completeValueFrequencyIndexing,
-      setColumnValueDistributionError,
-      setColumnValueDistributionLoading,
-      setColumnValueDistributionResult
-    ]
+    [closeMenu, columnLayout, setColumnLayout]
   );
 
-  useEffect(() => {
-    if (status !== 'ready') {
-      distributionPreloadVersionRef.current = null;
-      return;
-    }
-
-    const eligibleColumns = columns.filter(
-      (column) =>
-        column.key !== TAG_COLUMN_ID &&
-        DISTRIBUTION_SUPPORTED_TYPES.has(column.type)
-    );
-
-    if (distributionPreloadVersionRef.current === viewVersion) {
-      return;
-    }
-
-    distributionPreloadVersionRef.current = viewVersion;
-    let cancelled = false;
-
-    const preloadDistributions = async () => {
-      startValueFrequencyIndexing(eligibleColumns.length);
-      let completedColumns = 0;
-
-      for (const column of eligibleColumns) {
-        if (cancelled) {
-          return;
-        }
-
-        await loadColumnValueDistribution(column.key);
-        completedColumns += 1;
-        setValueFrequencyIndexingProgress(completedColumns);
-      }
-
-      if (!cancelled) {
-        completeValueFrequencyIndexing();
-      }
-    };
-
-    void preloadDistributions();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    columns,
-    completeValueFrequencyIndexing,
-    loadColumnValueDistribution,
-    setValueFrequencyIndexingProgress,
-    startValueFrequencyIndexing,
-    status,
-    viewVersion
-  ]);
-
-  useEffect(() => {
-    if (!contextMenu || contextMenu.kind !== 'header') {
-      return;
-    }
-
-    const column = columns.find((entry) => entry.key === contextMenu.columnId);
-    if (!column || !DISTRIBUTION_SUPPORTED_TYPES.has(column.type)) {
-      return;
-    }
-
-    if (activeHeaderDistributionEntry == null) {
-      void loadColumnValueDistribution(contextMenu.columnId);
-    }
-  }, [activeHeaderDistributionEntry, columns, contextMenu, loadColumnValueDistribution]);
-
-  const getSelectedRowIds = useCallback((): number[] => {
-    if (!gridApi || typeof gridApi.getSelectedNodes !== 'function') {
-      return [];
-    }
-
-    const ids = gridApi
-      .getSelectedNodes()
-      .map((node) => node.data?.__rowId)
-      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
-
-    return Array.from(new Set(ids));
-  }, [gridApi]);
-
-  const getSelectedHeaderDistributionValues = useCallback(
-    (columnId: string): Set<string> =>
+  const eqValuesFor = useCallback(
+    (columnId: string) =>
       new Set(
         filters
-          .filter(
-            (filter) =>
-              filter.enabled !== false && filter.column === columnId && filter.operator === 'eq'
-          )
+          .filter((filter) => filter.enabled !== false && filter.column === columnId && filter.operator === 'eq')
           .map((filter) => String(filter.value ?? ''))
       ),
     [filters]
   );
 
-  const handleToggleHeaderDistributionValue = useCallback(
-    (columnId: string, value: string) => {
-      const selectedValues = getSelectedHeaderDistributionValues(columnId);
-      const isSelected = selectedValues.has(value);
-      let nextFilters = filters.filter(
-        (filter) =>
-          !(
-            filter.column === columnId &&
-            filter.operator === 'eq' &&
-            String(filter.value ?? '') === value
-          )
-      );
+  const eqFilter = (column: string, value: string): FilterState => ({
+    id: crypto.randomUUID(),
+    column,
+    operator: 'eq',
+    value,
+    caseSensitive: false,
+    enabled: true
+  });
 
-      if (!isSelected) {
-        nextFilters = [
-          ...nextFilters,
-          {
-            id: crypto.randomUUID(),
-            column: columnId,
-            operator: 'eq',
-            value,
-            caseSensitive: false,
-            enabled: true
-          }
-        ];
-      }
+  const toggleValueFilter = (columnId: string, value: string) => {
+    const without = filters.filter(
+      (filter) => !(filter.column === columnId && filter.operator === 'eq' && String(filter.value ?? '') === value)
+    );
+    void applyFilters(eqValuesFor(columnId).has(value) ? without : [...without, eqFilter(columnId, value)]);
+  };
 
-      void applyFilters(nextFilters);
-    },
-    [applyFilters, filters, getSelectedHeaderDistributionValues]
-  );
+  const onlyValueFilter = (columnId: string, value: string) => {
+    void applyFilters([
+      ...filters.filter((filter) => !(filter.column === columnId && filter.operator === 'eq')),
+      eqFilter(columnId, value)
+    ]);
+  };
 
-  const handleOnlyHeaderDistributionValue = useCallback(
-    (columnId: string, value: string) => {
-      const nextFilters = filters.filter(
-        (filter) => !(filter.column === columnId && filter.operator === 'eq')
-      );
+  const copyText = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (error) {
+      reportAppError('Failed to copy to clipboard', error, { operation: 'grid.copy' });
+    }
+    closeMenu();
+  };
 
-      nextFilters.push({
-        id: crypto.randomUUID(),
-        column: columnId,
-        operator: 'eq',
-        value,
-        caseSensitive: false,
-        enabled: true
-      });
-
-      void applyFilters(nextFilters);
-    },
-    [applyFilters, filters]
-  );
-
-  const handleFilterIn = useCallback(() => {
-    if (!contextMenu || contextMenu.kind !== 'cell' || !menuMetadata) {
+  const copyRows = async (rowId: number | null) => {
+    if (!gridApi) {
       return;
     }
+    const rows = await getDataWorker().getRowsById(targetRowIds(rowId));
+    const displayed = gridApi.getAllDisplayedColumns();
+    const { tags, labels } = tagDataRef.current;
+    await copyText(
+      serializeRowsForClipboard(
+        rows.map((row) =>
+          displayed.map((column) => {
+            const columnId = column.getColId();
+            return {
+              headerName: String(column.getColDef().headerName ?? columnId),
+              value: columnId === TAG_COLUMN_ID ? buildTagCellValue(row.__rowId, tags, labels) : row[columnId]
+            };
+          })
+        )
+      )
+    );
+  };
 
-    if (menuMetadata.eqMatchesValue) {
+  const applyLabel = async (rowId: number | null, labelId: string | null) => {
+    const rowIds = targetRowIds(rowId);
+    if (!rowIds.length || tagBusy) {
+      return;
+    }
+    setTagBusy(true);
+    try {
+      if (labelId === null) {
+        await clearTagFromRows(rowIds);
+      } else {
+        await applyTagToRows({ rowIds, labelIds: [labelId], mode: 'append' });
+      }
+    } finally {
+      setTagBusy(false);
       closeMenu();
-      return;
     }
-
-    const columnId = contextMenu.columnId;
-    const isTagColumn = columnId === TAG_COLUMN_ID;
-    const baseValue = contextMenu.filterValue ?? '';
-    const predicateValue = isTagColumn
-      ? baseValue || TAG_NO_LABEL_FILTER_VALUE
-      : baseValue;
-
-    if (menuMetadata.eqIndex >= 0) {
-      const nextFilters = filters.slice();
-      nextFilters[menuMetadata.eqIndex] = {
-        ...nextFilters[menuMetadata.eqIndex]!,
-        operator: 'eq',
-        value: predicateValue,
-        value2: undefined,
-        caseSensitive: isTagColumn ? false : nextFilters[menuMetadata.eqIndex]!.caseSensitive,
-        enabled: true
-      };
-      void applyFilters(nextFilters);
-    } else {
-      const predicate: FilterState = {
-        id: crypto.randomUUID(),
-        column: columnId,
-        operator: 'eq',
-        value: predicateValue,
-        caseSensitive: false,
-        enabled: true
-      };
-      void applyFilters([...filters, predicate]);
-    }
-
-    closeMenu();
-  }, [applyFilters, closeMenu, contextMenu, filters, menuMetadata]);
-
-  const handleFilterOut = useCallback(() => {
-    if (!contextMenu || contextMenu.kind !== 'cell' || !menuMetadata) {
-      return;
-    }
-
-    if (menuMetadata.neqExists) {
-      closeMenu();
-      return;
-    }
-
-    const columnId = contextMenu.columnId;
-    const isTagColumn = columnId === TAG_COLUMN_ID;
-    const baseValue = contextMenu.filterValue ?? '';
-    const predicateValue = isTagColumn
-      ? baseValue || TAG_NO_LABEL_FILTER_VALUE
-      : baseValue;
-
-    const predicate: FilterState = {
-      id: crypto.randomUUID(),
-      column: columnId,
-      operator: 'neq',
-      value: predicateValue,
-      caseSensitive: false,
-      enabled: true
-    };
-    void applyFilters([...filters, predicate]);
-    closeMenu();
-  }, [applyFilters, closeMenu, contextMenu, filters, menuMetadata]);
-
-  const handleApplyLabel = useCallback(
-    async (labelId: string | null) => {
-      if (!contextMenu || contextMenu.kind !== 'cell' || contextMenu.rowId == null || tagMutationPending) {
-        return;
-      }
-
-      const selected = getSelectedRowIds();
-      const combined = selected.includes(contextMenu.rowId)
-        ? selected
-        : [...selected, contextMenu.rowId];
-      const rowIds = Array.from(new Set(combined)).filter(
-        (rowId): rowId is number => typeof rowId === 'number' && Number.isFinite(rowId) && rowId >= 0
-      );
-
-      if (!rowIds.length) {
-        return;
-      }
-
-      try {
-        setTagMutationPending(true);
-        if (labelId === null) {
-          await clearTagFromRows(rowIds);
-        } else {
-          await applyTagToRows({ rowIds, labelIds: [labelId], mode: 'append' });
-        }
-      } catch (error) {
-        console.error('Failed to update labels', error);
-        reportAppError('Failed to update labels', error, {
-          operation: 'grid.updateLabels',
-          context: { rowCount: rowIds.length }
-        });
-      } finally {
-        setTagMutationPending(false);
-        closeMenu();
-      }
-    },
-    [applyTagToRows, clearTagFromRows, closeMenu, contextMenu, getSelectedRowIds, tagMutationPending]
-  );
-
-  const handleEditNote = useCallback(() => {
-    if (!contextMenu || contextMenu.kind !== 'cell' || contextMenu.rowId == null || !onEditTagNote) {
-      return;
-    }
-
-    onEditTagNote({ rowId: contextMenu.rowId });
-    closeMenu();
-  }, [closeMenu, contextMenu, onEditTagNote]);
-
-  const handleCopyToClipboard = useCallback(
-    async (text: string, target: 'row' | 'cell') => {
-      if (!text) {
-        closeMenu();
-        return;
-      }
-
-      if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
-        closeMenu();
-        return;
-      }
-
-      try {
-        await navigator.clipboard.writeText(text);
-      } catch (error) {
-        console.error(`Failed to copy grid ${target} to clipboard`, error);
-        reportAppError(`Failed to copy ${target} to clipboard`, error, {
-          operation: `grid.copy${target === 'row' ? 'Row' : 'Cell'}ToClipboard`,
-          context: {
-            rowId: contextMenu?.kind === 'cell' ? contextMenu.rowId : null,
-            columnId: contextMenu?.columnId ?? null
-          }
-        });
-      } finally {
-        closeMenu();
-      }
-    },
-    [closeMenu, contextMenu]
-  );
+  };
 
   const handleSortChanged = useCallback(
-    (event: SortChangedEvent) => {
-      const columnState = event.columnApi.getColumnState();
-      const nextSorts = buildSortStateFromColumnState(columnState);
-
+    (event: SortChangedEvent<GridRow>) => {
+      const nextSorts = buildSortStateFromColumnState(event.api.getColumnState());
       if (!sortsEqual(nextSorts, sorts)) {
-        // Use progressive sorting for large datasets (>50k rows)
-        const useProgressive = totalRows > 50_000;
-        const visibleRows = 2000; // Sort first 2000 rows immediately
-
-        void applySorts(nextSorts, { progressive: useProgressive, visibleRows });
+        void applySorts(nextSorts);
       }
     },
-    [applySorts, sorts, totalRows]
+    [applySorts, sorts]
   );
 
-  const handleToggleColumn = useCallback(
-    (columnId: string) => {
-      const visible = columnLayout.visibility[columnId] !== false;
-      const nextVisibility = {
-        ...columnLayout.visibility,
-        [columnId]: !visible
-      };
-      setColumnLayout({
-        order: columnLayout.order,
-        visibility: nextVisibility
-      });
-
-      if (gridApi) {
-        gridApi.setColumnVisible(columnId, !visible);
+  // Grid-scoped shortcuts that act on the focused row.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return undefined;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.metaKey || event.ctrlKey || event.altKey) {
+        return;
       }
-    },
-    [columnLayout, gridApi, setColumnLayout]
-  );
+      if ((event.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"]')) {
+        return;
+      }
+      const focusedRowId = selection.focusedRowId();
+      if (event.key.toLowerCase() === 't' && focusedRowId != null && onEditTagNote) {
+        event.preventDefault();
+        onEditTagNote({ rowId: focusedRowId });
+      } else if (event.key === ']') {
+        event.preventDefault();
+        useDataStore.getState().navigateGrid({ kind: 'nextLabelled' });
+      } else if (event.key === '[') {
+        event.preventDefault();
+        useDataStore.getState().navigateGrid({ kind: 'previousLabelled' });
+      }
+    };
+    container.addEventListener('keydown', handleKeyDown);
+    return () => container.removeEventListener('keydown', handleKeyDown);
+  }, [onEditTagNote, selection]);
 
-  const renderContextMenu = () => {
+  const showPlaceholder = shouldShowInitialPlaceholder({ status, totalRows, columnCount: columns.length });
+  const showEmptyOverlay = shouldShowEmptyOverlay({ status, totalRows, matchedRows, columnCount: columns.length });
+  const emptyStateMessage = getEmptyStateMessage({ status, totalRows, matchedRows });
+
+  const renderMenu = () => {
     if (!contextMenu) {
       return null;
     }
-
-    const columnVisible = columnLayout.visibility[contextMenu.columnId] !== false;
-
+    const column = columns.find((entry) => entry.key === contextMenu.columnId);
     if (contextMenu.kind === 'header') {
-      const headerColumn = columns.find((column) => column.key === contextMenu.columnId);
-      const distributionEntry = activeHeaderDistributionEntry;
-      const supportsDistribution =
-        headerColumn != null &&
-        headerColumn.key !== TAG_COLUMN_ID &&
-        DISTRIBUTION_SUPPORTED_TYPES.has(headerColumn.type);
-      const distributionResult = distributionEntry?.result;
-      const distributionSort =
-        headerDistributionSort[contextMenu.columnId] ??
-        distributionResult?.defaultSort ??
-        'desc';
-      const selectedDistributionValues = getSelectedHeaderDistributionValues(contextMenu.columnId);
-      const sortedDistributionItems = distributionResult
-        ? sortDistributionItems(distributionResult.items, distributionSort)
-        : [];
-      const menu = (
-      <div
-      data-grid-context-menu="true"
-      className="fixed z-[10000] min-w-[16rem] max-w-[18rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
-      style={{ top: contextMenu.y, left: contextMenu.x }}
-      onMouseDown={(event) => event.stopPropagation()}
-      >
-          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Columns</div>
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800"
-            onClick={() => {
-              handleToggleColumn(contextMenu.columnId);
-              closeMenu();
-            }}
-            disabled={!columnVisible}
-          >
-            Hide column
-          </button>
-          {supportsDistribution ? (
-            <div className="mt-1 border-t border-slate-800 pt-1">
-              <div className="flex items-center justify-between px-2 py-1">
-                <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                  Value counts
-                </div>
-                <button
-                  type="button"
-                  className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300"
-                  onClick={() =>
-                    setHeaderDistributionSort((current) => ({
-                      ...current,
-                      [contextMenu.columnId]:
-                        distributionSort === 'desc' ? 'asc' : 'desc'
-                    }))
-                  }
-                >
-                  {distributionSort === 'desc' ? 'Most common' : 'Least common'}
-                </button>
-              </div>
-              {distributionEntry?.status === 'loading' ? (
-                <div className="px-2 py-1 text-[11px] text-slate-400">Loading value counts…</div>
-              ) : null}
-              {distributionEntry?.status === 'error' ? (
-                <div className="px-2 py-1">
-                  <div className="text-[11px] text-red-400">
-                    {distributionEntry.error ?? 'Failed to load value counts'}
-                  </div>
-                  <button
-                    type="button"
-                    className="mt-1 rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300"
-                    onClick={() => void loadColumnValueDistribution(contextMenu.columnId)}
-                  >
-                    Retry
-                  </button>
-                </div>
-              ) : null}
-              {distributionEntry?.status === 'ready' && distributionResult?.skipped ? (
-                <div className="px-2 py-1 text-[11px] text-slate-400">
-                  {distributionResult.skipReason ?? 'Too many unique values'}
-                </div>
-              ) : null}
-              {distributionEntry?.status === 'ready' &&
-              !distributionResult?.skipped &&
-              sortedDistributionItems.length > 0 ? (
-                <div
-                  className="max-h-52 overflow-y-auto overscroll-contain px-1 pb-1"
-                  onWheelCapture={(event) => event.stopPropagation()}
-                >
-                  {sortedDistributionItems.map((item) => {
-                    const isSelected = selectedDistributionValues.has(item.value);
-                    const showOnlyMe =
-                      hoveredDistributionValue?.columnId === contextMenu.columnId &&
-                      hoveredDistributionValue.value === item.value;
-
-                    return (
-                      <div
-                        key={`${contextMenu.columnId}:${item.value}`}
-                        className={`flex items-center gap-2 rounded px-2 py-1 ${
-                          isSelected ? 'bg-cyan-950/30' : 'hover:bg-slate-800'
-                        }`}
-                        onMouseEnter={() =>
-                          setHoveredDistributionValue({
-                            columnId: contextMenu.columnId,
-                            value: item.value
-                          })
-                        }
-                        onMouseLeave={() => setHoveredDistributionValue(null)}
-                      >
-                        <button
-                          type="button"
-                          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() =>
-                            handleToggleHeaderDistributionValue(contextMenu.columnId, item.value)
-                          }
-                        >
-                          <input
-                            type="checkbox"
-                            readOnly
-                            checked={isSelected}
-                            className="h-3.5 w-3.5 shrink-0"
-                            aria-label={`Select ${item.value || '(empty string)'}`}
-                          />
-                          <span className="truncate">{item.value || '(empty string)'}</span>
-                          <span className="shrink-0 text-[10px] text-slate-400">
-                            {item.count.toLocaleString()}
-                          </span>
-                        </button>
-                        {showOnlyMe ? (
-                          <button
-                            type="button"
-                            className="shrink-0 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-200 hover:bg-slate-700"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleOnlyHeaderDistributionValue(
-                                contextMenu.columnId,
-                                item.value
-                              );
-                            }}
-                          >
-                            Only Me
-                          </button>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {distributionEntry?.status === 'ready' &&
-              !distributionResult?.skipped &&
-              sortedDistributionItems.length === 0 ? (
-                <div className="px-2 py-1 text-[11px] text-slate-400">
-                  No repeated values found.
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="mt-1 border-t border-slate-800 px-2 py-2 text-[11px] text-slate-500">
-              Value counts are available for string and boolean columns.
-            </div>
-          )}
-        </div>
+      const columnId = contextMenu.columnId;
+      return (
+        <HeaderContextMenu
+          menu={contextMenu}
+          column={column}
+          distributionEntry={headerDistributionEntry}
+          selectedValues={eqValuesFor(columnId)}
+          onRetryDistribution={() => void loadColumnValueDistribution(columnId)}
+          onToggleValue={(value) => toggleValueFilter(columnId, value)}
+          onOnlyValue={(value) => onlyValueFilter(columnId, value)}
+          onHideColumn={() => hideColumn(columnId)}
+          onProfileColumn={() => {
+            setProfiledColumn(columnId);
+            closeMenu();
+          }}
+          onShowTimeline={() => {
+            setTimelineColumn(columnId);
+            closeMenu();
+          }}
+          onClose={closeMenu}
+        />
       );
-
-      return createPortal(menu, document.body);
-    }
-
-    if (!menuMetadata) {
-      return null;
     }
 
     const isLabelColumn = contextMenu.columnId === TAG_COLUMN_ID;
-    const activeRecord =
-      isLabelColumn && contextMenu.rowId != null ? tagRecords[contextMenu.rowId] : undefined;
-    const activeLabelIds = Array.isArray(activeRecord?.labelIds) ? activeRecord?.labelIds : [];
-    const hasTagOrNote = activeLabelIds.length > 0 || Boolean(activeRecord?.note);
-    const isTagLoading = isLabelColumn && (tagStatus === 'loading' || tagStatus === 'idle');
-    const selectedRowIds = getSelectedRowIds();
-    const selectionIncludesContext =
-      contextMenu.rowId != null && selectedRowIds.includes(contextMenu.rowId);
-    const bulkApplyCount =
-      contextMenu.rowId == null
-        ? selectedRowIds.length
-        : selectionIncludesContext
-          ? selectedRowIds.length
-          : selectedRowIds.length + 1;
+    const value = contextMenu.filterValue ?? '';
+    const predicateValue = isLabelColumn ? value || TAG_NO_LABEL_FILTER_VALUE : value;
+    const metadata = evaluateFilterMenuMetadata(filters, contextMenu.columnId, value);
+    const center = column?.type === 'datetime' ? parseDatetime(value) : null;
+    const filterIn = () => {
+      const next = filters.slice();
+      const predicate = { ...eqFilter(contextMenu.columnId, predicateValue), caseSensitive: false };
+      if (metadata.eqIndex >= 0) {
+        next[metadata.eqIndex] = { ...next[metadata.eqIndex]!, value: predicateValue, value2: undefined, enabled: true };
+      } else {
+        next.push(predicate);
+      }
+      void applyFilters(next);
+      closeMenu();
+    };
 
-    const canWriteClipboard =
-      typeof navigator !== 'undefined' && typeof navigator.clipboard?.writeText === 'function';
-
-    const menu = (
-    <div
-    data-grid-context-menu="true"
-    className="fixed z-[10000] min-w-[14rem] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl"
-    style={{ top: contextMenu.y, left: contextMenu.x }}
-    onMouseDown={(event) => event.stopPropagation()}
-    >
-        <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Copy</div>
-        <button
-          type="button"
-          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 ${
-            !canWriteClipboard || !contextMenu.rowClipboardText ? 'cursor-not-allowed opacity-50' : ''
-          }`}
-          onClick={() => {
-            void handleCopyToClipboard(contextMenu.rowClipboardText, 'row');
-          }}
-          disabled={!canWriteClipboard || !contextMenu.rowClipboardText}
-        >
-          Copy Row
-        </button>
-        <button
-          type="button"
-          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 ${
-            !canWriteClipboard || !contextMenu.cellClipboardText ? 'cursor-not-allowed opacity-50' : ''
-          }`}
-          onClick={() => {
-            void handleCopyToClipboard(contextMenu.cellClipboardText, 'cell');
-          }}
-          disabled={!canWriteClipboard || !contextMenu.cellClipboardText}
-        >
-          Copy Cell Value
-        </button>
-        <div className="mt-1 border-t border-slate-800 pt-1">
-        <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Filters</div>
-        <button
-          type="button"
-          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 ${
-            menuMetadata.eqMatchesValue ? 'cursor-not-allowed opacity-50' : ''
-          }`}
-          onClick={handleFilterIn}
-          disabled={menuMetadata.eqMatchesValue}
-        >
-          Filter in
-          <span className="truncate text-slate-400">{contextMenu.displayValue}</span>
-        </button>
-        <button
-          type="button"
-          className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 ${
-            menuMetadata.neqExists ? 'cursor-not-allowed opacity-50' : ''
-          }`}
-          onClick={handleFilterOut}
-          disabled={menuMetadata.neqExists}
-        >
-          Filter out
-          <span className="truncate text-slate-400">{contextMenu.displayValue}</span>
-        </button>
-        </div>
-        {isLabelColumn ? (
-          <div className="mt-1 border-t border-slate-800 pt-1">
-            <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">
-              Labels
-            </div>
-            {bulkApplyCount > 1 ? (
-              <div className="px-2 pb-1 text-[10px] uppercase tracking-wide text-emerald-500">
-                Applies to {bulkApplyCount} rows
-              </div>
-            ) : null}
-            {isTagLoading ? (
-              <div className="px-2 py-1 text-[11px] text-slate-400">Loading labels…</div>
-            ) : null}
-            {tagError && tagStatus === 'error' ? (
-              <div className="px-2 py-1 text-[11px] text-red-400">{tagError}</div>
-            ) : null}
-            {!isTagLoading && tagStatus === 'ready' && tagLabels.length === 0 ? (
-              <div className="px-2 py-1 text-[11px] text-slate-400">
-                No labels yet. Use the Labels panel.
-              </div>
-            ) : null}
-            {tagLabels.map((label) => {
-              const isActive = activeLabelIds.includes(label.id);
-              return (
-                <button
-                  key={label.id}
-                  type="button"
-                  disabled={tagMutationPending}
-                  className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-slate-800 ${
-                    isActive ? 'bg-slate-900/60' : ''
-                  }`}
-                  onClick={() => {
-                    void handleApplyLabel(label.id);
-                  }}
-                >
-                  <span
-                    className="h-2.5 w-2.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: label.color }}
-                    aria-hidden
-                  />
-                  <span className="truncate text-slate-200">{label.name}</span>
-                </button>
-              );
-            })}
-            {onEditTagNote ? (
-              <button
-                type="button"
-                className="mt-1 flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-slate-200 hover:bg-slate-800"
-                onClick={handleEditNote}
-              >
-                Edit note
-              </button>
-            ) : null}
-            {hasTagOrNote ? (
-              <button
-                type="button"
-                disabled={tagMutationPending}
-                className="mt-1 flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-slate-200 hover:bg-slate-800"
-                onClick={() => {
-                  void handleApplyLabel(null);
-                }}
-              >
-                Clear labels & notes
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="mt-1 border-t border-slate-800 pt-1">
-          <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500">Columns</div>
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800"
-            onClick={() => {
-              handleToggleColumn(contextMenu.columnId);
-              closeMenu();
-            }}
-          >
-            {columnVisible ? 'Hide column' : 'Show column'}
-          </button>
-        </div>
-      </div>
+    return (
+      <CellContextMenu
+        menu={contextMenu}
+        metadata={metadata}
+        isLabelColumn={isLabelColumn}
+        isDatetimeColumn={center != null}
+        labels={tagLabels}
+        activeRecord={contextMenu.rowId != null ? tagRecords[contextMenu.rowId] : undefined}
+        targetRowCount={targetRowIds(contextMenu.rowId).length}
+        tagBusy={tagBusy}
+        canCopy={typeof navigator.clipboard?.writeText === 'function'}
+        onCopyRows={() => void copyRows(contextMenu.rowId)}
+        onCopyCell={() => void copyText(contextMenu.cellClipboardText)}
+        onFilterIn={filterIn}
+        onFilterOut={() => {
+          void applyFilters([...filters, { ...eqFilter(contextMenu.columnId, predicateValue), operator: 'neq' }]);
+          closeMenu();
+        }}
+        onFilterTimeWindow={() => {
+          if (center != null) {
+            setTimeWindow({ column: contextMenu.columnId, center });
+          }
+          closeMenu();
+        }}
+        onApplyLabel={(labelId) => void applyLabel(contextMenu.rowId, labelId)}
+        onEditNote={
+          onEditTagNote && contextMenu.rowId != null
+            ? () => {
+                onEditTagNote({ rowId: contextMenu.rowId! });
+                closeMenu();
+              }
+            : null
+        }
+        onHideColumn={() => hideColumn(contextMenu.columnId)}
+        onClose={closeMenu}
+      />
     );
-
-    return createPortal(menu, document.body);
   };
 
+  const applyTimeRange = (column: string, start: number, end: number) =>
+    void applyFilters([
+      ...filters.filter((filter) => !(filter.column === column && filter.operator === 'between')),
+      datetimeFilter(column, start, end)
+    ]);
+
   return (
-  <div
-  ref={gridContainerRef}
-  className={`${themeClass} h-full w-full`}
-  style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
-    onContextMenu={handleContainerContextMenu}
-  >
-      {showPlaceholder ? (
-        <div className="flex h-full items-center justify-center text-sm text-slate-500">
-          {emptyStateMessage}
-        </div>
-      ) : (
-        <div className="relative h-full w-full">
-          <AgGridReact<GridRow>
-            columnDefs={columnDefs}
-            defaultColDef={defaultColDef}
-            suppressContextMenu
-            rowSelection="multiple"
-            rowMultiSelectWithClick
-            animateRows
-            rowModelType="infinite"
-            cacheBlockSize={500}
-            maxBlocksInCache={2}
-            getRowId={(params) => (params.data ? String(params.data.__rowId) : '')}
-            tooltipShowDelay={0}
-            getRowClass={(params) =>
-              typeof params.data?.__rowId === 'number' &&
-              Number.isFinite(params.data.__rowId) &&
-              params.data.__rowId === keyboardFocusedRowId
-                ? 'ag-row-keyboard-active'
-                : undefined
-            }
-            onCellContextMenu={handleCellContextMenu}
-            onSortChanged={handleSortChanged}
-            onSelectionChanged={(event: SelectionChangedEvent) => {
-              const nodes = event.api?.getSelectedNodes?.() ?? [];
-              const anchor = nodes[nodes.length - 1];
-              const rowId =
-                typeof anchor?.data?.__rowId === 'number' && Number.isFinite(anchor.data.__rowId)
-                  ? anchor.data.__rowId
-                  : null;
-              setKeyboardFocusedRowId(rowId);
-            }}
-            onGridReady={(event: GridReadyEvent) => {
-              setGridApi(event.api);
-              setColumnApi(event.columnApi);
-            }}
-          />
-          {showEmptyOverlay ? (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/60 text-sm text-slate-300">
-              {emptyStateMessage}
-            </div>
-          ) : null}
-        </div>
-      )}
-      {renderContextMenu()}
+    <div className="flex h-full w-full flex-col">
+      {timelineColumn ? (
+        <TimelinePanel
+          column={timelineColumn}
+          onSelectRange={(start, end) => applyTimeRange(timelineColumn, start, end)}
+          onClose={() => setTimelineColumn(null)}
+        />
+      ) : null}
+      <div
+        ref={containerRef}
+        className={`${theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} min-h-0 w-full flex-1`}
+        style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
+        onContextMenu={handleContainerContextMenu}
+      >
+        {showPlaceholder ? (
+          <div className="flex h-full items-center justify-center text-sm text-slate-500">{emptyStateMessage}</div>
+        ) : (
+          <div className="relative h-full w-full">
+            <AgGridReact<GridRow>
+              columnDefs={columnDefs}
+              defaultColDef={defaultColDef}
+              suppressContextMenu
+              suppressFieldDotNotation
+              rowSelection="multiple"
+              rowMultiSelectWithClick
+              rowModelType="infinite"
+              cacheBlockSize={CACHE_BLOCK_SIZE}
+              maxBlocksInCache={MAX_BLOCKS_IN_CACHE}
+              getRowId={(params) => String(params.data.__rowId)}
+              tooltipShowDelay={0}
+              rowClassRules={selection.rowClassRules}
+              onCellContextMenu={handleCellContextMenu}
+              onSortChanged={handleSortChanged}
+              onRowSelected={selection.onRowSelected}
+              onGridReady={(event: GridReadyEvent<GridRow>) => setGridApi(event.api)}
+            />
+            {showEmptyOverlay ? (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/60 text-sm text-slate-300">
+                {emptyStateMessage}
+              </div>
+            ) : null}
+          </div>
+        )}
+        {renderMenu()}
+      </div>
+      {timeWindow ? (
+        <TimeWindowDialog
+          column={timeWindow.column}
+          center={timeWindow.center}
+          onApply={(start, end) => {
+            applyTimeRange(timeWindow.column, start, end);
+            setTimeWindow(null);
+          }}
+          onClose={() => setTimeWindow(null)}
+        />
+      ) : null}
+      {profiledColumn ? <ColumnProfileDialog column={profiledColumn} onClose={() => setProfiledColumn(null)} /> : null}
     </div>
   );
 };
 
-const MemoizedDataGrid = memo(DataGrid);
-
-export default MemoizedDataGrid;
+export default memo(DataGrid);

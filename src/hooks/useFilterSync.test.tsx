@@ -1,225 +1,106 @@
-import { render, act, cleanup, waitFor } from '@testing-library/react';
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { useEffect } from 'react';
+import { act, renderHook } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useFilterSync } from './useFilterSync';
-import { useSessionStore } from '@state/sessionStore';
+import { useSessionStore, type FilterState } from '@state/sessionStore';
 import { useDataStore } from '@state/dataStore';
-import type { FilterState } from '@state/sessionStore';
+import { useUndoStore } from '@state/undoStore';
 
 const mockApplyFilter = vi.fn();
 
-vi.mock('@workers/dataWorkerProxy', () => {
-  return {
-    getDataWorker: () => ({
-      applyFilter: mockApplyFilter
-    })
-  };
+vi.mock('@workers/dataWorkerProxy', async () => {
+  const actual = await vi.importActual<typeof import('@workers/dataWorkerProxy')>('@workers/dataWorkerProxy');
+  return { ...actual, getDataWorker: () => ({ applyFilter: mockApplyFilter }) };
 });
 
-const TestHarness = (): null => {
-  useFilterSync({ bootstrap: true });
-  return null;
-};
+const filter: FilterState = { id: 'f1', column: 'message', operator: 'eq', value: 'login success', enabled: true };
 
-const ControlHarness = ({ onReady }: { onReady: (applyFilters: (filters: FilterState[]) => Promise<void>) => void }): null => {
-  const { applyFilters } = useFilterSync();
-  useEffect(() => {
-    onReady(applyFilters);
-  }, [applyFilters, onReady]);
-  return null;
-};
-
-const baseFilter: FilterState = {
-  id: 'boot',
-  column: 'message',
-  operator: 'eq',
-  value: 'login success',
-  enabled: true
-};
-
-const resetStores = () => {
-  useSessionStore.setState((state) => ({
-    ...state,
-    filters: [],
-    updatedAt: Date.now()
-  }));
-  useDataStore.setState((state) => ({
-    ...state,
-    status: 'idle',
-    totalRows: 0,
-    matchedRows: null,
-    filterMatchedRows: null
-  }));
-};
+const staleError = (): Error => Object.assign(new Error('superseded'), { name: 'StaleOperationError' });
 
 describe('useFilterSync', () => {
   beforeEach(() => {
     mockApplyFilter.mockReset();
-    mockApplyFilter.mockResolvedValue({
+    mockApplyFilter.mockResolvedValue({ matchedRows: 75, totalRows: 100, predicateMatchCounts: { f1: 75 } });
+    useSessionStore.getState().openFiles([]);
+    useDataStore.getState().reset();
+    useDataStore.setState({ status: 'ready', totalRows: 100, matchedRows: 100 });
+    useUndoStore.getState().clear();
+  });
+
+  it('stores the filters, sends the expression and records the summary', async () => {
+    const { result } = renderHook(() => useFilterSync());
+    const viewVersion = useDataStore.getState().viewVersion;
+
+    await act(() => result.current.applyFilters([filter]));
+
+    expect(result.current.filters).toEqual([filter]);
+    expect(mockApplyFilter).toHaveBeenCalledWith({ expression: expect.objectContaining({ op: 'and' }) });
+    expect(useDataStore.getState()).toMatchObject({
       matchedRows: 75,
-      totalRows: 100,
-      predicateMatchCounts: null,
-      didYouMean: null
+      filterActive: true,
+      filterPredicateMatchCounts: { f1: 75 }
     });
-    resetStores();
+    expect(useDataStore.getState().viewVersion).toBe(viewVersion + 1);
   });
 
-  afterEach(() => {
-    cleanup();
+  it('clears the filter summary when no filter is complete', async () => {
+    mockApplyFilter.mockResolvedValue({ matchedRows: 100, totalRows: 100 });
+    useDataStore.getState().setFilterSummary({ matchedRows: 3, totalRows: 100 });
+    const { result } = renderHook(() => useFilterSync());
+
+    await act(() => result.current.applyFilters([]));
+
+    expect(mockApplyFilter).toHaveBeenCalledWith({ expression: null });
+    expect(useDataStore.getState()).toMatchObject({ matchedRows: 100, filterActive: false });
   });
 
-  it('auto-applies persisted filters once data is ready', async () => {
-    await act(async () => {
-      useSessionStore.setState((state) => ({
-        ...state,
-        filters: [baseFilter]
-      }));
-      useDataStore.setState((state) => ({
-        ...state,
-        status: 'ready',
-        totalRows: 100
-      }));
-    });
+  it('records an undo entry with the previous and next filters', async () => {
+    const { result } = renderHook(() => useFilterSync());
 
-    render(<TestHarness />);
+    await act(() => result.current.applyFilters([filter]));
+    const second = { ...filter, id: 'f2', value: 'other' };
+    await act(() => result.current.applyFilters([filter, second]));
 
-    await waitFor(() => expect(mockApplyFilter).toHaveBeenCalledTimes(1));
-    expect(mockApplyFilter).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expression: expect.objectContaining({ op: 'and' }),
-        offset: 0,
-        limit: 0
-      })
-    );
+    expect(useUndoStore.getState().past).toEqual([
+      { kind: 'filters', before: [], after: [filter] },
+      { kind: 'filters', before: [filter], after: [filter, second] }
+    ]);
   });
 
-  it('does not auto-bootstrap filters when bootstrap is disabled', async () => {
-    await act(async () => {
-      useSessionStore.setState((state) => ({
-        ...state,
-        filters: [baseFilter]
-      }));
-      useDataStore.setState((state) => ({
-        ...state,
-        status: 'ready',
-        totalRows: 100
-      }));
-    });
+  it('does not record undo entries when undoable is false', async () => {
+    const { result } = renderHook(() => useFilterSync());
 
-    const PassiveHarness = (): null => {
-      useFilterSync();
-      return null;
-    };
+    await act(() => result.current.applyFilters([filter], { undoable: false }));
 
-    render(<PassiveHarness />);
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(mockApplyFilter).not.toHaveBeenCalled();
+    expect(useUndoStore.getState().past).toEqual([]);
+    expect(useSessionStore.getState().filters).toEqual([filter]);
   });
 
-  it('defers bootstrap until the worker reports ready rows', async () => {
-    await act(async () => {
-      useSessionStore.setState((state) => ({
-        ...state,
-        filters: [baseFilter]
-      }));
-      useDataStore.setState((state) => ({
-        ...state,
-        status: 'loading',
-        totalRows: 0
-      }));
-    });
+  it('ignores stale-operation rejections', async () => {
+    mockApplyFilter.mockRejectedValue(staleError());
+    const { result } = renderHook(() => useFilterSync());
 
-    render(<TestHarness />);
-    expect(mockApplyFilter).not.toHaveBeenCalled();
+    await act(() => result.current.applyFilters([filter]));
 
-    await act(async () => {
-      useDataStore.setState((state) => ({
-        ...state,
-        status: 'ready',
-        totalRows: 42
-      }));
-    });
-
-    await waitFor(() => expect(mockApplyFilter).toHaveBeenCalledTimes(1));
+    expect(useDataStore.getState().errorDetails).toBeNull();
+    expect(useDataStore.getState().filterActive).toBe(false);
   });
 
-  it('ignores stale worker responses that resolve out of order', async () => {
-    await act(async () => {
-      useDataStore.setState((state) => ({
-        ...state,
-        status: 'idle',
-        totalRows: 0,
-        matchedRows: null
-      }));
-      useSessionStore.setState((state) => ({
-        ...state,
-        filters: []
-      }));
-    });
+  it('reports other errors without changing the load status, with a retry that is not undoable', async () => {
+    mockApplyFilter.mockRejectedValueOnce(new Error('bad regex'));
+    const { result } = renderHook(() => useFilterSync());
 
-    const createDeferredResponse = () => {
-      let resolver: ((value: unknown) => void) | undefined;
-      const promise = new Promise((resolve) => {
-        resolver = resolve;
-      });
-      return {
-        promise,
-        resolve: (value: unknown) => resolver?.(value)
-      };
-    };
+    await act(() => result.current.applyFilters([filter]));
 
-    const firstResponse = createDeferredResponse();
-    const secondResponse = createDeferredResponse();
+    const state = useDataStore.getState();
+    expect(state.status).toBe('ready');
+    expect(state.errorDetails?.message).toBe('Failed to apply filter');
+    const payload = state.errorDetails?.payload as { operation: string; retry: () => Promise<void> };
+    expect(payload.operation).toBe('filters.apply');
 
-    mockApplyFilter
-      .mockImplementationOnce(() => firstResponse.promise as Promise<any>)
-      .mockImplementationOnce(() => secondResponse.promise as Promise<any>);
-
-    let applyFiltersFn: ((filters: FilterState[]) => Promise<void>) | null = null;
-    render(
-      <ControlHarness
-        onReady={(applyFilters) => {
-          applyFiltersFn = applyFilters;
-        }}
-      />
-    );
-
-    await waitFor(() => expect(applyFiltersFn).toBeTruthy());
-
-    const firstFilter: FilterState = { ...baseFilter, id: 'first', value: 'first' };
-    const secondFilter: FilterState = { ...baseFilter, id: 'second', value: 'second' };
-
-    let firstPromise: Promise<void>;
-    let secondPromise: Promise<void>;
-    await act(async () => {
-      firstPromise = applyFiltersFn!([firstFilter]);
-      secondPromise = applyFiltersFn!([secondFilter]);
-    });
-
+    await act(() => payload.retry());
     expect(mockApplyFilter).toHaveBeenCalledTimes(2);
-
-    await act(async () => {
-      secondResponse.resolve({
-        matchedRows: 200,
-        totalRows: 500,
-        predicateMatchCounts: null,
-        didYouMean: null
-      });
-      await secondPromise!;
-    });
-    expect(useDataStore.getState().matchedRows).toBe(200);
-
-    await act(async () => {
-      firstResponse.resolve({
-        matchedRows: 5,
-        totalRows: 500,
-        predicateMatchCounts: null,
-        didYouMean: null
-      });
-      await firstPromise!;
-    });
-    expect(useDataStore.getState().matchedRows).toBe(200);
+    expect(useUndoStore.getState().past).toHaveLength(1);
+    expect(useDataStore.getState().matchedRows).toBe(75);
   });
 });

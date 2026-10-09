@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, KeyboardEvent } from 'react';
 import { proxy } from 'comlink';
 
 import { useAppStore } from '@state/appStore';
-import { useDataStore, type GridRow } from '@state/dataStore';
-import { useSessionStore, getSessionSnapshot } from '@state/sessionStore';
+import { useDataStore } from '@state/dataStore';
+import { describeFiles, getSessionSnapshot, useSessionStore } from '@state/sessionStore';
 import { useTagStore } from '@state/tagStore';
+import { useUndoStore } from '@state/undoStore';
 import DataGrid from '@components/DataGrid';
 import FilterBuilder, { buildNewFilter } from '@components/filter/FilterBuilder';
 import { DidYouMeanBanner } from '@components/DidYouMeanBanner';
@@ -14,55 +14,37 @@ import ColumnsPanel from '@components/ColumnsPanel';
 import LabelsPanel from '@components/LabelsPanel';
 import OptionsPanel from '@components/options/OptionsPanel';
 import TagNotePanel from '@components/tagging/TagNotePanel';
-import LargeDatasetWarning from '@components/LargeDatasetWarning';
 import CapabilityGate from '@components/CapabilityGate';
 import CapabilityWarningBanner from '@components/CapabilityWarningBanner';
 import DiagnosticsToast from '@components/DiagnosticsToast';
-import { getDataWorker } from '@workers/dataWorkerProxy';
-import { isDebugLoggingEnabled, logDebug } from '@utils/debugLog';
+import { ExportMenu } from '@components/app/ExportMenu';
+import { StatusBar } from '@components/app/StatusBar';
+import { getDataWorker, isStaleOperation } from '@workers/dataWorkerProxy';
 import { getFontStack } from '@constants/fonts';
 import { summariseLabelFilters } from '@utils/labelFilters';
-import {
-  buildCsvBlob,
-  serializeToCsv,
-  generateExportFilename,
-  type CsvExportFormat
-} from '@utils/csvExport';
+import { buildCsvBlob, generateExportFilename, serializeToCsv, type CsvExportFormat } from '@utils/csvExport';
 import { saveBlobFile, saveJsonFile } from '@utils/fileAccess';
 import { buildTagExportFilename } from '@utils/tagExport';
 import { detectCapabilities, type CapabilityReport } from '@utils/capabilities';
 import { clearStoredData } from '@utils/clearStoredData';
-import { useSessionPersistence } from '@/hooks/useSessionPersistence';
+import { reportAppError } from '@utils/diagnostics';
+import { buildFilterExpression } from '@utils/filterExpression';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useGlobalSearchSync } from '@/hooks/useGlobalSearchSync';
-import { useAutoFileLoader } from '@/hooks/useAutoFileLoader';
-import { formatBytes } from '@utils/formatBytes';
-import { reportAppError } from '@utils/diagnostics';
-import { isStoredDataFlushInProgress } from '@utils/persistenceReset';
 import { useDiagnosticsReporter } from '@/hooks/useDiagnosticsReporter';
+import { useWorkerBootstrap } from '@/hooks/useWorkerBootstrap';
+import { useGlobalShortcuts } from '@/hooks/useGlobalShortcuts';
 
-const formatTime = (timestamp: number): string => {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  }).format(new Date(timestamp));
-};
-
-const formatCellValue = (value: unknown): string => {
-  if (value == null) {
-    return '';
+const FILE_PICKER_TYPES = [
+  {
+    description: 'Delimited text',
+    accept: {
+      'text/csv': ['.csv'],
+      'text/tab-separated-values': ['.tsv', '.txt'],
+      'application/gzip': ['.gz']
+    }
   }
-  if (value instanceof Date) {
-    return value.toISOString();
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value.toString();
-  }
-  return String(value);
-};
-
-const LARGE_DATASET_WARNING_BYTES = 600 * 1024 * 1024;
+];
 
 interface AppShellProps {
   capabilityReport: CapabilityReport;
@@ -70,509 +52,197 @@ interface AppShellProps {
   onDismissWarnings: () => void;
 }
 
-const AppShell = ({
-  capabilityReport,
-  warningsDismissed,
-  onDismissWarnings
-}: AppShellProps): JSX.Element => {
+/** Re-runs the active filter (and with it search and sort) so it covers rows that streamed in later. */
+const refreshViewAfterLoad = async (): Promise<void> => {
+  const { filters, sorts } = useSessionStore.getState();
+  const { filterActive, searchActive } = useDataStore.getState();
+  if (!filterActive && !searchActive && !sorts.length && !filters.length) {
+    return;
+  }
+  const response = await getDataWorker().applyFilter({ expression: buildFilterExpression(filters) });
+  useDataStore.getState().setMatchedRowCount(response.matchedRows);
+  useDataStore.getState().bumpViewVersion();
+};
+
+const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: AppShellProps): JSX.Element => {
   const theme = useAppStore((state) => state.theme);
   const toggleTheme = useAppStore((state) => state.toggleTheme);
-  const [workerReady, setWorkerReady] = useState(false);
-  const fileHandle = useSessionStore((state) => state.fileHandle);
+  const searchCaseSensitive = useAppStore((state) => state.searchCaseSensitive);
+  const setSearchCaseSensitive = useAppStore((state) => state.setSearchCaseSensitive);
+  const interfaceFontFamily = useAppStore((state) => state.interfaceFontFamily);
+  const interfaceFontSize = useAppStore((state) => state.interfaceFontSize);
+  const dataFontFamily = useAppStore((state) => state.dataFontFamily);
+  const dataFontSize = useAppStore((state) => state.dataFontSize);
+  const fileHandles = useSessionStore((state) => state.fileHandles);
   const filters = useSessionStore((state) => state.filters);
-  const sorts = useSessionStore((state) => state.sorts);
-  const searchCaseSensitive = useSessionStore((state) => state.searchCaseSensitive);
-  const setSearchCaseSensitive = useSessionStore((state) => state.setSearchCaseSensitive);
-  const interfaceFontFamily = useSessionStore((state) => state.interfaceFontFamily);
-  const interfaceFontSize = useSessionStore((state) => state.interfaceFontSize);
-  const dataFontFamily = useSessionStore((state) => state.dataFontFamily);
-  const dataFontSize = useSessionStore((state) => state.dataFontSize);
   const columnLayout = useSessionStore((state) => state.columnLayout);
-  const setFileHandle = useSessionStore((state) => state.setFileHandle);
-  const initializeColumnLayout = useSessionStore((state) => state.initializeColumnLayout);
-  const startLoading = useDataStore((state) => state.startLoading);
-  const setHeader = useDataStore((state) => state.setHeader);
-  const reportProgress = useDataStore((state) => state.reportProgress);
-  const complete = useDataStore((state) => state.complete);
-  const clearSearchResult = useDataStore((state) => state.clearSearchResult);
+  const openFiles = useSessionStore((state) => state.openFiles);
   const loaderStatus = useDataStore((state) => state.status);
-  const loaderMessage = useDataStore((state) => state.message);
   const errorDetails = useDataStore((state) => state.errorDetails);
   const clearErrorDetails = useDataStore((state) => state.clearError);
   const matchedRows = useDataStore((state) => state.matchedRows);
-  const totalRows = useDataStore((state) => state.totalRows);
-  const filterMatchedRows = useDataStore((state) => state.filterMatchedRows);
-  const searchMatchedRows = useDataStore((state) => state.searchMatchedRows);
-  const stats = useDataStore((state) => state.stats);
   const columns = useDataStore((state) => state.columns);
   const columnInference = useDataStore((state) => state.columnInference);
-  const valueFrequencyIndexing = useDataStore((state) => state.valueFrequencyIndexing);
-  const allColumns = useDataStore((state) => state.columns);
   const groupingState = useDataStore((state) => state.grouping);
   const tagLabels = useTagStore((state) => state.labels);
   const tagRecords = useTagStore((state) => state.tags);
   const applyTagToRows = useTagStore((state) => state.applyTag);
   const exportTags = useTagStore((state) => state.exportTags);
-  const { applyFilters } = useFilterSync({ bootstrap: true });
+  const { applyFilters } = useFilterSync();
+  const workerReady = useWorkerBootstrap();
   const [searchTerm, setSearchTerm] = useState('');
+  const [jumpTarget, setJumpTarget] = useState('');
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [labelsOpen, setLabelsOpen] = useState(false);
   const [showPivot, setShowPivot] = useState(false);
-  const [isSidebarCollapsed, setSidebarCollapsed] = useState(true);
-  const [noteEditor, setNoteEditor] = useState<{
-    rowId: number;
-    labelIds: string[];
-    note: string;
-  } | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+  const [noteEditor, setNoteEditor] = useState<{ rowId: number; labelIds: string[]; note: string } | null>(null);
   const [noteSaving, setNoteSaving] = useState(false);
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const exportMenuRef = useRef<HTMLDivElement | null>(null);
-  const opfsCapability = capabilityReport.checks.find((entry) => entry.id === 'opfs');
-  const opfsAvailable = Boolean(opfsCapability?.present);
-  const sessionPersistence = useSessionPersistence(opfsAvailable);
-  const {
-    restoring: persistenceRestoring,
-    reconnecting: persistenceReconnecting,
-    canReconnect: persistenceCanReconnect,
-    reconnectFileName: persistenceReconnectFileName,
-    error: persistenceError,
-    lastSavedAt: persistenceLastSavedAt,
-    reconnectFile: reconnectPersistedFile
-  } = sessionPersistence;
-  const lastViewSnapshotRef = useRef<string | null>(null);
-  const debugLoggingEnabled = isDebugLoggingEnabled();
+  const [fileSize, setFileSize] = useState<number | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const jumpInputRef = useRef<HTMLInputElement | null>(null);
 
   useDiagnosticsReporter();
-
-  useEffect(() => {
-    if (!debugLoggingEnabled) {
-      return;
-    }
-
-    const snapshot = JSON.stringify({
-      workerReady,
-      fileName: fileHandle?.name ?? null,
-      loaderStatus,
-      matchedRows,
-      totalRows,
-      filterMatchedRows,
-      searchMatchedRows,
-      columnCount: columns.length,
-      filterCount: filters.length,
-      filters: filters.map((filter) => ({
-        id: filter.id,
-        column: filter.column,
-        operator: filter.operator,
-        enabled: filter.enabled !== false,
-        value: filter.value,
-        value2: filter.value2
-      })),
-      sortCount: sorts.length,
-      sorts,
-      restoringSession: persistenceRestoring,
-      reconnectingSession: persistenceReconnecting
-    });
-    if (snapshot === lastViewSnapshotRef.current) {
-      return;
-    }
-    lastViewSnapshotRef.current = snapshot;
-    console.info(`[app] view snapshot ${snapshot}`);
-  }, [
-    columns.length,
-    debugLoggingEnabled,
-    fileHandle,
-    filterMatchedRows,
-    filters,
-    loaderStatus,
-    matchedRows,
-    persistenceReconnecting,
-    persistenceRestoring,
-    searchMatchedRows,
-    sorts,
-    totalRows,
-    workerReady
-  ]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
 
   useEffect(() => {
-    // Prevent back button navigation to avoid triggering on horizontal scroll/swipe
+    // Horizontal trackpad swipes in the grid would otherwise navigate back and lose the session.
     history.pushState(null, '', location.href);
-    const handlePopState = () => {
-      history.pushState(null, '', location.href);
-    };
+    const handlePopState = () => history.pushState(null, '', location.href);
     window.addEventListener('popstate', handlePopState);
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
+    return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
   useEffect(() => {
-    const fontStack = getFontStack(interfaceFontFamily);
-    document.documentElement.style.setProperty('--app-font-family', fontStack);
+    document.documentElement.style.setProperty('--app-font-family', getFontStack(interfaceFontFamily));
     document.documentElement.style.setProperty('--app-font-size', `${interfaceFontSize}px`);
-  }, [interfaceFontFamily, interfaceFontSize]);
-
-  useEffect(() => {
-    const fontStack = getFontStack(dataFontFamily);
-    document.documentElement.style.setProperty('--data-font-family', fontStack);
+    document.documentElement.style.setProperty('--data-font-family', getFontStack(dataFontFamily));
     document.documentElement.style.setProperty('--data-font-size', `${dataFontSize}px`);
-  }, [dataFontFamily, dataFontSize]);
+  }, [dataFontFamily, dataFontSize, interfaceFontFamily, interfaceFontSize]);
 
-  useEffect(() => {
-    if (!exportMenuOpen || typeof document === 'undefined') {
-      return;
-    }
-
-    const handleOutsideClick = (event: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
-        setExportMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-    };
-  }, [exportMenuOpen]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const initWorker = async () => {
-      try {
-        const worker = getDataWorker();
-        await worker.init({
-          debugLogging: debugLoggingEnabled,
-          slowBatchThresholdMs: 50
-        });
-        const response = await worker.ping();
-
-        if (!cancelled && response === 'pong') {
-          setWorkerReady(true);
-
-          // Persist tags on page unload
-          const handleBeforeUnload = async () => {
-            if (isStoredDataFlushInProgress()) {
-              return;
-            }
-
-            try {
-              await worker.persistTags();
-            } catch (error) {
-              console.warn('Failed to persist tags on unload', error);
-            }
-          };
-
-          window.addEventListener('beforeunload', handleBeforeUnload);
-        }
-      } catch (error) {
-        reportAppError('Failed to initialize data worker', error, {
-          operation: 'worker.init'
-        });
-      }
-    };
-
-    initWorker();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [debugLoggingEnabled]);
-
-  const loadSelectedFile = useCallback(
-    async (handle: FileSystemFileHandle) => {
-      let callbackReportedError = false;
-
-      if (debugLoggingEnabled) {
-        console.info('[app] Triggering loadFile for handle', {
-          name: handle.name
-        });
-      }
-
-      setSearchTerm('');
-      clearSearchResult();
-      startLoading(handle.name ?? 'Unknown file');
-
-      try {
-        const worker = getDataWorker();
-        await worker.loadFile(
-          { handle },
-          proxy({
-            onStart: async ({ columns }) => {
-              if (debugLoggingEnabled) {
-                logDebug('app', 'Worker onStart', { columnCount: columns.length, columns });
-              }
-              setHeader(columns);
-            },
-            onProgress: async (progress) => {
-              if (debugLoggingEnabled) {
-                logDebug('app', 'Worker onProgress', { ...progress });
-              }
-              reportProgress(progress);
-            },
-            onComplete: async (summary) => {
-              if (debugLoggingEnabled) {
-                console.info('[app] Worker onComplete', summary);
-              }
-              complete(summary);
-              const columnKeys = Object.keys(summary.columnTypes);
-              initializeColumnLayout(columnKeys, summary.columnInference, summary.rowsParsed);
-              void useTagStore.getState().load();
-            },
-            onError: async (error) => {
-              callbackReportedError = true;
-              if (debugLoggingEnabled) {
-                console.error('[app] Worker onError', error);
-              }
-              reportAppError(error.message ?? 'Failed to load file', error, {
-                operation: 'worker.loadFile',
-                context: { fileName: handle.name }
-              });
-            }
-          })
-        );
-      } catch (error) {
-        if (!callbackReportedError) {
-          reportAppError(
-            error instanceof Error ? error.message : String(error),
-            error,
-            {
-              operation: 'worker.loadFile',
-              context: { fileName: handle.name }
-            }
-          );
-        }
-        throw error;
-      }
-    },
-    [
-      clearSearchResult,
-      complete,
-      debugLoggingEnabled,
-      initializeColumnLayout,
-      reportProgress,
-      setHeader,
-      startLoading
-    ]
-  );
-
-  useAutoFileLoader({
-    workerReady,
-    fileHandle,
-    loadFile: loadSelectedFile
-  });
-
-  useEffect(() => {
+  const loadFiles = useCallback(async (handles: FileSystemFileHandle[]) => {
+    const data = useDataStore.getState();
+    data.startLoading(describeFiles(handles));
     useTagStore.getState().reset();
+    useUndoStore.getState().clear();
+    setSearchTerm('');
     setNoteEditor(null);
-    setNoteSaving(false);
-  }, [fileHandle]);
+    setFileSize(null);
+    void Promise.all(handles.map((handle) => handle.getFile())).then((files) =>
+      setFileSize(files.reduce((total, file) => total + file.size, 0))
+    );
+
+    try {
+      await getDataWorker().loadFile(
+        { handles },
+        proxy({
+          onStart: ({ columns: header }) => useDataStore.getState().setHeader(header),
+          onProgress: (progress) => useDataStore.getState().reportProgress(progress),
+          onComplete: async (summary) => {
+            useDataStore.getState().complete(summary);
+            useSessionStore
+              .getState()
+              .initializeColumnLayout(Object.keys(summary.columnTypes), summary.columnInference, summary.rowsParsed);
+            await useTagStore.getState().load();
+            await refreshViewAfterLoad();
+          },
+          onError: (error) => useDataStore.getState().failLoading(error.message)
+        })
+      );
+    } catch (error) {
+      if (!isStaleOperation(error)) {
+        reportAppError(error instanceof Error ? error.message : String(error), error, {
+          operation: 'worker.loadFile',
+          context: { files: handles.map((handle) => handle.name) }
+        });
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (workerReady && fileHandles.length) {
+      void loadFiles(fileHandles);
+    }
+  }, [fileHandles, loadFiles, workerReady]);
+
+  const handleOpenFile = useCallback(async () => {
+    try {
+      const handles = await window.showOpenFilePicker!({ multiple: true, types: FILE_PICKER_TYPES });
+      if (handles.length) {
+        openFiles(handles);
+      }
+    } catch (error) {
+      if ((error as DOMException)?.name !== 'AbortError') {
+        reportAppError(error instanceof Error ? error.message : String(error), error, { operation: 'file.open' });
+      }
+    }
+  }, [openFiles]);
 
   const visibleColumnKeys = useMemo(
-    () =>
-      columns
-        .filter((column) => columnLayout.visibility[column.key] !== false)
-        .map((column) => column.key),
+    () => columns.filter((column) => columnLayout.visibility[column.key] !== false).map((column) => column.key),
     [columnLayout.visibility, columns]
   );
 
-  const handleFlushStoredData = useCallback(async () => {
-    await clearStoredData();
-    setOptionsOpen(false);
-    setLabelsOpen(false);
-    setColumnsOpen(false);
-    setNoteEditor(null);
-    setNoteSaving(false);
-    useTagStore.getState().reset();
-    useDataStore.getState().reset();
-    useSessionStore.getState().clear();
+  useGlobalSearchSync({ query: searchTerm, columns: visibleColumnKeys, enabled: workerReady && columns.length > 0 });
 
-    if (typeof window !== 'undefined') {
-      window.location.reload();
-    }
-  }, []);
-
-  const addFilterFromShortcut = useCallback((): boolean => {
-    const newFilter = buildNewFilter({
-      columns,
-      columnInference,
-      tagLabels
-    });
-
-    if (!newFilter) {
-      return false;
-    }
-
-    void applyFilters([...filters, newFilter]);
-    return true;
-  }, [applyFilters, columns, columnInference, filters, tagLabels]);
-
-  useEffect(() => {
-    const handleShortcutKey = (event: globalThis.KeyboardEvent) => {
-      if (event.defaultPrevented) {
+  const undoRedo = useCallback(
+    async (direction: 'undo' | 'redo') => {
+      const undo = useUndoStore.getState();
+      const entry = direction === 'undo' ? undo.takeUndo() : undo.takeRedo();
+      if (!entry) {
         return;
       }
-
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        return;
+      if (entry.kind === 'filters') {
+        await applyFilters(direction === 'undo' ? entry.before : entry.after, { undoable: false });
+      } else {
+        await useTagStore.getState().restoreTags(direction === 'undo' ? entry.before : entry.after);
       }
-
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, select, [contenteditable="true"]')) {
-        return;
-      }
-
-      const key = event.key.toLowerCase();
-
-      if (key === 'f') {
-        event.preventDefault();
-        setSidebarCollapsed((value) => !value);
-        return;
-      }
-
-      if (key === 'a') {
-        const added = addFilterFromShortcut();
-        if (!added) {
-          return;
-        }
-        event.preventDefault();
-        if (isSidebarCollapsed) {
-          setSidebarCollapsed(false);
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleShortcutKey, true);
-    return () => {
-      window.removeEventListener('keydown', handleShortcutKey, true);
-    };
-  }, [addFilterFromShortcut, isSidebarCollapsed, setSidebarCollapsed]);
-
-  const labelFilterSummary = useMemo(
-    () => summariseLabelFilters(filters, tagLabels),
-    [filters, tagLabels]
+    },
+    [applyFilters]
   );
 
-  useGlobalSearchSync({
-    query: searchTerm,
-    columns: visibleColumnKeys,
-    enabled: workerReady
+  useGlobalShortcuts({
+    toggleFilters: () => setSidebarCollapsed((value) => !value),
+    addFilter: () => {
+      const filter = buildNewFilter({ columns, columnInference, tagLabels });
+      if (filter) {
+        setSidebarCollapsed(false);
+        void applyFilters([...filters, filter]);
+      }
+    },
+    focusSearch: () => searchInputRef.current?.focus(),
+    focusJumpToRow: () => jumpInputRef.current?.focus(),
+    undo: () => void undoRedo('undo'),
+    redo: () => void undoRedo('redo')
   });
 
-  const statusText = useMemo(() => {
-    if (persistenceRestoring) {
-      return 'Restoring previous session…';
-    }
-
-    if (persistenceReconnecting) {
-      return 'Reconnecting previous file…';
-    }
-
-    let base: string;
-    if (matchedRows != null && totalRows > 0) {
-      base = `Showing ${matchedRows.toLocaleString()} of ${totalRows.toLocaleString()} rows`;
-    } else if (loaderMessage) {
-      base = loaderMessage;
-    } else if (loaderStatus === 'loading') {
-      base = stats
-        ? `Streaming… parsed ${stats.rowsParsed.toLocaleString()} rows (${formatBytes(stats.bytesParsed)})`
-        : 'Streaming CSV/TSV ingestion…';
-    } else {
-      base = 'Ready for streaming CSV/TSV ingestion.';
-    }
-
-    if (labelFilterSummary) {
-      base = `${base} • ${labelFilterSummary.summary}`;
-    }
-
-    if (valueFrequencyIndexing.totalColumns > 0) {
-      if (valueFrequencyIndexing.status === 'indexing') {
-        base = `${base} • Indexing value frequency list (${valueFrequencyIndexing.completedColumns}/${valueFrequencyIndexing.totalColumns} columns)`;
-      } else if (valueFrequencyIndexing.status === 'ready') {
-        base = `${base} • Value frequency list ready`;
-      }
-    }
-
-    if (persistenceError) {
-      return `${base} • ${persistenceError}`;
-    }
-
-    if (persistenceLastSavedAt) {
-      return `${base} • Auto-saved ${formatTime(persistenceLastSavedAt)}`;
-    }
-
-    return base;
-  }, [
-    persistenceRestoring,
-    persistenceReconnecting,
-    matchedRows,
-    totalRows,
-    loaderMessage,
-    loaderStatus,
-    stats,
-    labelFilterSummary,
-    valueFrequencyIndexing,
-    persistenceError,
-    persistenceLastSavedAt
-  ]);
-
-  const handleReconnectPersistedFile = useCallback(async () => {
-    try {
-      await reconnectPersistedFile();
-    } catch (error) {
-      reportAppError(
-        error instanceof Error ? error.message : 'Failed to reconnect previous file',
-        error,
-        { operation: 'session.reconnect' }
-      );
-    }
-  }, [reconnectPersistedFile, reportAppError]);
-
-  const reconnectButtonLabel = useMemo(() => {
-    if (!persistenceReconnectFileName) {
-      return 'Reconnect file';
-    }
-
-    if (persistenceReconnectFileName.length <= 28) {
-      return `Reconnect ${persistenceReconnectFileName}`;
-    }
-
-    return `Reconnect ${persistenceReconnectFileName.slice(0, 25)}...`;
-  }, [persistenceReconnectFileName]);
+  const handleFlushStoredData = useCallback(async () => {
+    await clearStoredData();
+    window.location.reload();
+  }, []);
 
   const openNoteEditor = useCallback(
     ({ rowId }: { rowId: number }) => {
-      const record = tagRecords[rowId] ?? null;
-      setNoteEditor({
-        rowId,
-        labelIds: Array.isArray(record?.labelIds) ? record.labelIds : [],
-        note: record?.note ?? ''
-      });
+      const record = tagRecords[rowId];
+      setNoteEditor({ rowId, labelIds: record?.labelIds ?? [], note: record?.note ?? '' });
     },
     [tagRecords]
   );
 
-  const handleSaveNote = useCallback(
+  const saveNote = useCallback(
     async (note: string, labelIds: string[]) => {
       if (!noteEditor) {
         return;
       }
       setNoteSaving(true);
       try {
-        await applyTagToRows({
-          rowIds: [noteEditor.rowId],
-          labelIds,
-          note,
-          mode: 'replace'
-        });
+        await applyTagToRows({ rowIds: [noteEditor.rowId], labelIds, note, mode: 'replace' });
         setNoteEditor(null);
-      } catch (error) {
-        console.error('Failed to save note', error);
       } finally {
         setNoteSaving(false);
       }
@@ -580,350 +250,187 @@ const AppShell = ({
     [applyTagToRows, noteEditor]
   );
 
-  const handleClearNote = useCallback(
-    async (labelIds: string[]) => {
-      if (!noteEditor) {
-        return;
-      }
-      setNoteSaving(true);
-      try {
-        await applyTagToRows({
-          rowIds: [noteEditor.rowId],
-          labelIds,
-          note: '',
-          mode: 'replace'
-        });
-        setNoteEditor(null);
-      } catch (error) {
-        console.error('Failed to clear note', error);
-      } finally {
-        setNoteSaving(false);
-      }
-    },
-    [applyTagToRows, noteEditor]
-  );
-
-  const handleOpenFile = useCallback(async () => {
-    if (!('showOpenFilePicker' in window)) {
-      reportAppError('File System Access API is not supported in this browser.', null, {
-        operation: 'file.open'
-      });
-      return;
-    }
-
-    try {
-      const openFilePicker = window.showOpenFilePicker;
-      if (!openFilePicker) {
-        reportAppError('File picker unavailable.', null, { operation: 'file.open' });
-        return;
-      }
-
-      const [handle] = await openFilePicker({
-        types: [
-          {
-            description: 'Delimited text',
-            accept: {
-              'text/csv': ['.csv'],
-              'text/tab-separated-values': ['.tsv'],
-              'application/gzip': ['.csv.gz', '.tsv.gz']
-            }
-          }
-        ]
-      });
-
-      if (handle) {
-        setSearchTerm('');
-        clearSearchResult();
-        setFileHandle(handle);
-      }
-    } catch (error) {
-      if ((error as DOMException)?.name !== 'AbortError') {
-        reportAppError(
-          error instanceof Error ? error.message : String(error),
-          error,
-          { operation: 'file.open' }
-        );
-      }
-    }
-  }, [clearSearchResult, setFileHandle]);
-
-  const handleSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    setSearchTerm(event.target.value);
-  }, []);
-
-  const handleSearchKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === 'Escape') {
-        setSearchTerm('');
-        event.preventDefault();
-      }
-    },
-    []
-  );
+  const datasetName = describeFiles(fileHandles) || 'dataset';
 
   const handleExportRows = useCallback(
-    async (format: CsvExportFormat) => {
-      if (!fileHandle || matchedRows === null || matchedRows === 0) {
-        return;
-      }
-
-      setExportMenuOpen(false);
+    async (scope: 'view' | 'labelled', format: CsvExportFormat) => {
       setExporting(true);
-
       try {
-        const worker = getDataWorker();
-        const allRows: GridRow[] = [];
-        let offset = 0;
-        const chunkSize = 10000;
-
-        while (offset < matchedRows) {
-          const limit = Math.min(chunkSize, matchedRows - offset);
-          const result = await worker.fetchRows({ offset, limit });
-          allRows.push(...result.rows);
-          offset += limit;
-        }
-
-        const headers = allColumns.map((column) => column.headerName);
-        const csvRows = allRows.map((row) =>
-          allColumns.map((column) => formatCellValue(row[column.key]))
-        );
-        const csvContent = serializeToCsv(headers, csvRows);
-        const { blob, extension, mimeType } = await buildCsvBlob(csvContent, format);
-        const filename = generateExportFilename(fileHandle.name, extension);
-
+        const csv = await getDataWorker().exportCsv({
+          scope,
+          columns: columns
+            .filter((column) => columnLayout.visibility[column.key] !== false)
+            .map((column) => ({ key: column.key, header: column.headerName }))
+        });
+        const { blob, extension, mimeType } = await buildCsvBlob(csv, format);
         await saveBlobFile({
-          suggestedName: filename,
+          suggestedName: generateExportFilename(scope === 'labelled' ? `${datasetName}-labelled` : datasetName, extension),
           blob,
           description: format === 'csv.gz' ? 'Compressed CSV export' : 'CSV export',
           mimeType,
           extensions: [extension]
         });
       } catch (error) {
-        console.error('Failed to export CSV', error);
-        reportAppError('Failed to export CSV', error, {
-          operation: 'export.csv',
-          context: { matchedRows, format }
-        });
+        if ((error as DOMException)?.name !== 'AbortError') {
+          reportAppError('Failed to export CSV', error, { operation: 'export.csv', context: { scope, format } });
+        }
       } finally {
         setExporting(false);
       }
     },
-    [fileHandle, matchedRows, allColumns, reportAppError]
+    [columnLayout.visibility, columns, datasetName]
   );
 
   const handleExportGrouping = useCallback(
     async (format: CsvExportFormat) => {
-      if (groupingState.status !== 'ready' || groupingState.rows.length === 0) {
-        return;
-      }
-
-      setExportMenuOpen(false);
       setExporting(true);
-
       try {
-        const groupHeaders = groupingState.groupBy;
-        const aggregateHeaders = Array.from(
-          groupingState.rows.reduce((set, row) => {
-            Object.keys(row.aggregates).forEach((alias) => set.add(alias));
-            return set;
-          }, new Set<string>())
+        const aliases = Array.from(new Set(groupingState.rows.flatMap((row) => Object.keys(row.aggregates))));
+        const csv = serializeToCsv(
+          [...groupingState.groupBy, ...aliases, 'rows'],
+          groupingState.rows.map((row) => [
+            ...(Array.isArray(row.key) ? row.key : [row.key]),
+            ...aliases.map((alias) => row.aggregates[alias]),
+            row.rowCount
+          ])
         );
-        const headers = [...groupHeaders, ...aggregateHeaders, 'rows'];
-        const csvRows = groupingState.rows.map((row) => {
-          const keyValues = Array.isArray(row.key) ? row.key : [row.key];
-          const aggregates = aggregateHeaders.map((alias) => row.aggregates[alias]);
-          return [
-            ...keyValues.map(formatCellValue),
-            ...aggregates.map(formatCellValue),
-            row.rowCount.toString()
-          ];
-        });
-
-        const csvContent = serializeToCsv(headers, csvRows);
-        const { blob, extension, mimeType } = await buildCsvBlob(csvContent, format);
-        const baseName = fileHandle?.name ?? 'grouping';
-        const filename = generateExportFilename(`${baseName}-groups`, extension);
-
+        const { blob, extension, mimeType } = await buildCsvBlob(csv, format);
         await saveBlobFile({
-          suggestedName: filename,
+          suggestedName: generateExportFilename(`${datasetName}-groups`, extension),
           blob,
           description: 'Grouping export',
           mimeType,
           extensions: [extension]
         });
       } catch (error) {
-        console.error('Failed to export grouping data', error);
-        reportAppError('Failed to export grouping data', error, {
-          operation: 'export.grouping',
-          context: { format }
-        });
+        if ((error as DOMException)?.name !== 'AbortError') {
+          reportAppError('Failed to export grouping data', error, { operation: 'export.grouping' });
+        }
       } finally {
         setExporting(false);
       }
     },
-    [groupingState, fileHandle, reportAppError]
+    [datasetName, groupingState]
   );
 
   const handleExportTags = useCallback(async () => {
-    setExportMenuOpen(false);
     try {
       const response = await exportTags();
       if (response) {
-        const json = JSON.stringify(response, null, 2);
-        const suggestedName = buildTagExportFilename(
-          response.source?.fileName ?? fileHandle?.name,
-          response.exportedAt
-        );
         await saveJsonFile({
-          suggestedName,
-          contents: json,
+          suggestedName: buildTagExportFilename(response.source?.fileName ?? datasetName, response.exportedAt),
+          contents: JSON.stringify(response, null, 2),
           description: 'Label and note annotations'
         });
       }
     } catch (error) {
-      console.error('Failed to export tags', error);
-      reportAppError('Failed to export tags', error, {
-        operation: 'export.tags'
-      });
+      if ((error as DOMException)?.name !== 'AbortError') {
+        reportAppError('Failed to export tags', error, { operation: 'export.tags' });
+      }
     }
-  }, [exportTags, fileHandle]);
+  }, [datasetName, exportTags]);
 
   const handleDownloadDiagnostics = useCallback(() => {
     if (!errorDetails) {
       return;
     }
-
-    const payload = {
-      ...errorDetails,
-      session: getSessionSnapshot()
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({ ...errorDetails, session: getSessionSnapshot() }, null, 2)], {
+      type: 'application/json'
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = `diagnostics-${new Date().toISOString()}.json`;
-    document.body.appendChild(anchor);
     anchor.click();
-    document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
     clearErrorDetails();
   }, [clearErrorDetails, errorDetails]);
 
-  const estimatedMemoryBytes =
-    stats && typeof stats.bytesParsed === 'number'
-      ? Math.round(stats.bytesParsed * 1.25)
-      : null;
-  const capabilityWarnings = capabilityReport?.warnings ?? [];
-  const showCapabilityWarnings =
-    capabilityReport.ok && capabilityWarnings.length > 0 && !warningsDismissed;
-  const compressionSupported = typeof CompressionStream === 'function';
-  const canExportRows =
-    workerReady && Boolean(fileHandle) && matchedRows != null && matchedRows > 0;
-  const canExportGrouping =
-    workerReady && groupingState.status === 'ready' && groupingState.rows.length > 0;
+  const labelFilterSummary = useMemo(() => summariseLabelFilters(filters, tagLabels)?.summary ?? null, [filters, tagLabels]);
+  const capabilityWarnings = capabilityReport.warnings ?? [];
+  const hasData = workerReady && fileHandles.length > 0 && loaderStatus !== 'idle';
 
   return (
     <div className="flex h-full flex-col bg-canvas text-slate-100">
-      {showCapabilityWarnings && (
-        <CapabilityWarningBanner
-          warnings={capabilityWarnings}
-          onDismiss={onDismissWarnings}
-        />
+      {capabilityReport.ok && capabilityWarnings.length > 0 && !warningsDismissed && (
+        <CapabilityWarningBanner warnings={capabilityWarnings} onDismiss={onDismissWarnings} />
       )}
-      <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-        <div className="flex items-center gap-3">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-3">
           <h1 className="text-lg font-semibold">Tabular Analysis Workbench</h1>
-          <span className="text-xs uppercase tracking-wide text-slate-400">
-            {workerReady ? 'Data worker ready' : 'Initializing worker…'}
-          </span>
-          {persistenceRestoring && (
-            <span className="text-xs uppercase tracking-wide text-amber-300">
-              Restoring session…
+          {fileHandles.length ? (
+            <span className="truncate text-xs text-slate-400" title={fileHandles.map((handle) => handle.name).join('\n')}>
+              {datasetName}
             </span>
-          )}
-          {persistenceReconnecting && (
-            <span className="text-xs uppercase tracking-wide text-amber-300">
-              Reconnecting file…
-            </span>
-          )}
-          {loaderMessage && (
-            <span className="text-xs uppercase tracking-wide text-slate-500">
-              {loaderMessage}
-            </span>
-          )}
-          {valueFrequencyIndexing.totalColumns > 0 && valueFrequencyIndexing.status === 'indexing' && (
-            <span className="text-xs uppercase tracking-wide text-amber-300">
-              Indexing value frequency list… {valueFrequencyIndexing.completedColumns}/
-              {valueFrequencyIndexing.totalColumns}
-            </span>
-          )}
-          {valueFrequencyIndexing.totalColumns > 0 && valueFrequencyIndexing.status === 'ready' && (
-            <span className="text-xs uppercase tracking-wide text-emerald-300">
-              Value frequency list ready
-            </span>
-          )}
-          {persistenceError && (
-            <span className="text-xs uppercase tracking-wide text-red-400">
-              {persistenceError}
-            </span>
-          )}
-          {persistenceCanReconnect && (
-            <button
-              type="button"
-              onClick={handleReconnectPersistedFile}
-              disabled={persistenceReconnecting}
-              title={persistenceReconnectFileName ?? 'Reconnect previous file'}
-              className="rounded border border-amber-500/60 px-2 py-1 text-xs font-medium text-amber-200 transition hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {persistenceReconnecting ? 'Reconnecting…' : reconnectButtonLabel}
-            </button>
-          )}
+          ) : null}
         </div>
-        <div className="flex items-center gap-2">
-          <div className="hidden items-center gap-2 md:flex">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={searchInputRef}
+            type="search"
+            aria-label="Search visible columns"
+            placeholder="Search visible columns  ( / )"
+            className="w-56 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setSearchTerm('');
+                event.currentTarget.blur();
+              } else if (event.key === 'Enter') {
+                event.preventDefault();
+                useDataStore.getState().navigateGrid({ kind: event.shiftKey ? 'previous' : 'next' });
+              }
+            }}
+            disabled={!hasData}
+          />
+          <label className="flex items-center gap-1 text-xs text-slate-400">
             <input
-              type="search"
-              placeholder="Search visible columns"
-              className="rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
-              value={searchTerm}
-              onChange={handleSearchChange}
-              onKeyDown={handleSearchKeyDown}
-              disabled={!workerReady}
+              type="checkbox"
+              checked={searchCaseSensitive}
+              onChange={(event) => setSearchCaseSensitive(event.target.checked)}
             />
-            <label className="flex items-center gap-1 text-xs text-slate-400">
-              <input
-                type="checkbox"
-                checked={searchCaseSensitive}
-                onChange={(event) => setSearchCaseSensitive(event.target.checked)}
-              />
-              Case sensitive
-            </label>
-          </div>
+            Case sensitive
+          </label>
+          <form
+            className="flex items-center"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const rowNumber = Number(jumpTarget);
+              if (Number.isInteger(rowNumber) && rowNumber >= 1) {
+                useDataStore.getState().navigateGrid({ kind: 'row', rowId: rowNumber - 1 });
+              }
+            }}
+          >
+            <input
+              ref={jumpInputRef}
+              type="number"
+              min={1}
+              aria-label="Go to row number"
+              placeholder="Row #  ( g )"
+              className="w-24 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+              value={jumpTarget}
+              onChange={(event) => setJumpTarget(event.target.value)}
+              disabled={!hasData}
+            />
+          </form>
           <button
             type="button"
             className="rounded bg-accent px-3 py-1 text-sm font-semibold text-slate-900"
             onClick={handleOpenFile}
-            disabled={
-              !workerReady ||
-              loaderStatus === 'loading' ||
-              persistenceRestoring ||
-              persistenceReconnecting
-            }
+            disabled={!workerReady || loaderStatus === 'loading'}
+            title="Select several files to merge them into one timeline"
           >
-            {loaderStatus === 'loading' ? 'Loading…' : 'Open File'}
+            {loaderStatus === 'loading' ? 'Loading…' : 'Open Files'}
           </button>
-          <button
-            type="button"
-            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
-            onClick={() => setOptionsOpen(true)}
-          >
+          <button type="button" className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300" onClick={() => setOptionsOpen(true)}>
             Options
           </button>
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setColumnsOpen(true)}
-            disabled={!workerReady}
+            disabled={!hasData}
           >
             Columns
           </button>
@@ -931,153 +438,67 @@ const AppShell = ({
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setLabelsOpen(true)}
-            disabled={!workerReady}
+            disabled={!hasData}
           >
             Labels
           </button>
-          <div className="relative" ref={exportMenuRef}>
-            <button
-              type="button"
-              className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
-              onClick={() => setExportMenuOpen((value) => !value)}
-              disabled={!workerReady || !fileHandle}
-              aria-haspopup="menu"
-              aria-expanded={exportMenuOpen}
-            >
-              Export ▾
-            </button>
-            {exportMenuOpen && (
-              <div className="absolute right-0 z-20 mt-1 w-64 rounded border border-slate-700 bg-slate-950 text-left shadow-xl">
-                <div className="border-b border-slate-800 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  Filtered rows
-                </div>
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
-                  onClick={() => handleExportRows('csv')}
-                  disabled={!canExportRows || exporting}
-                >
-                  <span>.csv</span>
-                  {exporting && <span className="text-[10px] text-slate-400">Working…</span>}
-                </button>
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
-                  onClick={() => handleExportRows('csv.gz')}
-                  disabled={!canExportRows || !compressionSupported || exporting}
-                >
-                  <span>.csv.gz</span>
-                  {!compressionSupported && (
-                    <span className="text-[10px] text-amber-400">Compression unavailable</span>
-                  )}
-                </button>
-                <div className="border-b border-slate-800 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  Grouping
-                </div>
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
-                  onClick={() => handleExportGrouping('csv')}
-                  disabled={!canExportGrouping || exporting}
-                >
-                  <span>.csv</span>
-                </button>
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
-                  onClick={() => handleExportGrouping('csv.gz')}
-                  disabled={!canExportGrouping || !compressionSupported || exporting}
-                >
-                  <span>.csv.gz</span>
-                  {!compressionSupported && (
-                    <span className="text-[10px] text-amber-400">Compression unavailable</span>
-                  )}
-                </button>
-                <div className="border-b border-slate-800 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  Annotations
-                </div>
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between px-3 py-2 text-xs text-slate-200 hover:bg-slate-900 disabled:opacity-50"
-                  onClick={handleExportTags}
-                  disabled={!workerReady || !fileHandle}
-                >
-                  <span>Labels &amp; Notes (.json)</span>
-                </button>
-              </div>
-            )}
-          </div>
+          <ExportMenu
+            disabled={!hasData}
+            busy={exporting}
+            canExportView={matchedRows != null && matchedRows > 0}
+            canExportLabelled={Object.keys(tagRecords).length > 0}
+            canExportGrouping={groupingState.status === 'ready' && groupingState.rows.length > 0}
+            onExportRows={(scope, format) => void handleExportRows(scope, format)}
+            onExportGrouping={(format) => void handleExportGrouping(format)}
+            onExportAnnotations={() => void handleExportTags()}
+          />
           <button
             type="button"
             className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setShowPivot((value) => !value)}
-            disabled={!workerReady || loaderStatus === 'loading'}
+            disabled={!hasData || loaderStatus === 'loading'}
           >
             {showPivot ? 'Show Grid' : 'Pivot View'}
           </button>
-          <button
-            type="button"
-            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
-            onClick={toggleTheme}
-          >
+          <button type="button" className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300" onClick={toggleTheme}>
             Toggle Theme
           </button>
         </div>
       </header>
-      {estimatedMemoryBytes != null && (
-        <LargeDatasetWarning
-          estimatedBytes={estimatedMemoryBytes}
-          thresholdBytes={LARGE_DATASET_WARNING_BYTES}
-          onOpenOptions={() => setOptionsOpen(true)}
-        />
-      )}
       <main className="flex flex-1 overflow-hidden">
-        <aside
-          className={`hidden border-r border-slate-800 lg:block ${
-            isSidebarCollapsed ? 'w-6' : 'w-72'
-          }`}
-        >
+        <aside className={`hidden border-r border-slate-800 lg:block ${sidebarCollapsed ? 'w-6' : 'w-72'}`}>
           <div className="flex h-full flex-col">
             <button
               type="button"
-              className={`flex items-center justify-center border-b border-slate-800 text-xs text-slate-300 hover:bg-slate-900 ${
-                isSidebarCollapsed ? 'px-0 py-2' : 'px-2 py-2'
-              }`}
+              className="flex items-center justify-center border-b border-slate-800 py-2 text-xs text-slate-300 hover:bg-slate-900"
               onClick={() => setSidebarCollapsed((value) => !value)}
-              aria-label={isSidebarCollapsed ? 'Expand filters panel' : 'Collapse filters panel'}
+              aria-label={sidebarCollapsed ? 'Expand filters panel' : 'Collapse filters panel'}
+              aria-expanded={!sidebarCollapsed}
             >
-              {isSidebarCollapsed ? '»' : '«'}
+              {sidebarCollapsed ? '»' : '«'}
             </button>
-            <div
-              className={`flex-1 overflow-auto ${
-                isSidebarCollapsed ? 'hidden' : 'p-4'
-              }`}
-            >
-              {!isSidebarCollapsed && <FilterBuilder columns={columns} />}
-            </div>
+            {!sidebarCollapsed && (
+              <div className="flex-1 overflow-auto p-4">
+                <FilterBuilder columns={columns} />
+              </div>
+            )}
           </div>
         </aside>
         <section className="flex flex-1 flex-col">
-          <div className="flex-1 overflow-auto p-4">
-          <DidYouMeanBanner />
-          <div className="h-full rounded border border-slate-800">
-          {showPivot ? (
-            <PivotView />
-          ) : (
-            <DataGrid status={loaderStatus} onEditTagNote={openNoteEditor} />
-            )}
+          <div className="flex flex-1 flex-col overflow-hidden p-4">
+            <DidYouMeanBanner />
+            <div className="min-h-0 flex-1 rounded border border-slate-800">
+              {showPivot ? (
+                <PivotView />
+              ) : (
+                <DataGrid status={loaderStatus} searchQuery={searchTerm} onEditTagNote={openNoteEditor} />
+              )}
             </div>
           </div>
-          <footer className="border-t border-slate-800 px-4 py-2 text-xs text-slate-500">
-            {statusText}
-          </footer>
+          <StatusBar labelFilterSummary={labelFilterSummary} fileSize={fileSize} />
         </section>
       </main>
-      <OptionsPanel
-        open={optionsOpen}
-        onClose={() => setOptionsOpen(false)}
-        onFlushStoredData={handleFlushStoredData}
-      />
+      <OptionsPanel open={optionsOpen} onClose={() => setOptionsOpen(false)} onFlushStoredData={handleFlushStoredData} />
       <LabelsPanel open={labelsOpen} onClose={() => setLabelsOpen(false)} />
       <ColumnsPanel open={columnsOpen} onClose={() => setColumnsOpen(false)} />
       <TagNotePanel
@@ -1085,21 +506,13 @@ const AppShell = ({
         rowId={noteEditor?.rowId ?? null}
         initialLabelIds={noteEditor?.labelIds ?? []}
         initialNote={noteEditor?.note ?? ''}
-        onSave={handleSaveNote}
-        onClear={handleClearNote}
-        onClose={() => {
-          if (!noteSaving) {
-            setNoteEditor(null);
-          }
-        }}
+        onSave={saveNote}
+        onClear={(labelIds) => saveNote('', labelIds)}
+        onClose={() => !noteSaving && setNoteEditor(null)}
         saving={noteSaving}
       />
       {errorDetails && (
-        <DiagnosticsToast
-          details={errorDetails}
-          onDismiss={clearErrorDetails}
-          onDownload={handleDownloadDiagnostics}
-        />
+        <DiagnosticsToast details={errorDetails} onDismiss={clearErrorDetails} onDownload={handleDownloadDiagnostics} />
       )}
     </div>
   );
@@ -1110,29 +523,17 @@ const App = (): JSX.Element => {
   const [warningsDismissed, setWarningsDismissed] = useState(false);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return undefined;
-    }
-
-    const refreshCapabilities = () => {
+    const refresh = () => {
       setCapabilityReport((previous) => {
         const next = detectCapabilities();
-        const previousWarningIds = (previous?.warnings ?? []).map((entry) => entry.id).join(',');
-        const nextWarningIds = next.warnings.map((entry) => entry.id).join(',');
-        if (previousWarningIds !== nextWarningIds) {
+        if (previous.warnings.map((entry) => entry.id).join() !== next.warnings.map((entry) => entry.id).join()) {
           setWarningsDismissed(false);
         }
         return next;
       });
     };
-
-    window.addEventListener('focus', refreshCapabilities);
-    window.addEventListener('visibilitychange', refreshCapabilities);
-
-    return () => {
-      window.removeEventListener('focus', refreshCapabilities);
-      window.removeEventListener('visibilitychange', refreshCapabilities);
-    };
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
   }, []);
 
   if (!capabilityReport.ok) {

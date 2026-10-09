@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 
 import { useDataStore } from '@state/dataStore';
 import { useSessionStore } from '@state/sessionStore';
-import { getDataWorker } from '@workers/dataWorkerProxy';
+import { getDataWorker, isStaleOperation } from '@workers/dataWorkerProxy';
 import { reportAppError } from '@utils/diagnostics';
 import type { GroupAggregationDefinition, GroupingResult } from '@workers/types';
 
@@ -103,8 +103,7 @@ export const useGrouping = (): UseGroupingResult => {
   const columns = useDataStore((state) => state.columns);
   const loaderStatus = useDataStore((state) => state.status);
   const totalRows = useDataStore((state) => state.totalRows);
-  const filterMatchedRows = useDataStore((state) => state.filterMatchedRows);
-  const searchMatchedRows = useDataStore((state) => state.searchMatchedRows);
+  const viewVersion = useDataStore((state) => state.viewVersion);
   const grouping = useDataStore((state) => state.grouping);
   const setGroupingLoading = useDataStore((state) => state.setGroupingLoading);
   const setGroupingResult = useDataStore((state) => state.setGroupingResult);
@@ -213,6 +212,9 @@ export const useGrouping = (): UseGroupingResult => {
       });
       setGroupingResult(result);
     } catch (error) {
+      if (isStaleOperation(error)) {
+        return;
+      }
       const message =
         error instanceof Error ? error.message : 'Failed to compute grouping results';
       setGroupingError(message);
@@ -247,12 +249,11 @@ export const useGrouping = (): UseGroupingResult => {
   }, [
     aggregationSignature,
     clearGrouping,
-    filterMatchedRows,
     groups,
     loaderStatus,
     performRefresh,
-    searchMatchedRows,
-    totalRows
+    totalRows,
+    viewVersion
   ]);
 
   const refresh = useCallback(async () => {

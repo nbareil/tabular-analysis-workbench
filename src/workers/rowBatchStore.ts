@@ -1,522 +1,288 @@
-import { isDebugLoggingEnabled, logDebug } from '../utils/debugLog';
-import { materializeRowBatch, type MaterializedRow } from './utils/materializeRowBatch';
-import type { ColumnBatch, ColumnType, RowBatch } from './types';
+import type { ColumnBatch, RowBatch } from './types';
 
-const BATCH_STORE_VERSION = 1;
-const MAX_IN_MEMORY_BATCHES = 4;
+export const ROW_CACHE_DIRECTORY = 'row-cache';
+const LOCK_PREFIX = 'row-cache:';
+const MAX_CACHED_BATCHES = 8;
+const MEMORY_FALLBACK_LIMIT_BYTES = 1024 * 1024 * 1024;
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-const toWritableData = (source: ArrayBuffer | ArrayBufferView): ArrayBuffer | Uint8Array => {
-  if (source instanceof ArrayBuffer) {
-    return source;
-  }
+export interface MaterializedRow extends Record<string, unknown> {
+  __rowId: number;
+}
 
-  return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
-};
-
-interface StoredColumnHeader {
-  name: string;
-  type: ColumnType;
-  dataByteLength: number;
-  offsetsByteLength?: number;
-  nullMaskByteLength?: number;
+/** Read access to one stored batch; columns are decoded lazily and memoised. */
+export interface BatchView {
+  rowStart: number;
+  rowCount: number;
+  column(name: string): string[];
 }
 
 interface StoredBatchHeader {
-  version: number;
   rowStart: number;
   rowCount: number;
-  columnOrder: string[];
-  columns: StoredColumnHeader[];
+  columns: Array<{ name: string; offsetsByteLength: number; dataByteLength: number }>;
 }
 
 interface BatchMeta {
-  index: number;
   rowStart: number;
   rowCount: number;
   handle: FileSystemFileHandle | null;
+  byteLength: number;
 }
 
-interface CachedBatch {
-  index: number;
-  batch: RowBatch;
-}
+const decodeColumn = (column: ColumnBatch): string[] => {
+  const bytes = new Uint8Array(column.data);
+  const rowCount = column.offsets.length - 1;
+  const values = new Array<string>(rowCount);
+  const text = textDecoder.decode(bytes);
+  // Pure ASCII lets byte offsets double as string offsets, avoiding one decode per cell.
+  if (text.length === bytes.byteLength) {
+    for (let index = 0; index < rowCount; index += 1) {
+      values[index] = text.slice(column.offsets[index]!, column.offsets[index + 1]!);
+    }
+    return values;
+  }
+  for (let index = 0; index < rowCount; index += 1) {
+    values[index] = textDecoder.decode(bytes.subarray(column.offsets[index]!, column.offsets[index + 1]!));
+  }
+  return values;
+};
 
-const supportsOpfs = (): boolean =>
-  typeof navigator !== 'undefined' &&
-  typeof navigator.storage !== 'undefined' &&
-  typeof navigator.storage.getDirectory === 'function';
+const decodeCell = (column: ColumnBatch, index: number): string =>
+  textDecoder.decode(
+    new Uint8Array(column.data, column.offsets[index]!, column.offsets[index + 1]! - column.offsets[index]!)
+  );
+
+const createBatchView = (rowStart: number, rowCount: number, columns: Record<string, ColumnBatch>): BatchView => {
+  const decoded = new Map<string, string[]>();
+  return {
+    rowStart,
+    rowCount,
+    column(name) {
+      let values = decoded.get(name);
+      if (!values) {
+        const column = columns[name];
+        values = column ? decodeColumn(column) : new Array<string>(rowCount).fill('');
+        decoded.set(name, values);
+      }
+      return values;
+    }
+  };
+};
+
+const batchByteLength = (batch: RowBatch): number =>
+  Object.values(batch.columns).reduce((sum, column) => sum + column.data.byteLength + column.offsets.byteLength, 0);
+
+const locksAvailable = (): boolean => typeof navigator !== 'undefined' && Boolean(navigator.locks);
+
+/** Removes row-cache directories whose owning load no longer holds its Web Lock (closed tabs, old loads). */
+const sweepStaleDirectories = async (baseDir: FileSystemDirectoryHandle): Promise<void> => {
+  if (!locksAvailable()) {
+    return;
+  }
+  const { held = [] } = await navigator.locks.query();
+  const live = new Set(held.map((lock) => lock.name));
+  const names: string[] = [];
+  for await (const name of (baseDir as unknown as { keys(): AsyncIterable<string> }).keys()) {
+    names.push(name);
+  }
+  for (const name of names) {
+    if (!live.has(LOCK_PREFIX + name)) {
+      await baseDir.removeEntry(name, { recursive: true }).catch(() => undefined);
+    }
+  }
+};
 
 export class RowBatchStore {
-  private directoryHandle: FileSystemDirectoryHandle | null = null;
-  private readonly datasetKey: string;
   private metas: BatchMeta[] = [];
-  private cache: CachedBatch[] = [];
-  private useMemoryFallback: boolean = false;
-  private memoryStore: Map<number, RowBatch> = new Map();
+  private readonly cache = new Map<number, Record<string, ColumnBatch>>();
+  private memoryBytes = 0;
 
-  private constructor(datasetKey: string) {
-    this.datasetKey = datasetKey;
-  }
+  private constructor(
+    private readonly baseDir: FileSystemDirectoryHandle | null,
+    private readonly directory: FileSystemDirectoryHandle | null,
+    private readonly directoryName: string,
+    private readonly releaseLock: () => void
+  ) {}
 
   static async create(datasetKey: string): Promise<RowBatchStore> {
-    const store = new RowBatchStore(datasetKey);
-
-    if (!supportsOpfs()) {
-      store.useMemoryFallback = true;
-      return store;
+    const directoryName = `${datasetKey}-${crypto.randomUUID()}`;
+    if (typeof navigator === 'undefined' || typeof navigator.storage?.getDirectory !== 'function') {
+      return new RowBatchStore(null, null, directoryName, () => undefined);
     }
 
-    try {
-      const root = await navigator.storage.getDirectory();
-      const baseDir = await root.getDirectoryHandle('row-cache', { create: true });
-
-      // Clean up any previous dataset directory with the same key.
-      try {
-        await baseDir.removeEntry(datasetKey, { recursive: true });
-      } catch (error) {
-        // Ignored: directory may not exist yet.
-      }
-
-      store.directoryHandle = await baseDir.getDirectoryHandle(datasetKey, { create: true });
-    } catch (error) {
-      console.warn('[row-batch-store] Failed to initialise OPFS directory, falling back to memory', error);
-      store.useMemoryFallback = true;
+    let releaseLock = (): void => undefined;
+    if (locksAvailable()) {
+      await new Promise<void>((acquired) => {
+        void navigator.locks.request(LOCK_PREFIX + directoryName, () => {
+          acquired();
+          return new Promise<void>((release) => {
+            releaseLock = release;
+          });
+        });
+      });
     }
 
-    return store;
+    const root = await navigator.storage.getDirectory();
+    const baseDir = await root.getDirectoryHandle(ROW_CACHE_DIRECTORY, { create: true });
+    await sweepStaleDirectories(baseDir);
+    const directory = await baseDir.getDirectoryHandle(directoryName, { create: true });
+    return new RowBatchStore(baseDir, directory, directoryName, releaseLock);
   }
 
-  async clear(): Promise<void> {
+  /** Deletes the stored batches and releases the directory lock. */
+  async dispose(): Promise<void> {
     this.metas = [];
-    this.cache = [];
-    this.memoryStore = new Map();
+    this.cache.clear();
+    this.releaseLock();
+    await this.baseDir?.removeEntry(this.directoryName, { recursive: true }).catch(() => undefined);
+  }
 
-    if (!this.directoryHandle) {
-      return;
-    }
-
-    try {
-      const parent = await navigator.storage.getDirectory();
-      const baseDir = await parent.getDirectoryHandle('row-cache');
-      await baseDir.removeEntry(this.datasetKey, { recursive: true });
-      this.directoryHandle = await baseDir.getDirectoryHandle(this.datasetKey, { create: true });
-    } catch (error) {
-      console.warn('[row-batch-store] Failed to clear dataset directory', error);
-    }
+  get totalRows(): number {
+    const last = this.metas[this.metas.length - 1];
+    return last ? last.rowStart + last.rowCount : 0;
   }
 
   get batchCount(): number {
     return this.metas.length;
   }
 
-  getBatchMeta(index: number): BatchMeta | undefined {
-    return this.metas[index];
-  }
-
   async storeBatch(batch: RowBatch): Promise<void> {
-    const batchIndex = this.metas.length;
+    const index = this.metas.length;
+    const rowStart = this.totalRows;
     const rowCount = batch.rowIds.length;
-    const rowStart = rowCount > 0 ? batch.rowIds[0] : batchIndex === 0 ? 0 : this.metas[this.metas.length - 1]!.rowStart + this.metas[this.metas.length - 1]!.rowCount;
+    const byteLength = batchByteLength(batch);
 
-    if (this.useMemoryFallback || !this.directoryHandle) {
-      this.metas.push({
-        index: batchIndex,
-        rowStart,
-        rowCount,
-        handle: null
-      });
-
-      this.memoryStore.set(batchIndex, batch);
-      if (isDebugLoggingEnabled()) {
-        logDebug('row-batch-store', 'Stored batch in memory fallback', {
-          batchIndex,
-          rowStart,
-          rowCount,
-          cachedBatches: this.memoryStore.size
-        });
+    if (!this.directory) {
+      this.memoryBytes += byteLength;
+      if (this.memoryBytes > MEMORY_FALLBACK_LIMIT_BYTES) {
+        throw new Error('Dataset is too large to hold in memory without the Origin Private File System.');
       }
+      this.metas.push({ rowStart, rowCount, handle: null, byteLength });
+      this.cache.set(index, batch.columns);
       return;
     }
 
-    const fileName = `batch-${String(batchIndex).padStart(6, '0')}.bin`;
-    const fileHandle = await this.directoryHandle.getFileHandle(fileName, { create: true });
-    const writable = await fileHandle.createWritable({ keepExistingData: false });
-
+    const names = Object.keys(batch.columns);
     const header: StoredBatchHeader = {
-      version: BATCH_STORE_VERSION,
       rowStart,
       rowCount,
-      columnOrder: Object.keys(batch.columns),
-      columns: Object.entries(batch.columns).map(([name, column]): StoredColumnHeader => {
-        switch (column.type) {
-          case 'string': {
-            const stringColumn = column as Extract<ColumnBatch, { type: 'string' }>;
-            return {
-              name,
-              type: column.type,
-              dataByteLength: stringColumn.data.byteLength,
-              offsetsByteLength: stringColumn.offsets.byteLength,
-              nullMaskByteLength: undefined
-            };
-          }
-          case 'number': {
-            const numberColumn = column as Extract<ColumnBatch, { type: 'number' }>;
-            return {
-              name,
-              type: column.type,
-              dataByteLength: numberColumn.data.byteLength,
-              nullMaskByteLength: numberColumn.nullMask?.byteLength
-            };
-          }
-          case 'boolean': {
-            const booleanColumn = column as Extract<ColumnBatch, { type: 'boolean' }>;
-            return {
-              name,
-              type: column.type,
-              dataByteLength: booleanColumn.data.byteLength,
-              nullMaskByteLength: booleanColumn.nullMask?.byteLength
-            };
-          }
-          case 'datetime': {
-            const datetimeColumn = column as Extract<ColumnBatch, { type: 'datetime' }>;
-            return {
-              name,
-              type: column.type,
-              dataByteLength: datetimeColumn.data.byteLength,
-              nullMaskByteLength: datetimeColumn.nullMask?.byteLength
-            };
-          }
-          default:
-            throw new Error(`Unsupported column type: ${(column as ColumnBatch).type}`);
-        }
-      })
+      columns: names.map((name) => ({
+        name,
+        offsetsByteLength: batch.columns[name]!.offsets.byteLength,
+        dataByteLength: batch.columns[name]!.data.byteLength
+      }))
     };
-
     const headerBytes = textEncoder.encode(JSON.stringify(header));
-    const headerLengthBuffer = new ArrayBuffer(4);
-    new DataView(headerLengthBuffer).setUint32(0, headerBytes.byteLength, true);
-
-    await writable.write(headerLengthBuffer as FileSystemWriteChunkType);
-    await writable.write(headerBytes as FileSystemWriteChunkType);
-
-    await writable.write(toWritableData(batch.rowIds) as FileSystemWriteChunkType);
-
-    for (const columnName of header.columnOrder) {
-      const column = batch.columns[columnName]!;
-
-      if (column.type === 'string') {
-        const stringColumn = column as Extract<ColumnBatch, { type: 'string' }>;
-        await writable.write(toWritableData(stringColumn.offsets) as FileSystemWriteChunkType);
-        await writable.write(toWritableData(stringColumn.data) as FileSystemWriteChunkType);
-      } else if (column.type === 'number') {
-        const numberColumn = column as Extract<ColumnBatch, { type: 'number' }>;
-        await writable.write(toWritableData(numberColumn.data) as FileSystemWriteChunkType);
-      } else if (column.type === 'boolean') {
-        const booleanColumn = column as Extract<ColumnBatch, { type: 'boolean' }>;
-        await writable.write(toWritableData(booleanColumn.data) as FileSystemWriteChunkType);
-      } else if (column.type === 'datetime') {
-        const datetimeColumn = column as Extract<ColumnBatch, { type: 'datetime' }>;
-        await writable.write(toWritableData(datetimeColumn.data) as FileSystemWriteChunkType);
-      }
-
-      if ('nullMask' in column && column.nullMask) {
-        await writable.write(toWritableData(column.nullMask) as FileSystemWriteChunkType);
-      }
+    const prefix = new Uint32Array([headerBytes.byteLength]);
+    const parts: BlobPart[] = [prefix as Uint32Array<ArrayBuffer>, headerBytes];
+    for (const name of names) {
+      parts.push(batch.columns[name]!.offsets as Uint32Array<ArrayBuffer>, batch.columns[name]!.data);
     }
 
+    const handle = await this.directory.getFileHandle(`batch-${String(index).padStart(6, '0')}.bin`, {
+      create: true
+    });
+    const writable = await handle.createWritable({ keepExistingData: false });
+    await writable.write(new Blob(parts));
     await writable.close();
 
-    this.metas.push({
-      index: batchIndex,
-      rowStart,
-      rowCount,
-      handle: fileHandle
-    });
+    this.metas.push({ rowStart, rowCount, handle, byteLength });
+    this.remember(index, batch.columns);
+  }
 
-    this.cacheBatch({ index: batchIndex, batch });
-    if (isDebugLoggingEnabled()) {
-      logDebug('row-batch-store', 'Stored batch on disk', {
-        batchIndex,
-        rowStart,
-        rowCount,
-        cacheSize: this.cache.length
-      });
+  private remember(index: number, columns: Record<string, ColumnBatch>): void {
+    if (!this.directory) {
+      return;
+    }
+    this.cache.delete(index);
+    this.cache.set(index, columns);
+    if (this.cache.size > MAX_CACHED_BATCHES) {
+      this.cache.delete(this.cache.keys().next().value!);
     }
   }
 
-  private cacheBatch(entry: CachedBatch): void {
-    this.cache = this.cache.filter((item) => item.index !== entry.index);
-    this.cache.push(entry);
-
-    if (this.cache.length > MAX_IN_MEMORY_BATCHES) {
-      this.cache.shift();
-    }
-  }
-
-  private async loadBatchFromDisk(meta: BatchMeta): Promise<RowBatch> {
-    if (!meta.handle) {
-      throw new Error('Batch handle not available; cannot load from disk.');
-    }
-
-    const file = await meta.handle.getFile();
-    const buffer = await file.arrayBuffer();
-    const view = new DataView(buffer);
-
-    const headerByteLength = view.getUint32(0, true);
-    const headerBytes = new Uint8Array(buffer, 4, headerByteLength);
-    const header: StoredBatchHeader = JSON.parse(textDecoder.decode(headerBytes));
-
-    if (header.version !== BATCH_STORE_VERSION) {
-      throw new Error(`Unsupported batch version: ${header.version}`);
-    }
-
-    let offset = 4 + headerByteLength;
-
-    const rowIds = new Uint32Array(buffer.slice(offset, offset + header.rowCount * Uint32Array.BYTES_PER_ELEMENT));
-    offset += header.rowCount * Uint32Array.BYTES_PER_ELEMENT;
-
-    const columns: Record<string, ColumnBatch> = {};
-
-    for (const columnHeader of header.columns) {
-      if (columnHeader.type === 'string') {
-        const offsetsByteLength = columnHeader.offsetsByteLength ?? (header.rowCount + 1) * Uint32Array.BYTES_PER_ELEMENT;
-        const offsetsBuffer = buffer.slice(offset, offset + offsetsByteLength);
-        offset += offsetsByteLength;
-
-        const dataBuffer = buffer.slice(offset, offset + columnHeader.dataByteLength);
-        offset += columnHeader.dataByteLength;
-
-        const offsets = new Uint32Array(offsetsBuffer);
-
-        columns[columnHeader.name] = {
-          type: 'string',
-          offsets,
-          data: dataBuffer
-        };
-      } else if (columnHeader.type === 'number') {
-        const dataBuffer = buffer.slice(offset, offset + columnHeader.dataByteLength);
-        offset += columnHeader.dataByteLength;
-
-        const nullMaskBuffer =
-          columnHeader.nullMaskByteLength != null && columnHeader.nullMaskByteLength > 0
-            ? buffer.slice(offset, offset + columnHeader.nullMaskByteLength)
-            : null;
-
-        if (nullMaskBuffer) {
-          offset += columnHeader.nullMaskByteLength ?? 0;
-        }
-
-        columns[columnHeader.name] = {
-          type: 'number',
-          data: new Float64Array(dataBuffer),
-          nullMask: nullMaskBuffer ? new Uint8Array(nullMaskBuffer) : undefined
-        };
-      } else if (columnHeader.type === 'boolean') {
-        const dataBuffer = buffer.slice(offset, offset + columnHeader.dataByteLength);
-        offset += columnHeader.dataByteLength;
-
-        const nullMaskBuffer =
-          columnHeader.nullMaskByteLength != null && columnHeader.nullMaskByteLength > 0
-            ? buffer.slice(offset, offset + columnHeader.nullMaskByteLength)
-            : null;
-
-        if (nullMaskBuffer) {
-          offset += columnHeader.nullMaskByteLength ?? 0;
-        }
-
-        columns[columnHeader.name] = {
-          type: 'boolean',
-          data: new Uint8Array(dataBuffer),
-          nullMask: nullMaskBuffer ? new Uint8Array(nullMaskBuffer) : undefined
-        };
-      } else if (columnHeader.type === 'datetime') {
-        const dataBuffer = buffer.slice(offset, offset + columnHeader.dataByteLength);
-        offset += columnHeader.dataByteLength;
-
-        const nullMaskBuffer =
-          columnHeader.nullMaskByteLength != null && columnHeader.nullMaskByteLength > 0
-            ? buffer.slice(offset, offset + columnHeader.nullMaskByteLength)
-            : null;
-
-        if (nullMaskBuffer) {
-          offset += columnHeader.nullMaskByteLength ?? 0;
-        }
-
-        columns[columnHeader.name] = {
-          type: 'datetime',
-          data: new Float64Array(dataBuffer),
-          nullMask: nullMaskBuffer ? new Uint8Array(nullMaskBuffer) : undefined
-        };
-      }
-    }
-
-    const batch: RowBatch = {
-      rowIds,
-      columns,
-      columnTypes: {},
-      columnInference: {},
-      stats: {
-        rowsParsed: meta.rowStart + meta.rowCount,
-        bytesParsed: file.size,
-        eof: true
-      }
-    };
-    return batch;
-  }
-
-  private async ensureBatch(index: number): Promise<RowBatch> {
-    const cached = this.cache.find((entry) => entry.index === index);
+  private async loadColumns(index: number): Promise<Record<string, ColumnBatch>> {
+    const cached = this.cache.get(index);
     if (cached) {
-      return cached.batch;
-    }
-
-    if (this.useMemoryFallback) {
-      const batch = this.memoryStore.get(index);
-      if (!batch) {
-        throw new Error(`Batch ${index} evicted due to memory limit; dataset too large for memory fallback`);
-      }
-      this.cacheBatch({ index, batch });
-      return batch;
+      this.remember(index, cached);
+      return cached;
     }
 
     const meta = this.metas[index];
-    if (!meta) {
-      throw new Error(`Batch metadata not found for index ${index}`);
+    if (!meta?.handle) {
+      throw new Error(`Batch ${index} is not available`);
     }
 
-    const batch = await this.loadBatchFromDisk(meta);
-    this.cacheBatch({ index, batch });
-    return batch;
+    const buffer = await (await meta.handle.getFile()).arrayBuffer();
+    const headerLength = new DataView(buffer).getUint32(0, true);
+    const header: StoredBatchHeader = JSON.parse(textDecoder.decode(new Uint8Array(buffer, 4, headerLength)));
+    let offset = 4 + headerLength;
+    const columns: Record<string, ColumnBatch> = {};
+    for (const column of header.columns) {
+      const offsets = new Uint32Array(buffer.slice(offset, offset + column.offsetsByteLength));
+      offset += column.offsetsByteLength;
+      const data = buffer.slice(offset, offset + column.dataByteLength);
+      offset += column.dataByteLength;
+      columns[column.name] = { offsets, data };
+    }
+
+    this.remember(index, columns);
+    return columns;
   }
 
-  async materializeRows(rowIds: number[]): Promise<MaterializedRow[]> {
-    if (!rowIds.length) {
-      return [];
-    }
-
-    if (isDebugLoggingEnabled()) {
-      logDebug('row-batch-store', 'materializeRows request', {
-        rowCount: rowIds.length,
-        firstRowId: rowIds[0],
-        lastRowId: rowIds[rowIds.length - 1],
-        batchCount: this.metas.length
-      });
-    }
-
-    const rowMap = new Map<number, MaterializedRow>();
-    const batchesByIndex = new Map<number, number[]>();
-
-    for (const rowId of rowIds) {
-      const batchIndex = this.findBatchIndexForRow(rowId);
-      if (batchIndex == null) {
-        continue;
-      }
-      const rowOffsets = batchesByIndex.get(batchIndex) ?? [];
-      rowOffsets.push(rowId);
-      batchesByIndex.set(batchIndex, rowOffsets);
-    }
-
-    for (const [batchIndex, rowIdList] of batchesByIndex.entries()) {
-      const batch = await this.ensureBatch(batchIndex);
-      const materialized = materializeRowBatch(batch).rows;
-
-      for (const rowId of rowIdList) {
-        const idx = rowId - batch.rowIds[0]!;
-        if (idx >= 0 && idx < materialized.length) {
-          rowMap.set(rowId, materialized[idx]!);
-        }
-      }
-    }
-
-    const orderedRows: MaterializedRow[] = [];
-    for (const rowId of rowIds) {
-      const row = rowMap.get(rowId);
-      if (row) {
-        orderedRows.push(row);
-      }
-    }
-
-    if (isDebugLoggingEnabled()) {
-      logDebug('row-batch-store', 'materializeRows resolved', {
-        requested: rowIds.length,
-        resolved: orderedRows.length
-      });
-    }
-
-    return orderedRows;
-  }
-
-  async materializeBatch(index: number): Promise<MaterializedRow[]> {
-    const batch = await this.ensureBatch(index);
-    return materializeRowBatch(batch).rows;
-  }
-
-  async *iterateMaterializedBatches(): AsyncGenerator<{
-    index: number;
-    rowStart: number;
-    rows: MaterializedRow[];
-  }> {
-    for (const meta of this.metas) {
-      const rows = await this.materializeBatch(meta.index);
-      yield {
-        index: meta.index,
-        rowStart: meta.rowStart,
-        rows
-      };
+  async *iterateBatches(): AsyncGenerator<BatchView> {
+    for (let index = 0; index < this.metas.length; index += 1) {
+      const meta = this.metas[index]!;
+      yield createBatchView(meta.rowStart, meta.rowCount, await this.loadColumns(index));
     }
   }
 
-  get totalRows(): number {
-    if (!this.metas.length) {
-      return 0;
-    }
-
-    const last = this.metas[this.metas.length - 1]!;
-    return last.rowStart + last.rowCount;
-  }
-
-  private findBatchIndexForRow(rowId: number): number | null {
-    if (!this.metas.length) {
-      return null;
-    }
-
+  private findBatchIndex(rowId: number): number {
     let low = 0;
     let high = this.metas.length - 1;
-
     while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
+      const mid = (low + high) >> 1;
       const meta = this.metas[mid]!;
-
       if (rowId < meta.rowStart) {
         high = mid - 1;
-        continue;
-      }
-
-      if (rowId >= meta.rowStart + meta.rowCount) {
+      } else if (rowId >= meta.rowStart + meta.rowCount) {
         low = mid + 1;
-        continue;
+      } else {
+        return mid;
       }
-
-      return mid;
     }
-
-    return null;
+    return -1;
   }
 
-  async materializeRange(offset: number, limit: number): Promise<MaterializedRow[]> {
-    if (limit <= 0) {
-      return [];
+  /** Returns rows in the requested order, decoding only the requested cells. */
+  async getRows(rowIds: ArrayLike<number>): Promise<MaterializedRow[]> {
+    const byBatch = new Map<number, number[]>();
+    for (let position = 0; position < rowIds.length; position += 1) {
+      const batchIndex = this.findBatchIndex(rowIds[position]!);
+      if (batchIndex !== -1) {
+        const positions = byBatch.get(batchIndex) ?? [];
+        positions.push(position);
+        byBatch.set(batchIndex, positions);
+      }
     }
 
-    const end = offset + limit;
-    const rowIds: number[] = [];
-    for (let index = offset; index < end; index += 1) {
-      rowIds.push(index);
+    const rows = new Array<MaterializedRow | undefined>(rowIds.length);
+    for (const [batchIndex, positions] of byBatch) {
+      const columns = await this.loadColumns(batchIndex);
+      const rowStart = this.metas[batchIndex]!.rowStart;
+      const entries = Object.entries(columns);
+      for (const position of positions) {
+        const rowId = rowIds[position]!;
+        const row: MaterializedRow = { __rowId: rowId };
+        for (const [name, column] of entries) {
+          row[name] = decodeCell(column, rowId - rowStart);
+        }
+        rows[position] = row;
+      }
     }
-
-    return this.materializeRows(rowIds);
+    return rows.filter((row): row is MaterializedRow => row !== undefined);
   }
 }

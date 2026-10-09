@@ -192,6 +192,7 @@ const PivotView = (): JSX.Element => {
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <select
+                    aria-label={`Aggregation ${index + 1} operator`}
                     className="rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
                     value={aggregation.operator}
                     onChange={(event) =>
@@ -209,6 +210,7 @@ const PivotView = (): JSX.Element => {
                   </select>
                   {requiresColumn(aggregation.operator) && (
                     <select
+                      aria-label={`Aggregation ${index + 1} column`}
                       className="rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
                       value={aggregation.column ?? ''}
                       onChange={(event) => handleColumnChange(index, event.target.value)}
@@ -227,12 +229,14 @@ const PivotView = (): JSX.Element => {
                     value={aggregation.alias ?? ''}
                     onChange={(event) => handleAliasChange(index, event.target.value)}
                     placeholder="Alias"
+                    aria-label={`Aggregation ${index + 1} alias`}
                   />
                   <button
                     type="button"
                     className="rounded border border-slate-600 px-2 py-0.5 text-xs text-slate-300 hover:bg-red-900/40 hover:border-red-700 disabled:opacity-40"
                     onClick={() => removeAggregation(index)}
                     disabled={aggregations.length <= 1}
+                    aria-label={`Remove aggregation ${index + 1}`}
                   >
                     Remove
                   </button>
@@ -295,7 +299,7 @@ const PivotView = (): JSX.Element => {
             No groups found for the current selection.
           </div>
         ) : (
-          <table className="min-w-full border-collapse text-sm">
+          <table className="min-w-full border-collapse text-sm" aria-label="Grouping results">
             <thead>
               <tr className="bg-slate-900 text-left text-xs uppercase tracking-wide text-slate-400">
                 {groupHeaders.map((header) => (

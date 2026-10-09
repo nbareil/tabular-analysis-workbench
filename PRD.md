@@ -11,7 +11,7 @@
 
 **Goal**  
 Develop a high-performance, browser-native CSV/TSV exploration tool for forensic and analytical use.  
-The application runs **entirely in the analyst’s web browser** (Chromium only), supports **very large CSV/TSV files (up to 2 GB)** via streaming, and provides **filtering, grouping, tagging, and annotation** similar to Eric Zimmerman’s *Timeline Explorer* — but with a **modern, minimalist design** and advanced session persistence.
+The application runs **entirely in the analyst’s web browser** (Chromium only), supports **very large CSV/TSV files (up to 2 GB)** via streaming, and provides **filtering, grouping, tagging, and annotation** similar to Eric Zimmerman’s *Timeline Explorer* — but with a **modern, minimalist design** and persistent annotations.
 
 **Core Principle**  
 - No installation  
@@ -42,8 +42,8 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 | 4 | **Modern minimalist UI** | Clean, dark-first interface. | 🟩 Must |
 | 5 | **Filtering, sorting, grouping** | Powerful per-column filters, pivot-style grouping. | 🟩 Must |
 | 6 | **Tagging & annotation** | Row tagging and markdown notes; exportable JSON. | 🟩 Must |
-| 7 | **Persistent sessions** | Save/restore layout, filters, notes across restarts via OPFS. | 🟩 Must |
-| 8 | **Fuzzy fallback search** | Automatic typo-tolerant search when no match found. | 🟩 Must |
+| 7 | **Persistent annotations** | Labels and notes survive restarts per file via OPFS; filters and layout are per visit. | 🟩 Must |
+| 8 | **No-match suggestions** | Suggest exact replacement values when an equality filter matches nothing (§ 3.3.a). | 🟩 Must |
 | 9 | **Data integrity** | Read-only access; user keeps file ownership. | 🟩 Must |
 
 ---
@@ -51,21 +51,21 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 ## 4. Functional Requirements
 
 ### 4.1 File Support
-- Accept **`.csv`**, **`.tsv`**, **`.csv.gz`**, **`.tsv.gz`**
-- File selection via **native file picker**.
-- Auto-detect delimiter, header, and encoding (UTF-8 default).
+- Accept delimited text (`.csv`, `.tsv`, `.txt`) and gzip-compressed variants; gzip is detected from the file content, not the extension.
+- File selection via **native file picker**; selecting several files merges them into one timeline with a `source_file` column.
+- Auto-detect the delimiter (tab, comma, semicolon, pipe) from the header line; UTF-8 by default.
 - Stream parse using `File.stream()` + `DecompressionStream('gzip')`.
 - Never copy data; operate on file handle only.
 
 ### 4.2 Parsing & Data Model
 - Parser runs in **Web Worker**:
   - Streaming `TextDecoder`
-  - Batch emission (e.g., 50 000 rows)
-  - Byte-offset index every N rows for random paging
+  - Batch emission (10 000 rows) into an OPFS row cache
 - Designed for **long, narrow** datasets.
-- Type inference (string, number, datetime, boolean).
-  - Datetime supports ISO formats, epoch timestamps, and common formats like "Oct 14 2025 01:44:33".
-  - Datetime values displayed in ISO 8601 format without milliseconds.
+- Every cell keeps its original text; type inference only decides how filters, sorts and aggregates interpret a column.
+- Type inference (string, number, datetime, boolean) with strict parsing:
+  - Datetime: ISO-like `YYYY-MM-DD[ HH:MM[:SS[.fraction]]][zone]` and epoch seconds/milliseconds (years 2000–2100). Timestamps without a zone are UTC.
+  - Datetime cells display the file's text, or are converted to a chosen time zone (Options).
 
 ### 4.3 Data Operations
 - **Sorting**: multi-column.  
@@ -81,14 +81,16 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
   - Aggregations: count, sum, min, max, avg.  
 - **Global Search** across all visible columns.  
   - Default case-insensitive matching with optional **Case sensitive** toggle beside the search bar.
-- **Fuzzy Fallback Search** if no exact match (see § 3.3.a).
+- **Exact-value suggestions** if an equality filter matches nothing (see § 3.3.a).
+- **Time window filter** around a timestamp from the cell context menu, and a **timeline histogram** whose bars filter the time range.
+- **Undo / redo** for filter and label edits.
 
 ### 4.4 Tagging & Annotation
 - Per-row fields:
-  - `tag` (string or color label)
+  - `labelIds` (any number of color labels; MITRE ATT&CK tactics are provided by default)
   - `note` (markdown text)
-- Stored separately in OPFS as `{row_id:{tag,note}}`.
-- Export/import as JSON for sharing.
+- Stored separately in OPFS as `{labels, tags: {row_id: {labelIds, note}}}`.
+- Export/import as JSON for sharing; imports into a file with a different row count are rejected.
 
 ### 4.5 Grid & Visualization
 - Virtualized grid (AG Grid or equivalent):  
@@ -98,22 +100,22 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
   - Context menu integrates filter affordances (Filter in / Filter out) honoring active session filters.
 - Column sidebar (visibility, type, aggregates).
 - Column chooser accessible from top bar lists all columns with visibility toggles.
-- Keyboard shortcuts: open, filter, export, theme toggle.
+- Keyboard shortcuts: search, row jump, filter panel, add filter, undo/redo, labels/note for the focused row, next/previous labelled row (see § 7).
+- Column profile (empties, distinct values, min/max, top values) from the header menu.
 
 - Filter sidebar can be collapsed to maximize grid width (toggle in header).
-### 4.6 Session Management
-- Persist to OPFS:
-  - File handle
-  - Schema & column order
-  - Filters / groups / sorts
-  - Tags & notes
-  - UI preferences
-- Auto-save every minute; restore on reload.
+### 4.6 Persistence
+- Labels and notes are saved to OPFS per dataset within seconds of an edit and when the tab is hidden.
+- Annotations of datasets not opened for 21 days are deleted.
+- UI preferences (theme, fonts, search case sensitivity, display time zone) persist in localStorage.
+- Filters, sorts, grouping and column layout apply to the current visit only; reopening a file starts with a clean view.
 
 ### 4.7 Export
 - Export:
-  - Filtered/grouped subset → `.csv` or `.csv.gz`
+  - Current view, or only labelled rows (with label and note columns) → `.csv` or `.csv.gz`
+  - Grouping results → `.csv` or `.csv.gz`
   - Tags / notes → `.json`
+- Cells that spreadsheets would run as formulas are neutralised.
 - Never modify original file.
 
 ---
@@ -178,16 +180,14 @@ MessageChannel (postMessage)
 ┌──────────────▼─────────────┐
 │ Worker Engine │
 │ - Stream parser (CSV/TSV) │
-│ - Row indexer (byte offsets)│
-│ - Filter/Sort/Fuzzy engine │
+│ - OPFS row cache (raw text) │
+│ - Filter/Search/Sort/Group │
 │ - Tag/Note manager │
 └──────────────┬─────────────┘
 │
 Origin Private File System
-(index cache, session, annotations)
+(row cache, annotations)
 
-yaml
-Copier le code
 
 ---
 
@@ -210,11 +210,14 @@ Typography: Inter + JetBrains Mono.
 
 | Action | Shortcut |
 |--------|-----------|
-| Open file | ⌘/Ctrl + O |
-| Search | ⌘/Ctrl + F |
-| Export | ⌘/Ctrl + E |
-| Toggle dark mode | ⌘/Ctrl + D |
-| Toggle tags panel | ⌘/Ctrl + T |
+| Focus search | `/` or ⌘/Ctrl + K |
+| Next / previous search hit | Enter / Shift + Enter in the search box |
+| Go to row number | `g` |
+| Toggle filter panel | `f` |
+| Add filter | `a` |
+| Undo / redo | ⌘/Ctrl + Z / ⌘/Ctrl + Shift + Z |
+| Labels & note for focused row | `T` (grid focused) |
+| Next / previous labelled row | `]` / `[` (grid focused) |
 
 ---
 
@@ -222,11 +225,10 @@ Typography: Inter + JetBrains Mono.
 
 | Item | Storage | Lifetime |
 |------|----------|-----------|
-| Session metadata | OPFS (JSON) | Persistent |
-| Row index | OPFS (binary) | Persistent |
-| Tags / notes | OPFS (JSON) | Persistent |
+| Tags / notes | OPFS (JSON) | Persistent (21 days after last open) |
 | Settings / theme | localStorage | Persistent |
-| Parsed rows | Memory (paged) | Ephemeral |
+| Parsed rows | OPFS row cache, paged into memory | While the dataset is open |
+| Filters / sorts / layout | Memory | Current visit |
 
 ---
 
@@ -238,7 +240,7 @@ Typography: Inter + JetBrains Mono.
 | OPFS API changes | Medium | Versioned adapter layer |
 | Gzip performance | Medium | Adjustable chunk size |
 | Large columns in suggestion scans | Medium | Only run suggestions for zero-match exact equality filters |
-| User data loss | Low | Auto-save sessions regularly |
+| Annotation loss | Low | Save within seconds of each edit and when the tab is hidden |
 
 ---
 
@@ -250,8 +252,8 @@ Typography: Inter + JetBrains Mono.
 | **M2 — Filtering & Sorting** | Worker predicates + UI | 2 weeks |
 | **M3 — Grouping** | Pivot / aggregations | 3 weeks |
 | **M4 — Tagging & Notes** | UI + JSON export | 2 weeks |
-| **M5 — Fuzzy Search** | N-gram index + DL distance | 3 weeks |
-| **M6 — Persistence & Polish** | OPFS sessions + UX | 2 weeks |
+| **M5 — Suggestions** | Exact-value suggestions (DL distance) | 3 weeks |
+| **M6 — Persistence & Polish** | OPFS annotations + UX | 2 weeks |
 
 ---
 
@@ -260,17 +262,16 @@ Typography: Inter + JetBrains Mono.
 - 2 GB CSV opens ≤ 30 s.  
 - Filter 1 M rows < 1 s.  
 - Memory ≤ 600 MB.  
-- Sessions persist after restart.  
+- Labels and notes persist after restart.  
 - Tags / notes export/import OK.  
-- Fuzzy fallback returns accurate suggestions.  
+- No-match suggestions return useful exact values.  
 - UI rated “simple and fast” by analysts.
 
 ---
 
 ## 12. Future Enhancements
 
-- Column profiling / histograms  
-- Multi-file joins by timestamp  
+- Joins across files (beyond merging them into one timeline)  
 - Remote HTTP Range loading  
 - WASM bzip2/xz decompression  
 - Plugin SDK for custom renderers  
@@ -281,13 +282,14 @@ Typography: Inter + JetBrains Mono.
 
 | Topic | Question |
 |--------|-----------|
-| Row index granularity | Ideal interval (10k vs 50k)? |
 | Filter execution | Do we need additional indexing or precomputation for repeated filters? |
 | Annotation UX | Inline cell vs side panel editor? |
 | Export | Should filters affect note JSON export? |
 
 ---
 ### Options Panel
-- Header button opens modal tab for session-scoped preferences.
+- Header button opens a modal for preferences, which persist across visits.
 - Typography controls: separate interface and data-grid font selectors plus size inputs, both defaulting to 14 px, with live preview.
-- Future affordances may include density, number formatting, and timezone handling.
+- Display time zone for datetime columns: original text (default), UTC, or any IANA zone.
+- Delete stored data: removes all cached rows, annotations and preferences.
+- Future affordances may include density and number formatting.

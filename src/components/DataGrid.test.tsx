@@ -6,8 +6,8 @@ import type { ColumnState, GridApi } from 'ag-grid-community';
 import type { ICellRendererParams } from 'ag-grid-community';
 import type { TagCellValue } from '@utils/tagCells';
 
+import { HighlightCell, MarkdownTooltip, TagCellRenderer } from './grid/GridCells';
 import {
-  MarkdownTooltip,
   computeAutoColumnWidth,
   computeMedianWidth,
   evaluateFilterMenuMetadata,
@@ -21,8 +21,10 @@ import {
   serializeRowsForClipboard,
   shouldShowEmptyOverlay,
   shouldShowInitialPlaceholder,
+  sortDistributionItems,
+  sortsEqual,
   toggleRowSelection
-} from './DataGrid';
+} from './grid/gridUtils';
 
 describe('evaluateFilterMenuMetadata', () => {
   it('marks equality as matching when exact predicate already exists', () => {
@@ -81,6 +83,18 @@ describe('buildSortStateFromColumnState', () => {
     expect(buildSortStateFromColumnState(columnState)).toEqual([
       { column: 'name', direction: 'asc' },
       { column: 'age', direction: 'desc' }
+    ]);
+  });
+
+  it('orders by sortIndex regardless of column order', () => {
+    const columnState: ColumnState[] = [
+      { colId: 'second', sort: 'asc', sortIndex: 1 },
+      { colId: 'first', sort: 'desc', sortIndex: 0 }
+    ];
+
+    expect(buildSortStateFromColumnState(columnState)).toEqual([
+      { column: 'first', direction: 'desc' },
+      { column: 'second', direction: 'asc' }
     ]);
   });
 
@@ -463,5 +477,125 @@ describe('isWithinGridContextMenu', () => {
 
     expect(isWithinGridContextMenu(outside)).toBe(false);
     expect(isWithinGridContextMenu(null)).toBe(false);
+  });
+});
+
+describe('sortsEqual', () => {
+  it('compares column and direction in order', () => {
+    expect(sortsEqual([], [])).toBe(true);
+    expect(sortsEqual([{ column: 'a', direction: 'asc' }], [{ column: 'a', direction: 'asc' }])).toBe(true);
+    expect(sortsEqual([{ column: 'a', direction: 'asc' }], [{ column: 'a', direction: 'desc' }])).toBe(false);
+    expect(
+      sortsEqual(
+        [
+          { column: 'a', direction: 'asc' },
+          { column: 'b', direction: 'asc' }
+        ],
+        [
+          { column: 'b', direction: 'asc' },
+          { column: 'a', direction: 'asc' }
+        ]
+      )
+    ).toBe(false);
+    expect(sortsEqual([{ column: 'a', direction: 'asc' }], [])).toBe(false);
+  });
+});
+
+describe('sortDistributionItems', () => {
+  const items = [
+    { value: 'b', count: 2 },
+    { value: 'a', count: 2 },
+    { value: 'c', count: 5 }
+  ];
+
+  it('sorts by count in the requested direction and breaks ties by value', () => {
+    expect(sortDistributionItems(items, 'desc').map((item) => item.value)).toEqual(['c', 'a', 'b']);
+    expect(sortDistributionItems(items, 'asc').map((item) => item.value)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('does not mutate its input', () => {
+    sortDistributionItems(items, 'asc');
+    expect(items.map((item) => item.value)).toEqual(['b', 'a', 'c']);
+  });
+});
+
+describe('TagCellRenderer', () => {
+  const renderTag = (value: TagCellValue | null) =>
+    render(<TagCellRenderer {...({ value } as ICellRendererParams<TagCellValue | null>)} />);
+
+  it('prompts to add a label for untagged rows', () => {
+    expect(renderTag(null).container.textContent).toBe('Add label');
+  });
+
+  it('shows the first label, the extra count and a note marker', () => {
+    const { container } = renderTag({
+      rowId: 1,
+      labels: [
+        { id: 'a', name: 'Alpha', color: '#f00' },
+        { id: 'b', name: 'Beta' },
+        { id: 'c', name: 'Gamma' }
+      ],
+      note: 'hi',
+      updatedAt: 1
+    });
+    expect(container.textContent).toBe('Alpha+2 moreNote');
+  });
+
+  it('labels note-only rows', () => {
+    expect(renderTag({ rowId: 1, labels: [], note: 'hi', updatedAt: 1 }).container.textContent).toBe('No labelNote');
+  });
+});
+
+describe('HighlightCell', () => {
+  const renderCell = (props: { value?: unknown; valueFormatted?: string | null; query: string; caseSensitive?: boolean }) =>
+    render(
+      <HighlightCell
+        {...({ value: props.value, valueFormatted: props.valueFormatted ?? null } as ICellRendererParams)}
+        query={props.query}
+        caseSensitive={props.caseSensitive ?? false}
+      />
+    );
+
+  const marks = (container: HTMLElement): string[] =>
+    Array.from(container.querySelectorAll('mark')).map((mark) => mark.textContent ?? '');
+
+  it('renders plain text without marks when the query is blank', () => {
+    const { container } = renderCell({ value: 'hello world', query: '   ' });
+    expect(container.textContent).toBe('hello world');
+    expect(marks(container)).toEqual([]);
+  });
+
+  it('highlights every occurrence case-insensitively, preserving original casing', () => {
+    const { container } = renderCell({ value: 'Error: error ERROR', query: 'error' });
+    expect(marks(container)).toEqual(['Error', 'error', 'ERROR']);
+    expect(container.textContent).toBe('Error: error ERROR');
+  });
+
+  it('respects case sensitivity', () => {
+    const { container } = renderCell({ value: 'Error error', query: 'error', caseSensitive: true });
+    expect(marks(container)).toEqual(['error']);
+  });
+
+  it('trims the query and does not overlap matches', () => {
+    const { container } = renderCell({ value: 'aaaa', query: ' aa ' });
+    expect(marks(container)).toEqual(['aa', 'aa']);
+  });
+
+  it('prefers the formatted value and handles null values', () => {
+    expect(marks(renderCell({ value: 1700000000000, valueFormatted: '2023-11-14', query: '11' }).container)).toEqual([
+      '11'
+    ]);
+    expect(renderCell({ value: null, query: 'x' }).container.textContent).toBe('');
+    expect(marks(renderCell({ value: 12345, query: '23' }).container)).toEqual(['23']);
+  });
+
+  it('treats the query literally rather than as a pattern', () => {
+    const { container } = renderCell({ value: 'a.b axb', query: 'a.b' });
+    expect(marks(container)).toEqual(['a.b']);
+  });
+
+it('highlights the right characters after a length-changing lowercase character', () => {
+    const { container } = renderCell({ value: 'İstanbul', query: 'stan' });
+    expect(marks(container)).toEqual(['stan']);
   });
 });

@@ -18,11 +18,13 @@ export const getDataWorker = (): Remote<DataWorkerApi> => {
 
 export type DataWorkerRemote = Remote<DataWorkerApi>;
 
+/** The worker rejects superseded requests with this error; callers should silently drop them. */
+export const isStaleOperation = (error: unknown): boolean =>
+  (error as { name?: unknown } | null)?.name === 'StaleOperationError';
+
 export type {
   LoadFileCallbacks,
   LoadFileRequest,
-  SeekRowsRequest,
-  SeekRowsResult,
   ApplySortRequest,
   ApplySortResult,
   ApplyFilterRequest,
@@ -31,7 +33,10 @@ export type {
   ColumnValueDistributionResult,
   FetchRowsRequest,
   FetchRowsResult,
-  ClearSearchRequest,
+  SearchRequest,
+  ViewResult,
+  ExportCsvRequest,
+  LoadProgress,
   GroupingRequest,
   GroupingResult,
   TaggingSnapshot,
@@ -43,5 +48,7 @@ export type {
   ImportTagsRequest,
   LabelDefinition,
   LoadCompleteSummary,
-  GlobalSearchResult
+  MaterializedRow,
+  TimeHistogramResult,
+  ColumnProfile
 } from './workerApiTypes';

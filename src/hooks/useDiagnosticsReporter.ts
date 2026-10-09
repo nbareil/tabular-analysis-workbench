@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 
 import { reportAppError } from '@utils/diagnostics';
+import { isStaleOperation } from '@workers/dataWorkerProxy';
 
 export const useDiagnosticsReporter = (): void => {
   useEffect(() => {
@@ -15,10 +16,13 @@ export const useDiagnosticsReporter = (): void => {
     };
 
     const handleRejection = (event: PromiseRejectionEvent) => {
+      event.preventDefault();
+      if (isStaleOperation(event.reason)) {
+        return;
+      }
       reportAppError('Unhandled promise rejection', event.reason, {
         operation: 'window.unhandledrejection'
       });
-      event.preventDefault();
     };
 
     window.addEventListener('error', handleError);

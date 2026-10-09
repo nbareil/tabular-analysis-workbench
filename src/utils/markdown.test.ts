@@ -29,4 +29,11 @@ describe('renderMarkdownToSafeHtml', () => {
     expect(renderMarkdownToSafeHtml(undefined)).toBe('');
     expect(renderMarkdownToSafeHtml(null)).toBe('');
   });
+
+  it('opens links in a new tab without exposing the opener', () => {
+    const html = renderMarkdownToSafeHtml('[report](https://example.com/report)');
+
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
 });

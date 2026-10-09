@@ -19,7 +19,6 @@ interface FilterBuilderProps {
 
 type DistributionSortOrder = 'asc' | 'desc';
 
-const DISTRIBUTION_SUPPORTED_TYPES = new Set<GridColumn['type']>(['string', 'boolean']);
 const DISTRIBUTION_SUPPORTED_OPERATORS = new Set(['eq', 'neq']);
 
 const formatDatetimeForInput = (value: unknown): string => {
@@ -57,7 +56,8 @@ const smartParseDatetime = (value: string, isEnd = false): number | string => {
     '0'
   )}:${minute.padStart(2, '0')}Z`;
   const timestamp = Date.parse(iso);
-  return Number.isFinite(timestamp) ? timestamp : '';
+  // An end bound typed to the minute covers that whole minute.
+  return Number.isFinite(timestamp) ? timestamp + (isEnd ? 59_999 : 0) : '';
 };
 
 const defaultFilter = (column: string, labels: LabelDefinition[]): FilterState => {
@@ -80,10 +80,9 @@ const normaliseFilterForColumn = (
     return filter;
   }
 
-  const value =
-    typeof filter.value === 'string' && filter.value.length > 0
-      ? filter.value
-      : labels[0]?.id ?? TAG_NO_LABEL_FILTER_VALUE;
+  const isKnownLabel =
+    filter.value === TAG_NO_LABEL_FILTER_VALUE || labels.some((label) => label.id === filter.value);
+  const value = isKnownLabel ? (filter.value as string) : (labels[0]?.id ?? TAG_NO_LABEL_FILTER_VALUE);
 
   const operator = filter.operator === 'neq' ? 'neq' : 'eq';
 
@@ -103,7 +102,6 @@ const supportsValueDistribution = (
 ): boolean =>
   filter.column !== TAG_COLUMN_ID &&
   column != null &&
-  DISTRIBUTION_SUPPORTED_TYPES.has(column.type) &&
   DISTRIBUTION_SUPPORTED_OPERATORS.has(filter.operator);
 
 const sortDistributionItems = (
@@ -168,27 +166,13 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
   const filterMatchCounts = useDataStore((state) => state.filterPredicateMatchCounts);
   const loaderStatus = useDataStore((state) => state.status);
   const columnValueDistributions = useDataStore((state) => state.columnValueDistributions);
-  const setColumnValueDistributionLoading = useDataStore(
-    (state) => state.setColumnValueDistributionLoading
-  );
-  const setColumnValueDistributionResult = useDataStore(
-    (state) => state.setColumnValueDistributionResult
-  );
-  const setColumnValueDistributionError = useDataStore(
-    (state) => state.setColumnValueDistributionError
-  );
+  const loadColumnValueDistribution = useDataStore((state) => state.loadColumnValueDistribution);
   const tagLabels = useTagStore((state) => state.labels);
   const tagStatus = useTagStore((state) => state.status);
-  const loadTags = useTagStore((state) => state.load);
   const [distributionSort, setDistributionSort] = useState<
     Record<string, DistributionSortOrder>
   >({});
 
-  useEffect(() => {
-    if (tagStatus === 'idle') {
-      void loadTags();
-    }
-  }, [loadTags, tagStatus]);
 
   const columnMap = useMemo(
     () => Object.fromEntries(columns.map((column) => [column.key, column])),
@@ -210,25 +194,6 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
     ];
   }, [columns]);
 
-  const loadColumnValueDistribution = async (column: string) => {
-    setColumnValueDistributionLoading(column);
-
-    try {
-      const worker = getDataWorker();
-      const result = await worker.getColumnValueDistribution({ column });
-      setColumnValueDistributionResult(result);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Failed to load column value distribution';
-      setColumnValueDistributionError(column, message);
-      reportAppError('Failed to load column value distribution', error, {
-        operation: 'filters.columnValueDistribution',
-        context: { column },
-        retry: () => loadColumnValueDistribution(column)
-      });
-    }
-  };
-
   useEffect(() => {
     if (loaderStatus !== 'ready') {
       return;
@@ -244,11 +209,9 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
     }
 
     for (const column of columnsToLoad) {
-      if (columnValueDistributions[column] == null) {
-        void loadColumnValueDistribution(column);
-      }
+      void loadColumnValueDistribution(column);
     }
-  }, [columnMap, columnValueDistributions, filters, loaderStatus]);
+  }, [columnMap, filters, loadColumnValueDistribution, loaderStatus]);
 
   const handleAdd = () => {
     const newFilter = buildNewFilter({
@@ -385,7 +348,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
             const distributionEntry = columnValueDistributions[filter.column];
             const distributionResult = distributionEntry?.result;
             const sortOrder =
-              distributionSort[filter.id] ?? distributionResult?.defaultSort ?? 'desc';
+              distributionSort[filter.id] ?? 'desc';
             const sortedItems = distributionResult
               ? sortDistributionItems(distributionResult.items, sortOrder)
               : [];

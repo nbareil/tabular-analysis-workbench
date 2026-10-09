@@ -1,7 +1,6 @@
 import { createWithEqualityFn } from 'zustand/traditional';
 
-import { DATA_DEFAULT_FONT_ID, DEFAULT_FONT_ID, DEFAULT_FONT_SIZE } from '@constants/fonts';
-import type { ColumnInference, GroupAggregationDefinition, LabelDefinition, TagRecord } from '@workers/types';
+import type { ColumnInference, GroupAggregationDefinition, SortDefinition } from '@workers/types';
 
 export interface ColumnLayoutState {
   order: string[];
@@ -20,130 +19,61 @@ export interface FilterState {
   enabled?: boolean;
 }
 
+/** View state for the open file. It lives in memory only and resets when another file is opened. */
 export interface SessionSnapshot {
-  fileHandle: FileSystemFileHandle | null;
+  /** Files in the open dataset; several files are merged into one timeline. */
+  fileHandles: FileSystemFileHandle[];
   filters: FilterState[];
-  sorts: { column: string; direction: 'asc' | 'desc' }[];
+  sorts: SortDefinition[];
   groups: string[];
   groupAggregations: GroupAggregationDefinition[];
   columnLayout: ColumnLayoutState;
-  searchCaseSensitive: boolean;
-  interfaceFontFamily: string;
-  interfaceFontSize: number;
-  dataFontFamily: string;
-  dataFontSize: number;
-  labels: LabelDefinition[];
-  tags: Record<number, TagRecord>;
-  updatedAt: number;
 }
 
 interface SessionStore extends SessionSnapshot {
-  setFileHandle: (handle: FileSystemFileHandle | null) => void;
+  openFiles: (handles: FileSystemFileHandle[]) => void;
   setFilters: (filters: FilterState[]) => void;
-  setSorts: (sorts: SessionSnapshot['sorts']) => void;
+  setSorts: (sorts: SortDefinition[]) => void;
   setGroups: (groups: string[]) => void;
   setGroupAggregations: (aggregations: GroupAggregationDefinition[]) => void;
   setColumnLayout: (layout: ColumnLayoutState) => void;
   initializeColumnLayout: (columns: string[], columnInference: Record<string, ColumnInference>, totalRows: number) => void;
-  setSearchCaseSensitive: (value: boolean) => void;
-  setInterfaceFontFamily: (value: string) => void;
-  setInterfaceFontSize: (value: number) => void;
-  setDataFontFamily: (value: string) => void;
-  setDataFontSize: (value: number) => void;
-  setLabels: (labels: LabelDefinition[]) => void;
-  setTags: (tags: Record<number, TagRecord>) => void;
-  touch: () => void;
-  clear: () => void;
-  hydrate: (snapshot: SessionSnapshot) => void;
 }
 
-const defaultColumnLayout: ColumnLayoutState = {
-  order: [],
-  visibility: {}
-};
-
 const initialState: SessionSnapshot = {
-  fileHandle: null,
+  fileHandles: [],
   filters: [],
   sorts: [],
   groups: [],
-  groupAggregations: [
-    {
-      operator: 'count',
-      alias: 'count'
-    }
-  ],
-  columnLayout: defaultColumnLayout,
-  searchCaseSensitive: false,
-  interfaceFontFamily: DEFAULT_FONT_ID,
-  interfaceFontSize: DEFAULT_FONT_SIZE,
-  dataFontFamily: DATA_DEFAULT_FONT_ID,
-  dataFontSize: DEFAULT_FONT_SIZE,
-  labels: [],
-  tags: {},
-  updatedAt: Date.now()
+  groupAggregations: [{ operator: 'count', alias: 'count' }],
+  columnLayout: { order: [], visibility: {} }
 };
 
 export const useSessionStore = createWithEqualityFn<SessionStore>()((set) => ({
   ...initialState,
-  setFileHandle: (fileHandle) => set(() => ({ fileHandle, updatedAt: Date.now() })),
-  setFilters: (filters) => set(() => ({ filters, updatedAt: Date.now() })),
-  setSorts: (sorts) => set(() => ({ sorts, updatedAt: Date.now() })),
-  setGroups: (groups) => set(() => ({ groups, updatedAt: Date.now() })),
-  setGroupAggregations: (groupAggregations) =>
-    set(() => ({ groupAggregations, updatedAt: Date.now() })),
-  setColumnLayout: (columnLayout) => set(() => ({ columnLayout, updatedAt: Date.now() })),
-  initializeColumnLayout: (columns, columnInference, totalRows) => set((state) => {
-    const visibility: Record<string, boolean> = {};
-    for (const columnKey of columns) {
-      const inference = columnInference[columnKey];
-      // Hide columns that are entirely null
-      visibility[columnKey] = inference ? inference.nullCount < totalRows : true;
-    }
-    return {
-      columnLayout: {
-        order: columns,
-        visibility
-      },
-      updatedAt: Date.now()
-    };
-  }),
-  setSearchCaseSensitive: (searchCaseSensitive) =>
-    set(() => ({ searchCaseSensitive, updatedAt: Date.now() })),
-  setInterfaceFontFamily: (interfaceFontFamily) =>
-    set(() => ({ interfaceFontFamily, updatedAt: Date.now() })),
-  setInterfaceFontSize: (interfaceFontSize) =>
-    set(() => ({ interfaceFontSize, updatedAt: Date.now() })),
-  setDataFontFamily: (dataFontFamily) =>
-    set(() => ({ dataFontFamily, updatedAt: Date.now() })),
-  setDataFontSize: (dataFontSize) => set(() => ({ dataFontSize, updatedAt: Date.now() })),
-  setLabels: (labels) => set(() => ({ labels, updatedAt: Date.now() })),
-  setTags: (tags) => set(() => ({ tags, updatedAt: Date.now() })),
-  touch: () => set(() => ({ updatedAt: Date.now() })),
-  clear: () => set(() => ({ ...initialState, updatedAt: Date.now() })),
-  hydrate: (snapshot) =>
-    set((state) => ({
-      ...state,
-      ...snapshot,
-      updatedAt: snapshot.updatedAt ?? Date.now()
-    }))
+  openFiles: (fileHandles) => set({ ...initialState, fileHandles }),
+  setFilters: (filters) => set({ filters }),
+  setSorts: (sorts) => set({ sorts }),
+  setGroups: (groups) => set({ groups }),
+  setGroupAggregations: (groupAggregations) => set({ groupAggregations }),
+  setColumnLayout: (columnLayout) => set({ columnLayout }),
+  initializeColumnLayout: (columns, columnInference, totalRows) =>
+    set(() => {
+      const visibility: Record<string, boolean> = {};
+      for (const columnKey of columns) {
+        const inference = columnInference[columnKey];
+        // Hide columns that are entirely empty
+        visibility[columnKey] = inference ? inference.nullCount < totalRows : true;
+      }
+      return { columnLayout: { order: columns, visibility } };
+    })
 }));
 
-const buildSnapshot = (state: SessionStore): SessionSnapshot => ({
-  fileHandle: state.fileHandle,
-  filters: state.filters,
-  sorts: state.sorts,
-  groups: state.groups,
-  groupAggregations: state.groupAggregations,
-  columnLayout: state.columnLayout,
-  searchCaseSensitive: state.searchCaseSensitive,
-  interfaceFontFamily: state.interfaceFontFamily,
-  interfaceFontSize: state.interfaceFontSize,
-  dataFontFamily: state.dataFontFamily,
-  dataFontSize: state.dataFontSize,
-  labels: state.labels,
-  tags: state.tags,
-  updatedAt: state.updatedAt
-});
+export const getSessionSnapshot = (): Omit<SessionSnapshot, 'fileHandles'> & { fileNames: string[] } => {
+  const { fileHandles, filters, sorts, groups, groupAggregations, columnLayout } = useSessionStore.getState();
+  return { fileNames: fileHandles.map((handle) => handle.name), filters, sorts, groups, groupAggregations, columnLayout };
+};
 
-export const getSessionSnapshot = (): SessionSnapshot => buildSnapshot(useSessionStore.getState());
+/** Display name for a dataset: the file name, or "first.csv + N more" for merged files. */
+export const describeFiles = (handles: FileSystemFileHandle[]): string =>
+  handles.length <= 1 ? (handles[0]?.name ?? '') : `${handles[0]!.name} + ${handles.length - 1} more`;

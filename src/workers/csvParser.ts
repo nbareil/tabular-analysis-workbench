@@ -1,524 +1,281 @@
-import type {
-  BooleanColumnBatch,
-  ColumnBatch,
-  ColumnInference,
-  ColumnType,
-  DatetimeColumnBatch,
-  Delimiter,
-  NumberColumnBatch,
-  RowBatch,
-  StringColumnBatch
-} from './types';
-import { TypeInferencer, analyzeValue } from './typeInference';
+import type { ColumnBatch, Delimiter, RowBatch } from './types';
+import { TAG_COLUMN_ID } from './types';
+import { TypeInferencer } from './typeInference';
 
 export interface ParserOptions {
   delimiter?: Delimiter;
   batchSize?: number;
   encoding?: string;
-  checkpointInterval?: number;
+  /** Extra header names to avoid, e.g. a column the caller adds itself. */
+  reservedColumns?: string[];
 }
 
 export interface ParserCallbacks {
   onHeader?: (header: string[]) => void | Promise<void>;
   onBatch: (batch: RowBatch) => void | Promise<void>;
-  onCheckpoint?: (payload: { rowIndex: number; byteOffset: number }) => void | Promise<void>;
 }
 
 const DEFAULT_BATCH_SIZE = 10_000;
-
-interface InternalState {
-  header: string[] | null;
-  delimiter: Delimiter;
-  delimiterResolved: boolean;
-  commaCount: number;
-  tabCount: number;
-  semicolonCount: number;
-  inQuotes: boolean;
-  quoteEscapePending: boolean;
-  skipNextLF: boolean;
-  fieldBuffer: string;
-  currentRow: string[];
-  columnBuilders: string[][];
-  pendingRowCount: number;
-  totalRows: number;
-  totalBytes: number;
-  inferencer: TypeInferencer | null;
-  currentRowStartOffset: number;
-}
-
-const createInitialState = (): InternalState => ({
-  header: null,
-  delimiter: ',',
-  delimiterResolved: false,
-  commaCount: 0,
-  tabCount: 0,
-  semicolonCount: 0,
-  inQuotes: false,
-  quoteEscapePending: false,
-  skipNextLF: false,
-  fieldBuffer: '',
-  currentRow: [],
-  columnBuilders: [],
-  pendingRowCount: 0,
-  totalRows: 0,
-  totalBytes: 0,
-  inferencer: null,
-  currentRowStartOffset: 0
-});
-
-const resetColumnBuilders = (state: InternalState): void => {
-  state.columnBuilders = state.header ? state.header.map(() => []) : [];
-  state.pendingRowCount = 0;
-};
-
-const ensureColumnBuilders = (state: InternalState): void => {
-  if (!state.header) {
-    return;
-  }
-  if (state.columnBuilders.length !== state.header.length) {
-    resetColumnBuilders(state);
-  }
-};
+const CANDIDATE_DELIMITERS: Delimiter[] = ['\t', ',', ';', '|'];
+const RESERVED_COLUMN_NAMES = new Set(['__rowId', TAG_COLUMN_ID, '__proto__']);
 
 const textEncoder = new TextEncoder();
 
-const utf8ByteLength = (codePoint: number): number => {
-  if (codePoint <= 0x7f) {
-    return 1;
-  }
-  if (codePoint <= 0x7ff) {
-    return 2;
-  }
-  if (codePoint <= 0xffff) {
-    return 3;
-  }
-  return 4;
-};
-
-const createStringColumnBatch = (values: string[]): StringColumnBatch => {
-  const encodedValues: Uint8Array[] = new Array(values.length);
+export const encodeColumn = (values: string[]): ColumnBatch => {
+  const encoded = values.map((value) => textEncoder.encode(value));
   const offsets = new Uint32Array(values.length + 1);
-  let byteOffset = 0;
-
-  for (let index = 0; index < values.length; index += 1) {
-    const encoded = textEncoder.encode(values[index] ?? '');
-    encodedValues[index] = encoded;
-    byteOffset += encoded.byteLength;
-    offsets[index + 1] = byteOffset;
-  }
-
-  const data = new ArrayBuffer(byteOffset);
-  const dataView = new Uint8Array(data);
-
-  let writeOffset = 0;
-  for (const encoded of encodedValues) {
-    dataView.set(encoded, writeOffset);
-    writeOffset += encoded.byteLength;
-  }
-
-  return {
-    type: 'string',
-    data,
-    offsets
-  };
+  let total = 0;
+  encoded.forEach((bytes, index) => {
+    total += bytes.byteLength;
+    offsets[index + 1] = total;
+  });
+  const data = new Uint8Array(total);
+  encoded.forEach((bytes, index) => data.set(bytes, offsets[index]!));
+  return { data: data.buffer, offsets };
 };
 
-const createBooleanColumnBatch = (values: string[]): BooleanColumnBatch => {
-  const data = new Uint8Array(values.length);
-  const nullMask = new Uint8Array(values.length);
-  let hasNull = false;
-
-  for (let index = 0; index < values.length; index += 1) {
-    const analysis = analyzeValue(values[index] ?? '');
-    if (analysis.kind === 'null') {
-      nullMask[index] = 1;
-      hasNull = true;
-      continue;
-    }
-
-    if (analysis.kind === 'boolean') {
-      data[index] = analysis.booleanValue ? 1 : 0;
-    } else {
-      nullMask[index] = 1;
-      hasNull = true;
+/** Picks the candidate delimiter that occurs most often outside quotes in the header line. */
+export const sniffDelimiter = (headerLine: string): Delimiter => {
+  const counts = new Map<string, number>();
+  let inQuotes = false;
+  for (const char of headerLine) {
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (!inQuotes) {
+      counts.set(char, (counts.get(char) ?? 0) + 1);
     }
   }
-
-  return {
-    type: 'boolean',
-    data,
-    nullMask: hasNull ? nullMask : undefined
-  };
-};
-
-const createNumberColumnBatch = (values: string[]): NumberColumnBatch => {
-  const data = new Float64Array(values.length);
-  const nullMask = new Uint8Array(values.length);
-  let hasNull = false;
-
-  for (let index = 0; index < values.length; index += 1) {
-    const analysis = analyzeValue(values[index] ?? '');
-    if (analysis.kind === 'null') {
-      nullMask[index] = 1;
-      hasNull = true;
-      continue;
-    }
-
-    if (analysis.kind === 'number') {
-      data[index] = analysis.numberValue ?? Number.NaN;
-    } else {
-      nullMask[index] = 1;
-      hasNull = true;
+  let best: Delimiter = ',';
+  let bestCount = 0;
+  for (const candidate of CANDIDATE_DELIMITERS) {
+    const count = counts.get(candidate) ?? 0;
+    if (count > bestCount) {
+      best = candidate;
+      bestCount = count;
     }
   }
-
-  return {
-    type: 'number',
-    data,
-    nullMask: hasNull ? nullMask : undefined
-  };
+  return best;
 };
 
-const createDatetimeColumnBatch = (values: string[]): DatetimeColumnBatch => {
-  const data = new Float64Array(values.length);
-  const nullMask = new Uint8Array(values.length);
-  let hasNull = false;
-
-  for (let index = 0; index < values.length; index += 1) {
-    const analysis = analyzeValue(values[index] ?? '');
-    if (analysis.kind === 'null') {
-      nullMask[index] = 1;
-      hasNull = true;
-      continue;
-    }
-
-    if (analysis.kind === 'datetime') {
-      data[index] = analysis.datetimeValue ?? Number.NaN;
-    } else if (analysis.kind === 'number') {
-      data[index] = analysis.numberValue ?? Number.NaN;
-    } else {
-      nullMask[index] = 1;
-      hasNull = true;
-    }
-  }
-
-  return {
-    type: 'datetime',
-    data,
-    nullMask: hasNull ? nullMask : undefined
-  };
-};
-
-const buildColumnsFromBuilders = (
-  header: string[],
-  columnValues: string[][],
-  inferencer: TypeInferencer | null
-): {
-  columns: Record<string, ColumnBatch>;
-  columnTypes: Record<string, ColumnType>;
-  columnInference: Record<string, ColumnInference>;
-} => {
-  const columnTypes: Record<string, ColumnType> = {};
-  const columns: Record<string, ColumnBatch> = {};
-  const columnInference: Record<string, ColumnInference> = {};
-
-  for (let colIndex = 0; colIndex < header.length; colIndex += 1) {
-    const columnName = header[colIndex];
-    const values = columnValues[colIndex] ?? [];
-    const inference = inferencer ? inferencer.resolve(columnName) : null;
-    const targetType = inference?.type ?? 'string';
-
-    let column: ColumnBatch;
-    if (targetType === 'number') {
-      column = createNumberColumnBatch(values);
-    } else if (targetType === 'boolean') {
-      column = createBooleanColumnBatch(values);
-    } else if (targetType === 'datetime') {
-      column = createDatetimeColumnBatch(values);
-    } else {
-      column = createStringColumnBatch(values);
-    }
-
-    columns[columnName] = column;
-    columnTypes[columnName] = targetType;
-    columnInference[columnName] =
-      inference ?? {
-        type: 'string',
-        confidence: targetType === 'string' ? 1 : 0,
-        samples: 0,
-        nullCount: 0,
-        examples: []
-      };
-  }
-
-  return { columns, columnTypes, columnInference };
-};
-
-const dedupeHeader = (cells: string[]): string[] => {
-  const seen = new Map<string, number>();
+export const dedupeHeader = (cells: string[], reserved: string[] = []): string[] => {
+  const used = new Set<string>(reserved);
   return cells.map((raw, index) => {
-    const base = raw && raw.trim().length > 0 ? raw.trim() : `column_${index + 1}`;
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    return count === 0 ? base : `${base}_${count + 1}`;
+    const base = raw.trim() || `column_${index + 1}`;
+    let candidate = base;
+    let suffix = 1;
+    while (used.has(candidate) || RESERVED_COLUMN_NAMES.has(candidate)) {
+      suffix += 1;
+      candidate = `${base}_${suffix}`;
+    }
+    used.add(candidate);
+    return candidate;
   });
 };
 
-const normalizeRow = (row: string[], expected: number): string[] => {
-  if (row.length === expected) {
-    return row;
-  }
-
-  if (row.length < expected) {
-    const padded = row.slice();
-    while (padded.length < expected) {
-      padded.push('');
-    }
-    return padded;
-  }
-
-  return row.slice(0, expected);
-};
+const LF = 10;
+const CR = 13;
+const QUOTE = 34;
 
 export const parseDelimitedStream = async (
   source: AsyncIterable<Uint8Array>,
   callbacks: ParserCallbacks,
   options: ParserOptions = {}
 ): Promise<void> => {
-  const state = createInitialState();
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
-  const checkpointInterval = options.checkpointInterval ?? 50_000;
   const decoder = new TextDecoder(options.encoding ?? 'utf-8');
-  let chunkIndex = 0;
 
-  const resolveDelimiterIfNeeded = (): void => {
-    if (state.delimiterResolved) {
-      return;
-    }
+  let delimiter = options.delimiter ?? null;
+  let delimiterCode = delimiter ? delimiter.charCodeAt(0) : -1;
+  let pendingText = '';
 
-    const counts: Array<{ delimiter: Delimiter; count: number }> = [
-      { delimiter: ',', count: state.commaCount },
-      { delimiter: '\t', count: state.tabCount },
-      { delimiter: ';', count: state.semicolonCount }
-    ];
+  let header: string[] | null = null;
+  let inferencer: TypeInferencer | null = null;
+  let columnValues: string[][] = [];
+  let pendingRows = 0;
+  let totalRows = 0;
+  let bytesParsed = 0;
+  let malformedRows = 0;
 
-    counts.sort((a, b) => b.count - a.count);
-
-    if (counts[0] && counts[0].count > 0) {
-      state.delimiter = counts[0].delimiter;
-    }
-
-    state.delimiterResolved = true;
-    state.commaCount = 0;
-    state.tabCount = 0;
-    state.semicolonCount = 0;
-  };
-
-  if (options.delimiter) {
-    state.delimiter = options.delimiter;
-    state.delimiterResolved = true;
-  }
+  let row: string[] = [];
+  let field = '';
+  let fieldStarted = false;
+  let inQuotes = false;
+  let quotePending = false;
+  let skipLF = false;
 
   const flushBatch = async (eof: boolean): Promise<void> => {
-    if (!state.header || state.pendingRowCount === 0) {
+    if (!header || pendingRows === 0) {
       return;
     }
-
-    const rowCount = state.pendingRowCount;
-    const startId = state.totalRows;
-    const rowIds = new Uint32Array(rowCount);
-
-    for (let idx = 0; idx < rowCount; idx += 1) {
-      rowIds[idx] = startId + idx;
+    const rowIds = new Uint32Array(pendingRows);
+    for (let index = 0; index < pendingRows; index += 1) {
+      rowIds[index] = totalRows + index;
     }
-
-    const { columns, columnTypes, columnInference } = buildColumnsFromBuilders(
-      state.header,
-      state.columnBuilders,
-      state.inferencer
-    );
-    state.totalRows += rowCount;
-
-    const batch: RowBatch = {
+    const columns: Record<string, ColumnBatch> = {};
+    header.forEach((name, index) => {
+      columns[name] = encodeColumn(columnValues[index]!);
+    });
+    totalRows += pendingRows;
+    pendingRows = 0;
+    columnValues = header.map(() => []);
+    const { columnTypes, columnInference } = inferencer!.resolveAll();
+    await callbacks.onBatch({
       rowIds,
       columns,
       columnTypes,
       columnInference,
-      stats: {
-        rowsParsed: state.totalRows,
-        bytesParsed: state.totalBytes,
-        eof
-      }
-    };
-
-    resetColumnBuilders(state);
-    await callbacks.onBatch(batch);
+      stats: { rowsParsed: totalRows, bytesParsed, malformedRows, eof }
+    });
   };
 
-  const emitRow = async (): Promise<void> => {
-    const rowCells = state.currentRow;
-    state.currentRow = [];
-
-    if (!state.header) {
-      state.header = dedupeHeader(rowCells);
-      state.delimiterResolved = true;
-      state.inferencer = new TypeInferencer(state.header);
-      resetColumnBuilders(state);
-      state.currentRowStartOffset = state.totalBytes;
-
-      if (callbacks.onHeader) {
-        await callbacks.onHeader(state.header);
-      }
+  const endRow = async (): Promise<void> => {
+    row.push(field);
+    const cells = row;
+    const isBlank = cells.length === 1 && !fieldStarted;
+    row = [];
+    field = '';
+    fieldStarted = false;
+    if (isBlank) {
       return;
     }
 
-    if (state.pendingRowCount >= batchSize) {
+    if (!header) {
+      header = dedupeHeader(cells, options.reservedColumns);
+      inferencer = new TypeInferencer(header);
+      columnValues = header.map(() => []);
+      await callbacks.onHeader?.(header);
+      return;
+    }
+
+    const width = header.length;
+    if (cells.length !== width) {
+      malformedRows += 1;
+      if (cells.length > width) {
+        cells[width - 1] = cells.slice(width - 1).join(delimiter!);
+        cells.length = width;
+      } else {
+        while (cells.length < width) {
+          cells.push('');
+        }
+      }
+    }
+
+    inferencer!.updateRow(cells);
+    for (let index = 0; index < width; index += 1) {
+      columnValues[index]!.push(cells[index]!);
+    }
+    pendingRows += 1;
+    if (pendingRows >= batchSize) {
       await flushBatch(false);
     }
-
-    const normalized = normalizeRow(rowCells, state.header.length);
-    state.inferencer?.updateRow(normalized);
-    ensureColumnBuilders(state);
-    for (let columnIndex = 0; columnIndex < state.header.length; columnIndex += 1) {
-      const columnValues = state.columnBuilders[columnIndex];
-      if (columnValues) {
-        columnValues.push(normalized[columnIndex] ?? '');
-      }
-    }
-    state.pendingRowCount += 1;
-
-    const rowIndex = state.totalRows + state.pendingRowCount - 1;
-    const rowStartOffset = state.currentRowStartOffset;
-
-    if (checkpointInterval > 0 && callbacks.onCheckpoint && rowIndex % checkpointInterval === 0) {
-      await callbacks.onCheckpoint({ rowIndex, byteOffset: rowStartOffset });
-    }
-
-    state.currentRowStartOffset = state.totalBytes;
   };
 
-  const pushField = (): void => {
-    state.currentRow.push(state.fieldBuffer);
-    state.fieldBuffer = '';
-  };
+  const processText = async (text: string): Promise<void> => {
+    let index = 0;
+    const length = text.length;
 
-  const handleEndOfRow = async (): Promise<void> => {
-    pushField();
-    await emitRow();
-  };
-
-  const processChar = (char: string): Promise<void> | void => {
-    if (state.inQuotes) {
-      if (state.quoteEscapePending) {
-        if (char === '"') {
-          state.fieldBuffer += '"';
-          state.quoteEscapePending = false;
-          return;
-        }
-
-        state.inQuotes = false;
-        state.quoteEscapePending = false;
-        // fall through to process the char outside quotes
-      } else {
-        if (char === '"') {
-          state.quoteEscapePending = true;
-          return;
-        }
-
-        state.fieldBuffer += char;
-        return;
-      }
-    }
-
-    if (!state.delimiterResolved && (char === '\n' || char === '\r')) {
-      resolveDelimiterIfNeeded();
-    }
-
-    if (!state.delimiterResolved && char === ',') {
-      state.commaCount += 1;
-    } else if (!state.delimiterResolved && char === '\t') {
-      state.tabCount += 1;
-    } else if (!state.delimiterResolved && char === ';') {
-      state.semicolonCount += 1;
-    }
-
-    if (char === '"') {
-      state.inQuotes = true;
-      state.quoteEscapePending = false;
-      return;
-    }
-
-    if (
-      char === state.delimiter ||
-      (!state.delimiterResolved && (char === ',' || char === '\t' || char === ';'))
-    ) {
-      pushField();
-      return;
-    }
-
-    if (char === '\n') {
-      return handleEndOfRow();
-    }
-
-    if (char === '\r') {
-      state.skipNextLF = true;
-      return handleEndOfRow();
-    }
-
-    state.fieldBuffer += char;
-  };
-
-  const processText = async (text: string, isFirstChunk: boolean): Promise<void> => {
-    if (isFirstChunk && text.charCodeAt(0) === 0xfeff) {
-      text = text.slice(1);
-      state.totalBytes += 3;
-      state.currentRowStartOffset = 3;
-    }
-
-    for (let index = 0; index < text.length;) {
-      const codePoint = text.codePointAt(index)!;
-      const char = String.fromCodePoint(codePoint);
-      const byteLength = utf8ByteLength(codePoint);
-      index += char.length;
-
-      state.totalBytes += byteLength;
-
-      if (!state.delimiterResolved && (char === '\n' || char === '\r')) {
-        resolveDelimiterIfNeeded();
-      }
-
-      if (state.skipNextLF) {
-        if (char === '\n') {
-          state.skipNextLF = false;
+    while (index < length) {
+      if (skipLF) {
+        skipLF = false;
+        if (text.charCodeAt(index) === LF) {
+          index += 1;
           continue;
         }
-
-        state.skipNextLF = false;
       }
 
-      const maybePromise = processChar(char);
-      if (maybePromise) {
-        await maybePromise;
+      if (quotePending) {
+        quotePending = false;
+        if (text.charCodeAt(index) === QUOTE) {
+          field += '"';
+          index += 1;
+          continue;
+        }
+        inQuotes = false;
+      }
+
+      if (inQuotes) {
+        const quoteIndex = text.indexOf('"', index);
+        if (quoteIndex === -1) {
+          field += text.slice(index);
+          return;
+        }
+        field += text.slice(index, quoteIndex);
+        index = quoteIndex + 1;
+        if (index === length) {
+          quotePending = true;
+          return;
+        }
+        if (text.charCodeAt(index) === QUOTE) {
+          field += '"';
+          index += 1;
+        } else {
+          inQuotes = false;
+        }
+        continue;
+      }
+
+      if (!fieldStarted && text.charCodeAt(index) === QUOTE) {
+        inQuotes = true;
+        fieldStarted = true;
+        index += 1;
+        continue;
+      }
+
+      let end = index;
+      let code = -1;
+      while (end < length) {
+        code = text.charCodeAt(end);
+        if (code === delimiterCode || code === LF || code === CR) {
+          break;
+        }
+        end += 1;
+      }
+      if (end > index) {
+        field += text.slice(index, end);
+        fieldStarted = true;
+      }
+      if (end === length) {
+        return;
+      }
+
+      index = end + 1;
+      if (code === delimiterCode) {
+        row.push(field);
+        field = '';
+        fieldStarted = false;
+      } else {
+        skipLF = code === CR;
+        await endRow();
       }
     }
+  };
+
+  const consume = async (text: string, final: boolean): Promise<void> => {
+    if (!delimiter) {
+      pendingText += text;
+      const newline = pendingText.search(/[\r\n]/);
+      if (newline === -1 && !final) {
+        return;
+      }
+      delimiter = sniffDelimiter(newline === -1 ? pendingText : pendingText.slice(0, newline));
+      delimiterCode = delimiter.charCodeAt(0);
+      text = pendingText;
+      pendingText = '';
+    }
+    await processText(text);
   };
 
   for await (const chunk of source) {
-    let text = decoder.decode(chunk, { stream: true });
+    bytesParsed += chunk.byteLength;
+    const text = decoder.decode(chunk, { stream: true });
     if (text.length > 0) {
-      await processText(text, chunkIndex === 0);
+      await consume(text, false);
     }
-    chunkIndex += 1;
   }
+  await consume(decoder.decode(), true);
 
-  const tail = decoder.decode();
-  if (tail.length > 0) {
-    await processText(tail, chunkIndex === 0);
-  }
-
-  if (state.fieldBuffer.length > 0 || state.currentRow.length > 0) {
-    pushField();
-    await emitRow();
+  if (fieldStarted || row.length > 0) {
+    await endRow();
   }
 
   await flushBatch(true);

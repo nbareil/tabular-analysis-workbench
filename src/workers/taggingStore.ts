@@ -1,148 +1,78 @@
-import { logDebug } from '../utils/debugLog';
 import { buildDatasetStorageKey, type DatasetFingerprint } from './datasetFingerprint';
 import type { TaggingSnapshot } from './types';
 
-const TAG_DIRECTORY = 'annotations';
-const TAG_FILE_PREFIX = 'tags';
-const TAG_STORE_VERSION = 1;
+export const TAG_DIRECTORY = 'annotations';
+/** Annotations for files that have not been opened for this long are deleted. */
+export const ANNOTATION_RETENTION_MS = 21 * 24 * 60 * 60 * 1000;
 
-const textEncoder = new TextEncoder();
-
-interface TaggingEnvelope {
-  version: number;
-  updatedAt: number;
-  payload: TaggingSnapshot;
-}
-
-const supportsOpfs = (): boolean => {
-  return (
-    typeof navigator !== 'undefined' &&
-    typeof navigator.storage !== 'undefined' &&
-    typeof navigator.storage.getDirectory === 'function'
-  );
-};
-
-export const buildTaggingStoreKey = (fingerprint: DatasetFingerprint): string =>
-  buildDatasetStorageKey(fingerprint);
-
-const buildFileNames = (key: string): { data: string; temp: string } => {
-  const prefix = `${TAG_FILE_PREFIX}-${key}`;
-  return {
-    data: `${prefix}.json`,
-    temp: `${prefix}.tmp.json`
-  };
-};
-
+/**
+ * Persists one dataset's labels and notes as JSON in OPFS.
+ * `createWritable()` writes to a swap file that replaces the target atomically on `close()`,
+ * so a crash mid-write leaves the previous snapshot intact.
+ */
 export class TaggingStore {
-  private readonly directory: FileSystemDirectoryHandle | null;
-  private readonly handle: FileSystemFileHandle | null;
-  private readonly fileName: string | null;
-  private readonly tempFileName: string | null;
-  private readonly storeKey: string | null;
+  private constructor(private readonly handle: FileSystemFileHandle | null) {}
 
-  private constructor(
-    directory: FileSystemDirectoryHandle | null,
-    handle: FileSystemFileHandle | null,
-    fileName: string | null,
-    tempFileName: string | null,
-    storeKey: string | null
-  ) {
-    this.directory = directory;
-    this.handle = handle;
-    this.fileName = fileName;
-    this.tempFileName = tempFileName;
-    this.storeKey = storeKey;
-  }
-
-  static async create(fingerprint: DatasetFingerprint | null): Promise<TaggingStore> {
-    if (!supportsOpfs() || !fingerprint) {
-      return new TaggingStore(null, null, null, null, null);
+  /**
+   * Opens the store for a file, first deleting snapshots of other files that were not opened within
+   * the retention window. Opening a file touches its snapshot, which restarts its retention clock.
+   */
+  static async create(fingerprint: DatasetFingerprint): Promise<TaggingStore> {
+    if (typeof navigator === 'undefined' || typeof navigator.storage?.getDirectory !== 'function') {
+      return new TaggingStore(null);
     }
-
-    try {
-      const root = await navigator.storage.getDirectory();
-      const directory = await root.getDirectoryHandle(TAG_DIRECTORY, { create: true });
-      const storeKey = buildTaggingStoreKey(fingerprint);
-      const { data, temp } = buildFileNames(storeKey);
-      const handle = await directory.getFileHandle(data, { create: true });
-
-      if (import.meta.env?.DEV) {
-        logDebug('tagging-store', 'created tagging store', {
-          fileName: data,
-          directory: TAG_DIRECTORY,
-          fingerprint
-        });
-      }
-
-      return new TaggingStore(directory, handle, data, temp, storeKey);
-    } catch (error) {
-      console.warn('[tagging-store] Failed to initialise OPFS handles', error);
-      return new TaggingStore(null, null, null, null, null);
-    }
+    const root = await navigator.storage.getDirectory();
+    const directory = await root.getDirectoryHandle(TAG_DIRECTORY, { create: true });
+    const fileName = `tags-${buildDatasetStorageKey(fingerprint)}.json`;
+    await pruneExpiredSnapshots(directory, fileName);
+    return new TaggingStore(await directory.getFileHandle(fileName, { create: true }));
   }
 
   async load(): Promise<TaggingSnapshot | null> {
     if (!this.handle) {
       return null;
     }
-
-    try {
-      const file = await this.handle.getFile();
-      if (file.size === 0) {
-        return null;
-      }
-
-      const json = await file.text();
-      const parsed = JSON.parse(json) as Partial<TaggingEnvelope>;
-
-      if (!parsed || parsed.version !== TAG_STORE_VERSION || !parsed.payload) {
-        return null;
-      }
-
-      return parsed.payload;
-    } catch (error) {
-      console.warn('[tagging-store] Failed to load snapshot', error);
+    const file = await this.handle.getFile();
+    if (file.size === 0) {
       return null;
     }
+    let snapshot: TaggingSnapshot;
+    try {
+      snapshot = JSON.parse(await file.text()) as TaggingSnapshot;
+    } catch (error) {
+      console.warn('[tagging-store] Ignoring unreadable snapshot', error);
+      return null;
+    }
+    await this.save(snapshot);
+    return snapshot;
   }
 
   async save(snapshot: TaggingSnapshot): Promise<void> {
-    if (!this.directory || !this.handle || !this.fileName || !this.tempFileName) {
+    if (!this.handle) {
       return;
     }
-
-    const envelope: TaggingEnvelope = {
-      version: TAG_STORE_VERSION,
-      updatedAt: Date.now(),
-      payload: snapshot
-    };
-
-    // Atomic write: write to temp file, then move
-    const tempHandle = await this.directory.getFileHandle(this.tempFileName, { create: true });
-    const writable = await tempHandle.createWritable({ keepExistingData: false });
+    const writable = await this.handle.createWritable({ keepExistingData: false });
     try {
-      const data = textEncoder.encode(JSON.stringify(envelope));
-      await writable.write(data);
-      await writable.close();
-
-      // Move temp to final (atomic replace)
-      await (this.directory as any).move(this.tempFileName, this.fileName);
+      await writable.write(JSON.stringify(snapshot));
     } catch (error) {
       await writable.abort();
-      console.warn('[tagging-store] Failed to persist snapshot', error);
       throw error;
     }
-  }
-
-  async clear(): Promise<void> {
-    if (!this.directory || !this.fileName) {
-      return;
-    }
-
-    try {
-      await this.directory.removeEntry(this.fileName);
-    } catch (error) {
-      console.warn('[tagging-store] Failed to clear snapshot', error);
-    }
+    await writable.close();
   }
 }
+
+const pruneExpiredSnapshots = async (directory: FileSystemDirectoryHandle, keep: string): Promise<void> => {
+  const cutoff = Date.now() - ANNOTATION_RETENTION_MS;
+  const expired: string[] = [];
+  for await (const [name, handle] of (
+    directory as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }
+  ).entries()) {
+    if (name !== keep && handle.kind === 'file' && (await (handle as FileSystemFileHandle).getFile()).lastModified < cutoff) {
+      expired.push(name);
+    }
+  }
+  for (const name of expired) {
+    await directory.removeEntry(name).catch(() => undefined);
+  }
+};

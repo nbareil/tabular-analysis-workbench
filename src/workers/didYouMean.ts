@@ -70,7 +70,8 @@ const rankSuggestions = (candidates: Iterable<SuggestionCandidate>): string[] =>
 
 const findSuggestionsForPredicate = async (
   batchStore: RowBatchStore,
-  predicate: FilterPredicate
+  predicate: FilterPredicate,
+  check: () => void
 ): Promise<string[]> => {
   const query = typeof predicate.value === 'string' ? predicate.value.trim() : '';
   if (!query) {
@@ -88,14 +89,10 @@ const findSuggestionsForPredicate = async (
 
   const candidates = new Map<string, SuggestionCandidate>();
 
-  for await (const { rows } of batchStore.iterateMaterializedBatches()) {
-    for (const row of rows) {
-      const rawValue = row[predicate.column];
-      if (rawValue == null) {
-        continue;
-      }
-
-      const candidateValue = String(rawValue).trim();
+  for await (const view of batchStore.iterateBatches()) {
+    check();
+    for (const rawValue of view.column(predicate.column)) {
+      const candidateValue = rawValue.trim();
       if (!candidateValue) {
         continue;
       }
@@ -144,11 +141,13 @@ const findSuggestionsForPredicate = async (
 export const suggestDidYouMean = async ({
   batchStore,
   expression,
-  columnTypes
+  columnTypes,
+  check = () => undefined
 }: {
   batchStore: RowBatchStore;
   expression: FilterNode | null;
   columnTypes: Record<string, ColumnType>;
+  check?: () => void;
 }): Promise<DidYouMeanInfo | undefined> => {
   if (!expression) {
     return undefined;
@@ -156,7 +155,7 @@ export const suggestDidYouMean = async ({
 
   const predicates = collectSuggestionPredicates(expression, columnTypes);
   for (const predicate of predicates) {
-    const suggestions = await findSuggestionsForPredicate(batchStore, predicate);
+    const suggestions = await findSuggestionsForPredicate(batchStore, predicate, check);
     if (suggestions.length > 0) {
       return {
         column: predicate.column,

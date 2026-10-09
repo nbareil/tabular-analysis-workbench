@@ -1,455 +1,257 @@
-import { materializeRowBatch, type MaterializedRow } from './utils/materializeRowBatch';
-import type {
-  ColumnType,
-  FilterExpression,
-  FilterNode,
-  FilterPredicate,
-  RowBatch,
-  TagRecord
-} from './types';
+import type { BatchView } from './rowBatchStore';
+import type { ColumnType, FilterNode, FilterPredicate, TagRecord } from './types';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from './types';
 import { normalizeString } from './utils/stringUtils';
+import { parseBoolean, parseDatetime, parseNumber } from './valueParsing';
 
-export interface FilterResult {
-  matches: Uint8Array;
-  matchedCount: number;
+/**
+ * Filters are compiled once per request and evaluated batch by batch over raw cell text.
+ * Text operators (eq on string columns, contains, startsWith, regex) work on any column;
+ * comparison operators use the column's inferred type. `neq` and `notMatches` are the
+ * exact complement of `eq` and `matches`, so empty cells are included.
+ */
+
+export class FilterError extends Error {
+  override name = 'FilterError';
 }
 
-export interface FilterEvaluationContext {
-  tags?: Record<number, TagRecord>;
+interface CompiledPredicate {
+  id?: string;
+  evaluate(view: BatchView, tags: Record<number, TagRecord>, cache: Map<string, string[]>): Uint8Array;
 }
 
-const isExpression = (node: FilterNode): node is FilterExpression => 'op' in node;
+type CompiledNode = CompiledPredicate | { op: 'and' | 'or'; children: CompiledNode[] };
 
-interface FilterEvaluationOptions {
-  collectPredicateMatch?: (predicateId: string, count: number) => void;
+export interface CompiledFilter {
+  root: CompiledNode;
 }
 
-const countMatches = (mask: Uint8Array): number => {
+const isExpression = (node: FilterNode): node is Extract<FilterNode, { op: string }> => 'op' in node;
+
+// Nested quantifiers such as (a+)+ or (\w*)* backtrack exponentially in V8.
+const NESTED_QUANTIFIER = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)[+*{]/;
+
+export const compileRegex = (pattern: string, caseSensitive: boolean): RegExp => {
+  if (NESTED_QUANTIFIER.test(pattern)) {
+    throw new FilterError(`Regular expression "${pattern}" has nested quantifiers and could hang the search.`);
+  }
+  const flags = caseSensitive ? '' : 'i';
+  try {
+    // Unicode mode first: legacy mode silently reads \p{Lu} as the literal text "p{Lu}".
+    return new RegExp(pattern, `${flags}u`);
+  } catch {
+    try {
+      // Legacy mode accepts common loose patterns such as [\w-.] that Unicode mode rejects.
+      return new RegExp(pattern, flags);
+    } catch (error) {
+      throw new FilterError(`Invalid regular expression "${pattern}": ${(error as Error).message}`);
+    }
+  }
+};
+
+const parseBound = (type: ColumnType, value: unknown): number | null => {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value !== 'string' || value.trim() === '') {
+    return null;
+  }
+  return type === 'datetime' ? parseDatetime(value) : parseNumber(value);
+};
+
+const toComparable = (type: ColumnType, raw: string): number | null =>
+  type === 'datetime' ? parseDatetime(raw) : parseNumber(raw);
+
+const normalizedColumn = (
+  view: BatchView,
+  column: string,
+  caseSensitive: boolean,
+  cache: Map<string, string[]>
+): string[] => {
+  const key = `${caseSensitive ? 1 : 0}:${column}`;
+  let values = cache.get(key);
+  if (!values) {
+    values = view.column(column).map((value) => normalizeString(value, caseSensitive));
+    cache.set(key, values);
+  }
+  return values;
+};
+
+const maskFrom = (length: number, test: (index: number) => boolean): Uint8Array => {
+  const mask = new Uint8Array(length);
+  for (let index = 0; index < length; index += 1) {
+    mask[index] = test(index) ? 1 : 0;
+  }
+  return mask;
+};
+
+const compileTagPredicate = (predicate: FilterPredicate): CompiledPredicate => {
+  const target =
+    predicate.value == null || predicate.value === TAG_NO_LABEL_FILTER_VALUE ? null : String(predicate.value);
+  const negate = predicate.operator === 'neq';
+  if (predicate.operator !== 'eq' && predicate.operator !== 'neq') {
+    throw new FilterError(`Operator "${predicate.operator}" is not supported for labels.`);
+  }
+  return {
+    id: predicate.id,
+    evaluate(view, tags) {
+      return maskFrom(view.rowCount, (index) => {
+        const labelIds = tags[view.rowStart + index]?.labelIds ?? [];
+        const isMatch = target === null ? labelIds.length === 0 : labelIds.includes(target);
+        return isMatch !== negate;
+      });
+    }
+  };
+};
+
+const compilePredicate = (
+  predicate: FilterPredicate,
+  columnTypes: Record<string, ColumnType>
+): CompiledPredicate => {
+  if (predicate.column === TAG_COLUMN_ID) {
+    return compileTagPredicate(predicate);
+  }
+
+  const { column, operator, id } = predicate;
+  const type = columnTypes[column] ?? 'string';
+  const caseSensitive = Boolean(predicate.caseSensitive);
+  const text = predicate.value == null ? '' : String(predicate.value);
+
+  const textPredicate = (test: (value: string) => boolean): CompiledPredicate => ({
+    id,
+    evaluate(view, _tags, cache) {
+      const values = normalizedColumn(view, column, caseSensitive, cache);
+      return maskFrom(view.rowCount, (index) => test(values[index]!));
+    }
+  });
+
+  const rawPredicate = (test: (value: string) => boolean): CompiledPredicate => ({
+    id,
+    evaluate(view) {
+      const values = view.column(column);
+      return maskFrom(view.rowCount, (index) => test(values[index]!));
+    }
+  });
+
+  switch (operator) {
+    case 'contains': {
+      const needle = normalizeString(text, caseSensitive);
+      return textPredicate((value) => value.includes(needle));
+    }
+    case 'startsWith': {
+      const needle = normalizeString(text, caseSensitive);
+      return textPredicate((value) => value.startsWith(needle));
+    }
+    case 'regex':
+    case 'matches':
+    case 'notMatches': {
+      const regex = compileRegex(text, caseSensitive);
+      const negate = operator === 'notMatches';
+      return rawPredicate((value) => regex.test(value) !== negate);
+    }
+    case 'eq':
+    case 'neq': {
+      const negate = operator === 'neq';
+      if (type === 'boolean') {
+        const target = typeof predicate.value === 'boolean' ? predicate.value : parseBoolean(text);
+        return rawPredicate((value) => (target != null && parseBoolean(value) === target) !== negate);
+      }
+      if (type === 'number' || type === 'datetime') {
+        const target = parseBound(type, predicate.value);
+        if (target != null) {
+          return rawPredicate((value) => (toComparable(type, value) === target) !== negate);
+        }
+      }
+      const needle = normalizeString(text, caseSensitive);
+      return textPredicate((value) => (value === needle) !== negate);
+    }
+    case 'gt':
+    case 'lt':
+    case 'range':
+    case 'between': {
+      if (type !== 'number' && type !== 'datetime') {
+        throw new FilterError(`Operator "${operator}" needs a number or datetime column; "${column}" is text.`);
+      }
+      const first = parseBound(type, predicate.value);
+      const second = parseBound(type, predicate.value2);
+      let lower = Number.NEGATIVE_INFINITY;
+      let upper = Number.POSITIVE_INFINITY;
+      let inclusive = true;
+      if (operator === 'gt') {
+        lower = first ?? lower;
+        inclusive = false;
+      } else if (operator === 'lt') {
+        upper = first ?? upper;
+        inclusive = false;
+      } else {
+        lower = first ?? lower;
+        upper = second ?? upper;
+      }
+      return rawPredicate((value) => {
+        const comparable = toComparable(type, value);
+        if (comparable == null) {
+          return false;
+        }
+        return inclusive
+          ? comparable >= lower && comparable <= upper
+          : comparable > lower && comparable < upper;
+      });
+    }
+    default:
+      throw new FilterError(`Unsupported filter operator "${operator as string}".`);
+  }
+};
+
+const compileNode = (node: FilterNode, columnTypes: Record<string, ColumnType>): CompiledNode =>
+  isExpression(node)
+    ? { op: node.op, children: node.predicates.map((child) => compileNode(child, columnTypes)) }
+    : compilePredicate(node, columnTypes);
+
+export const compileFilter = (expression: FilterNode, columnTypes: Record<string, ColumnType>): CompiledFilter => ({
+  root: compileNode(expression, columnTypes)
+});
+
+const countOnes = (mask: Uint8Array): number => {
   let count = 0;
   for (let index = 0; index < mask.length; index += 1) {
-    if (mask[index] === 1) {
-      count += 1;
-    }
+    count += mask[index]!;
   }
   return count;
 };
 
-const parseBooleanValue = (value: unknown): boolean | null => {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  if (typeof value === 'string') {
-    const normalised = value.trim().toLowerCase();
-    if (['true', 't', 'yes', 'y', '1'].includes(normalised)) {
-      return true;
-    }
-    if (['false', 'f', 'no', 'n', '0'].includes(normalised)) {
-      return false;
-    }
-  }
-
-  if (typeof value === 'number') {
-    if (value === 1) {
-      return true;
-    }
-    if (value === 0) {
-      return false;
-    }
-  }
-
-  return null;
-};
-
-const parseNumericValue = (value: unknown): number | null => {
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null;
-  }
-
-  if (typeof value === 'string') {
-    const numeric = Number(value.trim());
-    return Number.isFinite(numeric) ? numeric : null;
-  }
-
-  return null;
-};
-
-const parseDateValue = (value: unknown): number | null => {
-  if (value == null) {
-    return null;
-  }
-
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : null;
-  }
-
-  if (typeof value === 'string') {
-    const timestamp = Date.parse(value);
-    return Number.isFinite(timestamp) ? timestamp : null;
-  }
-
-  return null;
-};
-
-const createRegex = (pattern: string, caseSensitive?: boolean): RegExp | null => {
-  try {
-    const flags = caseSensitive ? 'u' : 'iu';
-    return new RegExp(pattern, flags);
-  } catch (error) {
-    console.warn('[filter-engine] Invalid regex pattern', error);
-    return null;
-  }
-};
-
-const evaluateTagPredicate = (
-  rows: Array<Record<string, unknown>>,
-  predicate: FilterPredicate,
-  context: FilterEvaluationContext
-): { matches: Uint8Array } => {
-  const result = new Uint8Array(rows.length);
-  const operator = predicate.operator;
-
-  if (operator !== 'eq' && operator !== 'neq') {
-    return { matches: result };
-  }
-
-  const target =
-    predicate.value === TAG_NO_LABEL_FILTER_VALUE
-      ? null
-      : predicate.value === null
-        ? null
-        : String(predicate.value ?? '');
-  const tags = context.tags ?? {};
-
-  for (let index = 0; index < rows.length; index += 1) {
-    const materialized = rows[index] as MaterializedRow | undefined;
-    const rowId = materialized?.__rowId;
-    if (rowId == null || !Number.isFinite(rowId)) {
-      result[index] = operator === 'neq' ? 1 : 0;
-      continue;
-    }
-
-    const record = tags[rowId];
-    const labelIds = Array.isArray(record?.labelIds) ? record.labelIds : [];
-    const isMatch = target === null ? labelIds.length === 0 : labelIds.includes(target);
-
-    if (operator === 'eq') {
-      result[index] = isMatch ? 1 : 0;
-    } else {
-      result[index] = isMatch ? 0 : 1;
-    }
-  }
-
-  return { matches: result };
-};
-
-const evaluatePredicate = (
-  rows: Array<Record<string, unknown>>,
-  columnTypes: Record<string, ColumnType>,
-  predicate: FilterPredicate,
-  context: FilterEvaluationContext
-): { matches: Uint8Array } => {
-  if (predicate.column === TAG_COLUMN_ID) {
-    return evaluateTagPredicate(rows, predicate, context);
-  }
-
-  const rowCount = rows.length;
-  const result = new Uint8Array(rowCount);
-  const columnType = columnTypes[predicate.column] ?? 'string';
-  const values = rows.map((row) => row[predicate.column]);
-
-  switch (columnType) {
-    case 'string': {
-      const targetValue =
-        typeof predicate.value === 'string' ? predicate.value : String(predicate.value ?? '');
-      const targetNormalised = normalizeString(targetValue, predicate.caseSensitive ?? false);
-      const valuesNormalised = values.map((value) =>
-        normalizeString(String(value ?? ''), predicate.caseSensitive ?? false)
-      );
-      if (predicate.operator === 'eq' || predicate.operator === 'neq') {
-        for (let index = 0; index < rowCount; index += 1) {
-          const exactMatch = valuesNormalised[index] === targetNormalised;
-          result[index] =
-            predicate.operator === 'eq' ? (exactMatch ? 1 : 0) : exactMatch ? 0 : 1;
-        }
-
-        return { matches: result };
-      }
-
-      if (predicate.operator === 'contains') {
-        for (let index = 0; index < rowCount; index += 1) {
-          const valueString = valuesNormalised[index];
-          result[index] = valueString.includes(targetNormalised) ? 1 : 0;
-        }
-        return { matches: result };
-      }
-
-      if (predicate.operator === 'startsWith') {
-        for (let index = 0; index < rowCount; index += 1) {
-          const valueString = valuesNormalised[index];
-          result[index] = valueString.startsWith(targetNormalised) ? 1 : 0;
-        }
-        return { matches: result };
-      }
-
-      if (
-        (predicate.operator === 'regex' ||
-          predicate.operator === 'matches' ||
-          predicate.operator === 'notMatches') &&
-        typeof predicate.value === 'string'
-      ) {
-        const regex = createRegex(predicate.value, predicate.caseSensitive);
-        if (!regex) {
-          return { matches: result };
-        }
-
-        for (let index = 0; index < rowCount; index += 1) {
-          const matches = regex.test(String(values[index] ?? ''));
-          if (predicate.operator === 'notMatches') {
-            result[index] = matches ? 0 : 1;
-          } else {
-            result[index] = matches ? 1 : 0;
-          }
-        }
-        return { matches: result };
-      }
-
-      // Fallback: unsupported operator for string yields zeros.
-      return { matches: result };
-    }
-    case 'number': {
-      const numericValue = parseNumericValue(predicate.value);
-      const numericValue2 = parseNumericValue(predicate.value2);
-
-      for (let index = 0; index < rowCount; index += 1) {
-        const value = values[index];
-        if (value == null || typeof value !== 'number' || Number.isNaN(value)) {
-          result[index] = 0;
-          continue;
-        }
-
-        switch (predicate.operator) {
-          case 'eq':
-            result[index] = numericValue != null && value === numericValue ? 1 : 0;
-            break;
-          case 'neq':
-            result[index] = numericValue != null && value === numericValue ? 0 : 1;
-            break;
-          case 'gt':
-            result[index] = numericValue != null && value > numericValue ? 1 : 0;
-            break;
-          case 'lt':
-            result[index] = numericValue != null && value < numericValue ? 1 : 0;
-            break;
-          case 'range':
-          case 'between': {
-            if (numericValue == null && numericValue2 == null) {
-              result[index] = 0;
-              break;
-            }
-            const lower = numericValue ?? Number.NEGATIVE_INFINITY;
-            const upper = numericValue2 ?? Number.POSITIVE_INFINITY;
-            result[index] = value >= lower && value <= upper ? 1 : 0;
-            break;
-          }
-          default:
-            result[index] = 0;
-        }
-      }
-      return { matches: result };
-    }
-    case 'datetime': {
-      const baseValue = parseDateValue(predicate.value);
-      const baseValue2 = parseDateValue(predicate.value2);
-
-      for (let index = 0; index < rowCount; index += 1) {
-        const valueRaw = values[index];
-        const value =
-          typeof valueRaw === 'number'
-            ? valueRaw
-            : typeof valueRaw === 'string'
-              ? parseDateValue(valueRaw)
-              : null;
-
-        if (value == null || Number.isNaN(value)) {
-          result[index] = 0;
-          continue;
-        }
-
-        switch (predicate.operator) {
-          case 'eq':
-            result[index] = baseValue != null && value === baseValue ? 1 : 0;
-            break;
-          case 'neq':
-            result[index] = baseValue != null && value === baseValue ? 0 : 1;
-            break;
-          case 'gt':
-            result[index] = baseValue != null && value > baseValue ? 1 : 0;
-            break;
-          case 'lt':
-            result[index] = baseValue != null && value < baseValue ? 1 : 0;
-            break;
-          case 'range':
-          case 'between': {
-            if (baseValue == null && baseValue2 == null) {
-              result[index] = 0;
-              break;
-            }
-            const lower = baseValue ?? Number.NEGATIVE_INFINITY;
-            const upper = baseValue2 ?? Number.POSITIVE_INFINITY;
-            result[index] = value >= lower && value <= upper ? 1 : 0;
-            break;
-          }
-          default:
-            result[index] = 0;
-        }
-      }
-      return { matches: result };
-    }
-    case 'boolean': {
-      const target = parseBooleanValue(predicate.value);
-      if (target == null) {
-        return { matches: result };
-      }
-
-      for (let index = 0; index < rowCount; index += 1) {
-        const value = values[index];
-        if (typeof value !== 'boolean') {
-          result[index] = 0;
-          continue;
-        }
-
-        if (predicate.operator === 'eq') {
-          result[index] = value === target ? 1 : 0;
-        } else if (predicate.operator === 'neq') {
-          result[index] = value === target ? 0 : 1;
-        } else {
-          result[index] = 0;
-        }
-      }
-      return { matches: result };
-    }
-    default:
-      return { matches: result };
-  }
-};
-
-const combineMasks = (
-  left: Uint8Array,
-  right: Uint8Array,
-  op: 'and' | 'or'
+const evaluateNode = (
+  node: CompiledNode,
+  view: BatchView,
+  tags: Record<number, TagRecord>,
+  cache: Map<string, string[]>,
+  predicateCounts: Record<string, number>
 ): Uint8Array => {
-  const length = left.length;
-  const result = new Uint8Array(length);
-
-  if (op === 'and') {
-    for (let index = 0; index < length; index += 1) {
-      result[index] = left[index] === 1 && right[index] === 1 ? 1 : 0;
+  if (!('op' in node)) {
+    const mask = node.evaluate(view, tags, cache);
+    if (node.id) {
+      predicateCounts[node.id] = (predicateCounts[node.id] ?? 0) + countOnes(mask);
     }
-  } else {
-    for (let index = 0; index < length; index += 1) {
-      result[index] = left[index] === 1 || right[index] === 1 ? 1 : 0;
-    }
+    return mask;
   }
 
+  if (!node.children.length) {
+    return new Uint8Array(view.rowCount).fill(1);
+  }
+
+  const result = evaluateNode(node.children[0]!, view, tags, cache, predicateCounts);
+  for (let childIndex = 1; childIndex < node.children.length; childIndex += 1) {
+    const next = evaluateNode(node.children[childIndex]!, view, tags, cache, predicateCounts);
+    for (let index = 0; index < result.length; index += 1) {
+      result[index] = node.op === 'and' ? result[index]! & next[index]! : result[index]! | next[index]!;
+    }
+  }
   return result;
 };
 
-const evaluateNode = (
-  rows: Array<Record<string, unknown>>,
-  columnTypes: Record<string, ColumnType>,
-  node: FilterNode,
-  context: FilterEvaluationContext,
-  options?: FilterEvaluationOptions
-): { matches: Uint8Array } => {
-  if (isExpression(node)) {
-    if (!node.predicates.length) {
-      return { matches: new Uint8Array(rows.length).fill(1) };
-    }
-
-    let accumulator = evaluateNode(rows, columnTypes, node.predicates[0]!, context, options);
-
-    for (let index = 1; index < node.predicates.length; index += 1) {
-      const next = evaluateNode(rows, columnTypes, node.predicates[index]!, context, options);
-      accumulator = {
-        matches: combineMasks(accumulator.matches, next.matches, node.op)
-      };
-    }
-
-    return accumulator;
-  }
-
-  const predicateResult = evaluatePredicate(rows, columnTypes, node, context);
-  if (options?.collectPredicateMatch && node.id) {
-    options.collectPredicateMatch(node.id, countMatches(predicateResult.matches));
-  }
-  return predicateResult;
-};
-
-const evaluateFilterInternal = (
-  rows: MaterializedRow[],
-  columnTypes: Record<string, ColumnType>,
-  expression: FilterNode | null,
-  context: FilterEvaluationContext,
-  options?: FilterEvaluationOptions
-): FilterResult => {
-  const rowCount = rows.length;
-
-  if (!expression) {
-    const matches = new Uint8Array(rowCount).fill(1);
-    return { matches, matchedCount: rowCount };
-  }
-
-  const result = evaluateNode(rows, columnTypes, expression, context, options);
-  const matchedCount = countMatches(result.matches);
-
-  return { matches: result.matches, matchedCount };
-};
-
-export const evaluateFilterOnRows = (
-  rows: MaterializedRow[],
-  columnTypes: Record<string, ColumnType>,
-  expression: FilterNode | null,
-  context: FilterEvaluationContext = {},
-  options?: FilterEvaluationOptions
-): FilterResult => evaluateFilterInternal(rows, columnTypes, expression, context, options);
-
+/** Evaluates a compiled filter against one batch; predicate match counts accumulate into `predicateCounts`. */
 export const evaluateFilterOnBatch = (
-  batch: RowBatch,
-  expression: FilterNode | null,
-  context: FilterEvaluationContext = {},
-  options?: FilterEvaluationOptions
-): FilterResult => {
-  const materialised = materializeRowBatch(batch);
-  return evaluateFilterInternal(materialised.rows, batch.columnTypes, expression, context, options);
-};
-
-export const evaluateFilter = evaluateFilterOnBatch;
-
-export const collectMatchingRowIdsFromRows = (
-  rows: MaterializedRow[],
-  columnTypes: Record<string, ColumnType>,
-  expression: FilterNode | null,
-  context: FilterEvaluationContext = {}
-): Uint32Array => {
-  const { matches } = evaluateFilterInternal(rows, columnTypes, expression, context);
-  const selected: number[] = [];
-
-  for (let index = 0; index < matches.length; index += 1) {
-    if (matches[index] === 1) {
-      selected.push(rows[index]!.__rowId);
-    }
-  }
-
-  return Uint32Array.from(selected);
-};
-
-export const collectMatchingRowIds = (
-  batch: RowBatch,
-  expression: FilterNode | null,
-  context: FilterEvaluationContext = {}
-): Uint32Array => {
-  const materialised = materializeRowBatch(batch);
-  return collectMatchingRowIdsFromRows(materialised.rows, batch.columnTypes, expression, context);
-};
+  filter: CompiledFilter,
+  view: BatchView,
+  tags: Record<number, TagRecord>,
+  predicateCounts: Record<string, number> = {}
+): Uint8Array => evaluateNode(filter.root, view, tags, new Map(), predicateCounts);

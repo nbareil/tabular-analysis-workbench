@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { FilterState } from '@state/sessionStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useTagStore } from '@state/tagStore';
+import { Modal } from '@components/Modal';
 import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from '@workers/types';
 import { parseTagExport } from '@utils/tagExport';
 import { shallow } from 'zustand/shallow';
@@ -69,7 +70,6 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
     }),
     shallow
   );
-  const load = useTagStore((state) => state.load);
   const upsertLabel = useTagStore((state) => state.upsertLabel);
   const deleteLabel = useTagStore((state) => state.deleteLabel);
   const importTags = useTagStore((state) => state.importTags);
@@ -81,15 +81,6 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [importErrorMessage, setImportErrorMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    if (status === 'idle') {
-      void load();
-    }
-  }, [load, open, status]);
 
   useEffect(() => {
     if (!open) {
@@ -220,17 +211,13 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
       const file = await handle.getFile();
       const text = await file.text();
       const parsed = parseTagExport(JSON.parse(text));
-      const response = await importTags(parsed.snapshot, mergeStrategy);
-
-      if (!response) {
-        throw new Error('Failed to import annotations.');
-      }
+      const response = await importTags(parsed.snapshot, mergeStrategy, parsed.metadata.source);
 
       const labelCount = response.labels.length;
       const annotationCount = Object.keys(response.tags).length;
       const labelPlural = labelCount === 1 ? 'label' : 'labels';
       const annotationPlural = annotationCount === 1 ? 'annotation' : 'annotations';
-      const sourceName = parsed.metadata?.source?.fileName ?? file.name;
+      const sourceName = parsed.metadata.source?.fileName ?? file.name;
       const context = sourceName ? ` from ${sourceName}` : '';
       setImportFeedback(
         `Imported ${labelCount} ${labelPlural} and ${annotationCount} ${annotationPlural}${context}.`
@@ -250,30 +237,23 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70">
-      <div className="w-full max-w-2xl rounded border border-slate-700 bg-slate-900 shadow-xl">
-        <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-          <h2 className="text-sm font-semibold text-slate-100">Labels</h2>
-          <div className="flex gap-2 text-xs">
-            {labelFilters.length > 0 ? (
-              <button
-                type="button"
-                className="rounded border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800"
-                onClick={handleClearLabelFilters}
-              >
-                Clear label filters
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="rounded border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800"
-              onClick={onClose}
-            >
-              Close
-            </button>
-          </div>
-        </header>
-        <div className="grid gap-4 px-4 py-3 text-sm text-slate-200 md:grid-cols-[2fr_3fr]">
+    <Modal
+      title="Labels"
+      onClose={onClose}
+      widthClassName="max-w-2xl"
+      footer={
+        labelFilters.length > 0 ? (
+          <button
+            type="button"
+            className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
+            onClick={handleClearLabelFilters}
+          >
+            Clear label filters
+          </button>
+        ) : undefined
+      }
+    >
+        <div className="grid gap-4 text-sm text-slate-200 md:grid-cols-[2fr_3fr]">
           <section className="space-y-3">
             <div className="space-y-2">
               <label className="flex flex-col gap-1 text-xs uppercase tracking-wide text-slate-400">
@@ -419,8 +399,7 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
             </ul>
           </section>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 };
 

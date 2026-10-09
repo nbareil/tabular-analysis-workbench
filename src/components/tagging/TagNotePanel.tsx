@@ -5,6 +5,7 @@ import TagPalette from './TagPalette';
 import MarkdownEditor from './MarkdownEditor';
 import { renderMarkdownToSafeHtml } from '@utils/markdown';
 import { shallow } from 'zustand/shallow';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 interface TagNotePanelProps {
   open: boolean;
@@ -35,11 +36,12 @@ const TagNotePanel = ({
     }),
     shallow
   );
-  const load = useTagStore((state) => state.load);
   const [note, setNote] = useState(initialNote);
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>(initialLabelIds);
 
   const activeRowRef = useRef<number | null>(rowId ?? null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  useFocusTrap(panelRef, open);
 
   useEffect(() => {
     if (!open) {
@@ -53,11 +55,7 @@ const TagNotePanel = ({
       setNote(initialNote);
       setSelectedLabelIds(initialLabelIds);
     }
-
-    if (status === 'idle') {
-      void load();
-    }
-  }, [initialLabelIds, initialNote, load, open, rowId, status]);
+  }, [initialLabelIds, initialNote, open, rowId]);
 
   useEffect(() => {
     if (!open) {
@@ -106,12 +104,18 @@ const TagNotePanel = ({
   return (
     <div className="fixed inset-0 z-50 flex">
       <div className="absolute inset-0 bg-slate-950/70" onClick={handleOverlayClick} />
-      <aside className="ml-auto flex h-full w-full max-w-xl flex-col border-l border-slate-800 bg-slate-900 text-slate-100 shadow-2xl">
+      <aside
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Row labels and note"
+        className="ml-auto flex h-full w-full max-w-xl flex-col border-l border-slate-800 bg-slate-900 text-slate-100 shadow-2xl"
+      >
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-4">
           <div>
             <p className="text-[11px] uppercase tracking-wide text-slate-500">Row annotation</p>
             <p className="text-lg font-semibold text-slate-100">
-              Row {rowId != null ? `#${rowId}` : 'selection'}
+              Row {rowId != null ? `#${rowId + 1}` : 'selection'}
             </p>
             <p className="text-xs text-slate-400">
               {selectedLabels.length > 0 ? (

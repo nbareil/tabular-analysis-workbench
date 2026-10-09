@@ -1,247 +1,187 @@
 // @vitest-environment node
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { RowBatchStore } from './rowBatchStore';
+import { encodeColumn } from './csvParser';
+import { RowBatchStore, ROW_CACHE_DIRECTORY, type BatchView } from './rowBatchStore';
 import type { RowBatch } from './types';
 
-const textEncoder = new TextEncoder();
-
-const toUint8Array = (source: BufferSource): Uint8Array => {
-  if (source instanceof ArrayBuffer) {
-    return new Uint8Array(source);
-  }
-
-  return new Uint8Array(source.buffer, source.byteOffset, source.byteLength);
+const makeBatch = (rowStart: number, columns: Record<string, string[]>): RowBatch => {
+  const rowCount = Object.values(columns)[0]!.length;
+  return {
+    rowIds: Uint32Array.from({ length: rowCount }, (_, index) => rowStart + index),
+    columns: Object.fromEntries(Object.entries(columns).map(([name, values]) => [name, encodeColumn(values)])),
+    columnTypes: {},
+    columnInference: {},
+    stats: { rowsParsed: rowStart + rowCount, bytesParsed: 0, malformedRows: 0, eof: false }
+  };
 };
 
-class MockWritable {
-  public writes: BufferSource[] = [];
-  public closed = false;
+const fillStore = async (store: RowBatchStore): Promise<void> => {
+  await store.storeBatch(makeBatch(0, { name: ['alice', 'bob'], city: ['Zürich', ''] }));
+  await store.storeBatch(makeBatch(2, { name: ['carol'], city: ['Paris'] }));
+  await store.storeBatch(makeBatch(3, { name: ['dave', '日本'], city: ['Oslo', 'Tokyo'] }));
+};
 
-  async write(data: unknown): Promise<void> {
-    this.writes.push(data as BufferSource);
+const collect = async (store: RowBatchStore): Promise<BatchView[]> => {
+  const views: BatchView[] = [];
+  for await (const view of store.iterateBatches()) {
+    views.push(view);
   }
+  return views;
+};
 
+const sharedBehaviour = (createStore: () => Promise<RowBatchStore>) => {
+  it('iterates batches with row offsets and decoded columns', async () => {
+    const store = await createStore();
+    await fillStore(store);
+    expect(store.totalRows).toBe(5);
+    expect(store.batchCount).toBe(3);
+
+    const views = await collect(store);
+    expect(views.map((view) => [view.rowStart, view.rowCount])).toEqual([
+      [0, 2],
+      [2, 1],
+      [3, 2]
+    ]);
+    expect(views.flatMap((view) => view.column('city'))).toEqual(['Zürich', '', 'Paris', 'Oslo', 'Tokyo']);
+    expect(views[0]!.column('missing')).toEqual(['', '']);
+  });
+
+  it('returns rows in the requested order across batches and skips unknown ids', async () => {
+    const store = await createStore();
+    await fillStore(store);
+    const rows = await store.getRows([4, 0, 2, 99, 1]);
+    expect(rows).toEqual([
+      { __rowId: 4, name: '日本', city: 'Tokyo' },
+      { __rowId: 0, name: 'alice', city: 'Zürich' },
+      { __rowId: 2, name: 'carol', city: 'Paris' },
+      { __rowId: 1, name: 'bob', city: '' }
+    ]);
+  });
+
+  it('starts empty', async () => {
+    const store = await createStore();
+    expect(store.totalRows).toBe(0);
+    expect(await store.getRows([0])).toEqual([]);
+  });
+};
+
+describe('RowBatchStore without OPFS (memory fallback)', () => {
+  sharedBehaviour(() => RowBatchStore.create('memory'));
+});
+
+class MockWritable {
+  constructor(private readonly file: MockFileHandle) {}
+  private parts: Blob[] = [];
+  async write(data: Blob): Promise<void> {
+    this.parts.push(data);
+  }
   async close(): Promise<void> {
-    this.closed = true;
+    this.file.content = new Blob(this.parts);
   }
 }
 
 class MockFileHandle {
-  public readonly writable = new MockWritable();
-
-  async createWritable(): Promise<FileSystemWritableFileStream> {
-    return this.writable as unknown as FileSystemWritableFileStream;
+  content: Blob = new Blob([]);
+  reads = 0;
+  async createWritable(): Promise<MockWritable> {
+    return new MockWritable(this);
   }
-
-  async getFile(): Promise<File> {
-    const chunks = this.writable.writes.map(toUint8Array);
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-    const arrayBuffer = new ArrayBuffer(totalLength);
-    const bytes = new Uint8Array(arrayBuffer);
-    let offset = 0;
-
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-
-    return {
-      size: bytes.byteLength,
-      arrayBuffer: async () => arrayBuffer.slice(0)
-    } as unknown as File;
+  async getFile(): Promise<Blob> {
+    this.reads += 1;
+    return this.content;
   }
 }
 
-class MockDirectoryHandle {
-  private readonly handles = new Map<string, MockFileHandle>();
-
-  async getFileHandle(name: string, _options?: { create?: boolean }): Promise<FileSystemFileHandle> {
-    let handle = this.handles.get(name);
-    if (!handle) {
-      handle = new MockFileHandle();
-      this.handles.set(name, handle);
+class MockDirectory {
+  readonly files = new Map<string, MockFileHandle>();
+  readonly directories = new Map<string, MockDirectory>();
+  async getFileHandle(name: string): Promise<MockFileHandle> {
+    if (!this.files.has(name)) {
+      this.files.set(name, new MockFileHandle());
     }
-    return handle as unknown as FileSystemFileHandle;
+    return this.files.get(name)!;
   }
-
-  getMockHandle(name: string): MockFileHandle | undefined {
-    return this.handles.get(name);
+  async getDirectoryHandle(name: string): Promise<MockDirectory> {
+    if (!this.directories.has(name)) {
+      this.directories.set(name, new MockDirectory());
+    }
+    return this.directories.get(name)!;
+  }
+  async removeEntry(name: string): Promise<void> {
+    this.directories.delete(name);
+    this.files.delete(name);
+  }
+  async *keys(): AsyncGenerator<string> {
+    yield* this.directories.keys();
+    yield* this.files.keys();
   }
 }
 
-const createStringBatch = (rowId: number, value: string): RowBatch => {
-  const encoded = textEncoder.encode(value);
-  const offsets = new Uint32Array(2);
-  offsets[0] = 0;
-  offsets[1] = encoded.byteLength;
-  const data = encoded.buffer.slice(
-    encoded.byteOffset,
-    encoded.byteOffset + encoded.byteLength
-  );
+describe('RowBatchStore with OPFS', () => {
+  let root: MockDirectory;
 
-  return {
-    rowIds: new Uint32Array([rowId]),
-    columns: {
-      value: {
-        type: 'string',
-        offsets,
-        data
-      }
-    },
-    columnTypes: {
-      value: 'string'
-    },
-    columnInference: {
-      value: {
-        type: 'string',
-        confidence: 1,
-        samples: 1,
-        nullCount: 0,
-        examples: [value]
-      }
-    },
-    stats: {
-      rowsParsed: rowId + 1,
-      bytesParsed: encoded.byteLength,
-      eof: false
-    }
+  const stubOpfs = (locks?: unknown) => {
+    root = new MockDirectory();
+    vi.stubGlobal('navigator', { storage: { getDirectory: async () => root }, locks });
   };
-};
 
-describe('RowBatchStore memory fallback', () => {
-  it('materializes rows from all batches even when exceeding the cache size', async () => {
-    const store = await RowBatchStore.create('test-dataset');
-
-    const requestedRows: number[] = [];
-    for (let index = 0; index < 5; index += 1) {
-      const batch = createStringBatch(index, `row-${index}`);
-      await store.storeBatch(batch);
-      requestedRows.push(index);
-    }
-
-    const rows = await store.materializeRows(requestedRows);
-    expect(rows).toHaveLength(requestedRows.length);
-    expect(rows.map((row) => row.__rowId)).toEqual(requestedRows);
-    expect(rows.map((row) => row.value)).toEqual(requestedRows.map((index) => `row-${index}`));
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
-});
 
-describe('RowBatchStore OPFS writes', () => {
-  it('streams existing buffers without cloning and preserves null masks', async () => {
-    const store = await RowBatchStore.create('opfs-dataset');
-    const directoryHandle = new MockDirectoryHandle();
-    (store as unknown as { useMemoryFallback: boolean }).useMemoryFallback = false;
-    (store as unknown as { directoryHandle: FileSystemDirectoryHandle | null }).directoryHandle =
-      directoryHandle as unknown as FileSystemDirectoryHandle;
+  sharedBehaviour(async () => {
+    stubOpfs();
+    return RowBatchStore.create('opfs');
+  });
 
-    const rowIdsBuffer = new ArrayBuffer(32);
-    const rowIds = new Uint32Array(rowIdsBuffer, 8, 2);
-    rowIds.set([10, 11]);
+  it('writes one file per batch and reads evicted batches back from disk', async () => {
+    stubOpfs();
+    const store = await RowBatchStore.create('opfs');
+    for (let batch = 0; batch < 12; batch += 1) {
+      await store.storeBatch(makeBatch(batch * 2, { v: [`r${batch * 2}`, `r${batch * 2 + 1}`] }));
+    }
+    const baseDir = root.directories.get(ROW_CACHE_DIRECTORY)!;
+    const [datasetDir] = baseDir.directories.values();
+    expect(datasetDir!.files.size).toBe(12);
 
-    const stringOffsetsBuffer = new ArrayBuffer(32);
-    const stringOffsets = new Uint32Array(stringOffsetsBuffer, 4, 3);
-    stringOffsets.set([0, 4, 8]);
-    const stringData = new ArrayBuffer(8);
-    new Uint8Array(stringData).set([97, 98, 99, 100, 119, 120, 121, 122]);
+    const rows = await store.getRows([0, 23, 5]);
+    expect(rows.map((row) => row.v)).toEqual(['r0', 'r23', 'r5']);
+    const firstFile = datasetDir!.files.get('batch-000000.bin')!;
+    expect(firstFile.reads).toBeGreaterThan(0);
 
-    const numberDataBuffer = new ArrayBuffer(64);
-    const numberData = new Float64Array(numberDataBuffer, Float64Array.BYTES_PER_ELEMENT, 2);
-    numberData.set([1.5, 2.5]);
+    const all = (await collect(store)).flatMap((view) => view.column('v'));
+    expect(all).toEqual(Array.from({ length: 24 }, (_, index) => `r${index}`));
+  });
 
-    const nullMaskBuffer = new ArrayBuffer(8);
-    const nullMask = new Uint8Array(nullMaskBuffer, 1, 2);
-    nullMask.set([0b00000001, 0b00000010]);
+  it('deletes its directory on dispose', async () => {
+    stubOpfs();
+    const store = await RowBatchStore.create('opfs');
+    await store.storeBatch(makeBatch(0, { v: ['x'] }));
+    const baseDir = root.directories.get(ROW_CACHE_DIRECTORY)!;
+    expect(baseDir.directories.size).toBe(1);
+    await store.dispose();
+    expect(baseDir.directories.size).toBe(0);
+    expect(store.totalRows).toBe(0);
+  });
 
-    const batch: RowBatch = {
-      rowIds,
-      columns: {
-        label: {
-          type: 'string',
-          offsets: stringOffsets,
-          data: stringData
-        },
-        value: {
-          type: 'number',
-          data: numberData,
-          nullMask
-        }
+  it('sweeps stale directories whose lock is no longer held', async () => {
+    const held: Array<{ name: string }> = [];
+    const locks = {
+      request: (name: string, callback: () => Promise<void>) => {
+        held.push({ name });
+        return callback();
       },
-      columnTypes: {
-        label: 'string',
-        value: 'number'
-      },
-      columnInference: {
-        label: {
-          type: 'string',
-          confidence: 1,
-          samples: 2,
-          nullCount: 0,
-          examples: []
-        },
-        value: {
-          type: 'number',
-          confidence: 1,
-          samples: 2,
-          nullCount: 0,
-          examples: []
-        }
-      },
-      stats: {
-        rowsParsed: (rowIds[rowIds.length - 1] ?? 0) + 1,
-        bytesParsed: 0,
-        eof: false
-      }
+      query: async () => ({ held: held.slice() })
     };
+    stubOpfs(locks);
+    const baseDir = await root.getDirectoryHandle(ROW_CACHE_DIRECTORY);
+    await baseDir.getDirectoryHandle('stale-dataset');
 
-    await store.storeBatch(batch);
-
-    const handle = directoryHandle.getMockHandle('batch-000000.bin');
-    expect(handle).toBeDefined();
-    const writes = handle!.writable.writes;
-    expect(writes).toHaveLength(7);
-
-    const rowIdChunk = writes[2] as Uint8Array;
-    expect(rowIdChunk.buffer).toBe(rowIds.buffer);
-    expect(rowIdChunk.byteOffset).toBe(rowIds.byteOffset);
-    expect(rowIdChunk.byteLength).toBe(rowIds.byteLength);
-
-    const stringOffsetsChunk = writes[3] as Uint8Array;
-    expect(stringOffsetsChunk.buffer).toBe(stringOffsets.buffer);
-    expect(stringOffsetsChunk.byteOffset).toBe(stringOffsets.byteOffset);
-    expect(stringOffsetsChunk.byteLength).toBe(stringOffsets.byteLength);
-
-    const stringDataChunk = writes[4] as ArrayBuffer;
-    expect(stringDataChunk).toBe(stringData);
-
-    const numberDataChunk = writes[5] as Uint8Array;
-    expect(numberDataChunk.buffer).toBe(numberData.buffer);
-    expect(numberDataChunk.byteOffset).toBe(numberData.byteOffset);
-    expect(numberDataChunk.byteLength).toBe(numberData.byteLength);
-
-    const nullMaskChunk = writes[6] as Uint8Array;
-    expect(nullMaskChunk.buffer).toBe(nullMask.buffer);
-    expect(nullMaskChunk.byteOffset).toBe(nullMask.byteOffset);
-    expect(nullMaskChunk.byteLength).toBe(nullMask.byteLength);
-  });
-
-  it('materializes evicted UTF-8 string batches correctly after disk reload', async () => {
-    const store = await RowBatchStore.create('opfs-eviction-dataset');
-    const directoryHandle = new MockDirectoryHandle();
-    (store as unknown as { useMemoryFallback: boolean }).useMemoryFallback = false;
-    (store as unknown as { directoryHandle: FileSystemDirectoryHandle | null }).directoryHandle =
-      directoryHandle as unknown as FileSystemDirectoryHandle;
-
-    const values = ['München', 'Québec', '東京', 'emoji 🚀', 'café crème'];
-
-    for (let index = 0; index < values.length; index += 1) {
-      await store.storeBatch(createStringBatch(index, values[index]!));
-    }
-
-    const rows = await store.materializeRows([0, 1, 2, 3, 4]);
-
-    expect(rows.map((row) => row.__rowId)).toEqual([0, 1, 2, 3, 4]);
-    expect(rows.map((row) => row.value)).toEqual(values);
+    const store = await RowBatchStore.create('opfs');
+    expect(baseDir.directories.has('stale-dataset')).toBe(false);
+    expect(baseDir.directories.size).toBe(1);
+    await store.dispose();
   });
 });

@@ -71,7 +71,7 @@ describe('debugLog', () => {
       return;
     }
 
-    window.localStorage.setItem('tabularWorkbenchDebug', '1');
+    window.localStorage.setItem('wlx:debug', '1');
 
     const { isDebugLoggingEnabled } = await import('./debugLog');
 

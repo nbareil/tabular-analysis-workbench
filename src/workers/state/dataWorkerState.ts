@@ -14,37 +14,54 @@ import { normaliseLabelIds } from '../taggingHelpers';
 import { createDefaultMitreAttackTacticLabels } from '@constants/mitreAttackTactics';
 
 const DEFAULT_OPTIONS = {
-  chunkSize: 1_048_576,
   debugLogging: false,
   slowBatchThresholdMs: 32
 } as const;
 
-const TAG_PERSIST_DEBOUNCE_MS = 30_000;
+const TAG_PERSIST_DEBOUNCE_MS = 5_000;
+
+export class StaleOperationError extends Error {
+  override name = 'StaleOperationError';
+  constructor() {
+    super('Superseded by a newer request');
+  }
+}
 
 export interface WorkerOptionsState {
-  chunkSize: number;
   debugLogging: boolean;
   slowBatchThresholdMs: number;
 }
 
+export interface SearchSpec {
+  query: string;
+  columns: string[];
+  caseSensitive: boolean;
+}
+
+/**
+ * Everything known about the loaded file. A new object is created for every load, so holding a
+ * reference doubles as a token: work that started on an older dataset can detect it was replaced.
+ *
+ * The view is a pipeline: all rows → filter → search → sort. Each stage is null when inactive and
+ * the active row order is the last non-null stage.
+ */
 export interface DatasetState {
   batchStore: RowBatchStore | null;
-  datasetKey: string | null;
+  fileName: string | null;
   header: string[];
   columnTypes: Record<string, ColumnType>;
   columnInference: Record<string, ColumnInference>;
-  filterRowIds: Uint32Array | null;
+  totalRows: number;
+  bytesParsed: number;
+  malformedRows: number;
+  loading: boolean;
   filterExpression: FilterNode | null;
+  filterRowIds: Uint32Array | null;
+  search: SearchSpec | null;
   searchRowIds: Uint32Array | null;
   sorts: SortDefinition[];
   sortedRowIds: Uint32Array | null;
-  totalRows: number;
-  bytesParsed: number;
-  fileHandle: FileSystemFileHandle | null;
-  backgroundSortPromise: Promise<Uint32Array | void> | null;
-  sortComplete: boolean;
-  columnValueDistributionCache: Map<string, ColumnValueDistributionResult>;
-  columnValueDistributionPromises: Map<string, Promise<ColumnValueDistributionResult>>;
+  valueDistributions: Map<string, Promise<ColumnValueDistributionResult>>;
 }
 
 export interface TaggingState {
@@ -52,50 +69,54 @@ export interface TaggingState {
   tags: Record<number, TagRecord>;
   store: TaggingStore | null;
   dirty: boolean;
-  persistTimer: number | null;
+  persistTimer: ReturnType<typeof setTimeout> | null;
 }
+
+/**
+ * Pipeline stages, in order; starting an operation invalidates in-flight work on its stage and later ones.
+ * Grouping reads the filtered/searched rows, so it comes last.
+ */
+export type ViewStage = 'filter' | 'search' | 'sort' | 'group';
+const STAGES: ViewStage[] = ['filter', 'search', 'sort', 'group'];
 
 export interface DataWorkerStateController {
   readonly options: Readonly<WorkerOptionsState>;
-  readonly dataset: Readonly<DatasetState>;
-  readonly tagging: Readonly<TaggingState>;
+  readonly dataset: DatasetState;
+  readonly tagging: TaggingState;
   setOptions(options: Partial<WorkerOptionsState>): void;
-  prepareDatasetForLoad(params: {
-    batchStore: RowBatchStore;
-    datasetKey: string;
-    fileHandle: FileSystemFileHandle | null;
-  }): void;
-  updateDataset(mutator: (dataset: DatasetState) => void): void;
+  startDataset(params: { batchStore: RowBatchStore; fileName: string }): DatasetState;
   resetDataset(): void;
+  /**
+   * Runs view operations one at a time in request order. `check` throws StaleOperationError once a
+   * newer request for the same or an earlier stage arrives, or the dataset is replaced.
+   */
+  runViewOperation<T>(stage: ViewStage, operation: (check: () => void) => Promise<T>): Promise<T>;
+  hydrateTagging(fingerprint: DatasetFingerprint, dataset: DatasetState): Promise<void>;
   resetTagging(): void;
-  updateTagging<T = void>(mutator: (tagging: TaggingState) => T): T;
-  clearTaggingPersistTimer(): void;
-  hydrateTaggingStore(fingerprint: DatasetFingerprint | null): Promise<void>;
   markTaggingDirty(): void;
   persistTaggingNow(): Promise<void>;
 }
 
-const createEmptyDatasetState = (): DatasetState => ({
+const createEmptyDataset = (): DatasetState => ({
   batchStore: null,
-  datasetKey: null,
+  fileName: null,
   header: [],
   columnTypes: {},
   columnInference: {},
-  filterRowIds: null,
+  totalRows: 0,
+  bytesParsed: 0,
+  malformedRows: 0,
+  loading: false,
   filterExpression: null,
+  filterRowIds: null,
+  search: null,
   searchRowIds: null,
   sorts: [],
   sortedRowIds: null,
-  totalRows: 0,
-  bytesParsed: 0,
-  fileHandle: null,
-  backgroundSortPromise: null,
-  sortComplete: true,
-  columnValueDistributionCache: new Map(),
-  columnValueDistributionPromises: new Map()
+  valueDistributions: new Map()
 });
 
-const createEmptyTaggingState = (): TaggingState => ({
+const createEmptyTagging = (): TaggingState => ({
   labels: [],
   tags: {},
   store: null,
@@ -103,166 +124,133 @@ const createEmptyTaggingState = (): TaggingState => ({
   persistTimer: null
 });
 
+const canonicaliseTags = (
+  incoming: Record<string, TagRecord> | undefined,
+  labels: LabelDefinition[]
+): Record<number, TagRecord> => {
+  const allowed = new Set(labels.map((label) => label.id));
+  const tags: Record<number, TagRecord> = {};
+  for (const [rowKey, record] of Object.entries(incoming ?? {})) {
+    const rowId = Number(rowKey);
+    if (!Number.isInteger(rowId) || rowId < 0 || !record) {
+      continue;
+    }
+    const canonical: TagRecord = {
+      labelIds: normaliseLabelIds(record.labelIds).filter((id) => allowed.has(id)),
+      updatedAt: Number.isFinite(record.updatedAt) ? record.updatedAt : Date.now()
+    };
+    if (typeof record.note === 'string' && record.note.length > 0) {
+      canonical.note = record.note;
+    }
+    if (canonical.labelIds.length > 0 || canonical.note) {
+      tags[rowId] = canonical;
+    }
+  }
+  return tags;
+};
+
 class DataWorkerState implements DataWorkerStateController {
-  private _options: WorkerOptionsState = { ...DEFAULT_OPTIONS };
-  private _dataset: DatasetState = createEmptyDatasetState();
-  private _tagging: TaggingState = createEmptyTaggingState();
-
-  get options(): Readonly<WorkerOptionsState> {
-    return this._options;
-  }
-
-  get dataset(): Readonly<DatasetState> {
-    return this._dataset;
-  }
-
-  get tagging(): Readonly<TaggingState> {
-    return this._tagging;
-  }
+  options: WorkerOptionsState = { ...DEFAULT_OPTIONS };
+  dataset: DatasetState = createEmptyDataset();
+  tagging: TaggingState = createEmptyTagging();
+  private generations: Record<ViewStage, number> = { filter: 0, search: 0, sort: 0, group: 0 };
+  private queue: Promise<unknown> = Promise.resolve();
 
   setOptions(options: Partial<WorkerOptionsState>): void {
-    this._options = {
-      chunkSize:
-        typeof options.chunkSize === 'number' && Number.isFinite(options.chunkSize)
-          ? options.chunkSize
-          : this._options.chunkSize,
-      debugLogging:
-        typeof options.debugLogging === 'boolean'
-          ? options.debugLogging
-          : this._options.debugLogging,
+    this.options = {
+      debugLogging: options.debugLogging ?? this.options.debugLogging,
       slowBatchThresholdMs:
-        typeof options.slowBatchThresholdMs === 'number' &&
-        Number.isFinite(options.slowBatchThresholdMs) &&
-        options.slowBatchThresholdMs >= 0
+        options.slowBatchThresholdMs != null && options.slowBatchThresholdMs >= 0
           ? options.slowBatchThresholdMs
-          : this._options.slowBatchThresholdMs
+          : this.options.slowBatchThresholdMs
     };
   }
 
-  prepareDatasetForLoad(params: {
-    batchStore: RowBatchStore;
-    datasetKey: string;
-    fileHandle: FileSystemFileHandle | null;
-  }): void {
-    this._dataset = {
-      ...createEmptyDatasetState(),
-      batchStore: params.batchStore,
-      datasetKey: params.datasetKey,
-      fileHandle: params.fileHandle,
-      sortComplete: true
-    };
-  }
-
-  updateDataset(mutator: (dataset: DatasetState) => void): void {
-    mutator(this._dataset);
+  startDataset({ batchStore, fileName }: { batchStore: RowBatchStore; fileName: string }): DatasetState {
+    this.dataset = { ...createEmptyDataset(), batchStore, fileName, loading: true };
+    return this.dataset;
   }
 
   resetDataset(): void {
-    this._dataset = createEmptyDatasetState();
+    this.dataset = createEmptyDataset();
+  }
+
+  runViewOperation<T>(stage: ViewStage, operation: (check: () => void) => Promise<T>): Promise<T> {
+    for (const later of STAGES.slice(STAGES.indexOf(stage))) {
+      this.generations[later] += 1;
+    }
+    // A request at stage T bumps T and every later stage, so this operation is superseded exactly when
+    // its own stage counter moves: a newer request at the same or an earlier stage.
+    const generation = this.generations[stage];
+    const dataset = this.dataset;
+    const check = (): void => {
+      if (dataset !== this.dataset || this.generations[stage] !== generation) {
+        throw new StaleOperationError();
+      }
+    };
+    const run = this.queue.then(() => {
+      check();
+      return operation(check);
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  async hydrateTagging(fingerprint: DatasetFingerprint, dataset: DatasetState): Promise<void> {
+    const store = await TaggingStore.create(fingerprint);
+    const snapshot = await store.load();
+    if (dataset !== this.dataset) {
+      return;
+    }
+    const labels = snapshot?.labels ?? createDefaultMitreAttackTacticLabels();
+    this.tagging = {
+      ...createEmptyTagging(),
+      store,
+      labels,
+      tags: canonicaliseTags(snapshot?.tags, labels)
+    };
   }
 
   resetTagging(): void {
-    this.clearTaggingPersistTimer();
-    this._tagging = createEmptyTaggingState();
-  }
-
-  updateTagging<T = void>(mutator: (tagging: TaggingState) => T): T {
-    return mutator(this._tagging);
-  }
-
-  clearTaggingPersistTimer(): void {
-    if (this._tagging.persistTimer != null) {
-      clearTimeout(this._tagging.persistTimer);
-      this._tagging.persistTimer = null;
+    if (this.tagging.persistTimer != null) {
+      clearTimeout(this.tagging.persistTimer);
     }
-  }
-
-  async hydrateTaggingStore(fingerprint: DatasetFingerprint | null): Promise<void> {
-    this.clearTaggingPersistTimer();
-
-    if (!fingerprint) {
-      this._tagging = createEmptyTaggingState();
-      return;
-    }
-
-    try {
-      const store = await TaggingStore.create(fingerprint);
-      this._tagging.store = store;
-      const snapshot = await store.load();
-      const labels =
-        snapshot == null ? createDefaultMitreAttackTacticLabels() : (snapshot.labels ?? []);
-      this._tagging.labels = labels;
-      const allowedLabelIds = new Set(labels.map((label) => label.id));
-      const tags: Record<number, TagRecord> = {};
-      const incomingTags = snapshot?.tags ?? {};
-
-      for (const [rowKey, record] of Object.entries(incomingTags)) {
-        const rowId = Number(rowKey);
-        if (!Number.isFinite(rowId) || rowId < 0 || !record) {
-          continue;
-        }
-
-        const labelIds =
-          Array.isArray((record as any).labelIds) && (record as any).labelIds.length > 0
-            ? normaliseLabelIds((record as any).labelIds)
-            : typeof (record as any).labelId === 'string'
-              ? normaliseLabelIds([(record as any).labelId])
-              : [];
-        const filteredLabelIds = labelIds.filter((id) => allowedLabelIds.has(id));
-        const canonical: TagRecord = {
-          labelIds: filteredLabelIds,
-          updatedAt:
-            typeof record.updatedAt === 'number' && Number.isFinite(record.updatedAt)
-              ? record.updatedAt
-              : Date.now()
-        };
-        if (typeof record.note === 'string' && record.note.length > 0) {
-          canonical.note = record.note;
-        }
-
-        if (canonical.labelIds.length > 0 || canonical.note) {
-          tags[rowId] = canonical;
-        }
-      }
-
-      this._tagging.tags = tags;
-      this._tagging.dirty = false;
-    } catch (error) {
-      console.warn('[data-worker][tagging] Failed to hydrate tagging store', error);
-      this._tagging = createEmptyTaggingState();
-    }
+    this.tagging = createEmptyTagging();
   }
 
   markTaggingDirty(): void {
-    this._tagging.dirty = true;
-    this.scheduleTaggingPersist();
+    this.tagging.dirty = true;
+    this.schedulePersist();
   }
 
   async persistTaggingNow(): Promise<void> {
-    if (!this._tagging.store || !this._tagging.dirty) {
+    const tagging = this.tagging;
+    if (tagging.persistTimer != null) {
+      clearTimeout(tagging.persistTimer);
+      tagging.persistTimer = null;
+    }
+    if (!tagging.store || !tagging.dirty) {
       return;
     }
-
+    tagging.dirty = false;
     try {
-      await this._tagging.store.save({
-        labels: this._tagging.labels,
-        tags: this._tagging.tags
-      });
-      this._tagging.dirty = false;
+      await tagging.store.save({ labels: tagging.labels, tags: tagging.tags });
     } catch (error) {
-      console.warn('[data-worker][tagging] Failed to persist snapshot', error);
+      console.warn('[data-worker][tagging] Failed to persist labels; will retry', error);
+      if (tagging === this.tagging) {
+        this.markTaggingDirty();
+      }
     }
   }
 
-  private scheduleTaggingPersist(): void {
-    if (!this._tagging.store) {
+  private schedulePersist(): void {
+    if (!this.tagging.store || this.tagging.persistTimer != null) {
       return;
     }
-
-    this.clearTaggingPersistTimer();
-    this._tagging.persistTimer = setTimeout(() => {
+    this.tagging.persistTimer = setTimeout(() => {
+      this.tagging.persistTimer = null;
       void this.persistTaggingNow();
-    }, TAG_PERSIST_DEBOUNCE_MS) as unknown as number;
+    }, TAG_PERSIST_DEBOUNCE_MS);
   }
 }
 

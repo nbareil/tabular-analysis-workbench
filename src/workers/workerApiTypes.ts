@@ -1,4 +1,4 @@
-import type { MaterializedRow } from './utils/materializeRowBatch';
+import type { MaterializedRow } from './rowBatchStore';
 import type { DidYouMeanInfo } from './didYouMean';
 import type {
   ColumnInference,
@@ -16,94 +16,73 @@ import type {
   UpdateLabelRequest,
   DeleteLabelRequest,
   DeleteLabelResponse,
-  ImportTagsRequest
+  ImportTagsRequest,
+  TagRecord
 } from './types';
-import type { RowIndexData } from './rowIndexStore';
+
+export type { MaterializedRow };
 
 export interface WorkerInitOptions {
-  chunkSize?: number;
   debugLogging?: boolean;
   slowBatchThresholdMs?: number;
 }
 
 export interface LoadFileRequest {
-  handle: FileSystemFileHandle;
+  /** One file, or several to merge into one timeline with a `source_file` column. */
+  handles: FileSystemFileHandle[];
   delimiter?: Delimiter;
   batchSize?: number;
   encoding?: string;
-  checkpointInterval?: number;
+}
+
+export interface LoadProgress {
+  rowsParsed: number;
+  bytesParsed: number;
+  batchesStored: number;
+  columnTypes: Record<string, ColumnType>;
 }
 
 export interface LoadCompleteSummary {
   rowsParsed: number;
   bytesParsed: number;
+  malformedRows: number;
   durationMs: number;
   columnTypes: Record<string, ColumnType>;
   columnInference: Record<string, ColumnInference>;
 }
 
+export interface LoadFileCallbacks {
+  onStart?: (payload: { columns: string[] }) => void | Promise<void>;
+  onProgress?: (progress: LoadProgress) => void | Promise<void>;
+  onComplete?: (summary: LoadCompleteSummary) => void | Promise<void>;
+  onError?: (error: { message: string; name?: string; stack?: string }) => void | Promise<void>;
+}
+
+/** Row counts of the current view after a filter, search or sort. */
+export interface ViewResult {
+  totalRows: number;
+  matchedRows: number;
+}
+
 export interface SearchRequest {
-  requestId?: number;
   query: string;
   columns: string[];
   caseSensitive?: boolean;
 }
 
-export interface ClearSearchRequest {
-  requestId?: number;
-}
-
-export interface GlobalSearchResult {
-  totalRows: number;
-  matchedRows: number;
-}
-
-export interface LoadFileCallbacks {
-  onStart?: (payload: { columns: string[] }) => void | Promise<void>;
-  onProgress?: (progress: { rowsParsed: number; bytesParsed: number; batchesStored: number }) => void | Promise<void>;
-  onComplete?: (summary: LoadCompleteSummary) => void | Promise<void>;
-  onError?: (error: { message: string; name?: string; stack?: string }) => void | Promise<void>;
-}
-
-export interface SeekRowsRequest {
-  handle: FileSystemFileHandle;
-  startRow: number;
-  rowCount: number;
-}
-
-export interface SeekRowsResult {
-  entries: Array<{ rowIndex: number; byteOffset: number }>;
-  checkpointInterval: number;
-}
-
 export interface ApplySortRequest {
   sorts: SortDefinition[];
-  offset?: number;
-  limit?: number;
-  progressive?: boolean;
-  visibleRows?: number;
 }
 
-export interface ApplySortResult {
-  rows: MaterializedRow[];
-  totalRows: number;
-  matchedRows: number;
+export interface ApplySortResult extends ViewResult {
   sorts: SortDefinition[];
-  sortComplete?: boolean;
-  sortedRowCount?: number;
 }
 
 export interface ApplyFilterRequest {
   expression: FilterNode | null;
-  offset?: number;
-  limit?: number;
 }
 
-export interface ApplyFilterResult {
-  rows: MaterializedRow[];
-  totalRows: number;
-  matchedRows: number;
-  expression: FilterNode | null;
+export interface ApplyFilterResult extends ViewResult {
   didYouMean?: DidYouMeanInfo;
   predicateMatchCounts?: Record<string, number>;
 }
@@ -124,7 +103,6 @@ export interface ColumnValueDistributionResult {
   distinctCount: number;
   skipped: boolean;
   skipReason?: string;
-  defaultSort: 'desc';
   items: ColumnValueDistributionItem[];
 }
 
@@ -139,21 +117,66 @@ export interface FetchRowsResult {
   matchedRows: number;
 }
 
+export interface ExportCsvRequest {
+  columns: Array<{ key: string; header: string }>;
+  /** `view` exports the current filtered/searched/sorted rows; `labelled` only rows with labels or notes. */
+  scope: 'view' | 'labelled';
+}
+
+export interface TimeHistogramRequest {
+  column: string;
+  buckets: number;
+}
+
+export interface TimeHistogramResult {
+  column: string;
+  /** Epoch milliseconds of the first bucket's start; null when no value parsed. */
+  start: number | null;
+  bucketMs: number;
+  counts: number[];
+  /** Rows in the view whose value parsed as a datetime. */
+  datedRows: number;
+}
+
+export interface ColumnProfile {
+  column: string;
+  type: ColumnType;
+  rows: number;
+  emptyCount: number;
+  /** Values that did not parse as the column type (always 0 for text columns). */
+  invalidCount: number;
+  distinctCount: number;
+  /** True when distinct counting stopped at its cap, so distinctCount is a lower bound. */
+  distinctCapped: boolean;
+  min: string | null;
+  max: string | null;
+  mean: number | null;
+  minLength: number;
+  maxLength: number;
+  topValues: ColumnValueDistributionItem[];
+}
+
 export interface DataWorkerApi {
   init: (options: WorkerInitOptions) => Promise<void>;
-  ping: () => Promise<string>;
   loadFile: (request: LoadFileRequest, callbacks: LoadFileCallbacks) => Promise<void>;
-  loadRowIndex: (handle: FileSystemFileHandle) => Promise<RowIndexData | null>;
-  seekRows: (request: SeekRowsRequest) => Promise<SeekRowsResult | null>;
   applySorts: (request: ApplySortRequest) => Promise<ApplySortResult>;
   applyFilter: (request: ApplyFilterRequest) => Promise<ApplyFilterResult>;
+  globalSearch: (request: SearchRequest) => Promise<ViewResult>;
   getColumnValueDistribution: (
     request: ColumnValueDistributionRequest
   ) => Promise<ColumnValueDistributionResult>;
   fetchRows: (request: FetchRowsRequest) => Promise<FetchRowsResult>;
+  getRowsById: (rowIds: number[]) => Promise<MaterializedRow[]>;
+  getTimeHistogram: (request: TimeHistogramRequest) => Promise<TimeHistogramResult>;
+  profileColumn: (column: string) => Promise<ColumnProfile>;
+  /** Position of a row id in the current view, or -1 when the view excludes it. */
+  findRowPosition: (rowId: number) => Promise<number>;
+  /** View position of the nearest labelled or annotated row after/before `fromPosition`, or -1. */
+  findTaggedPosition: (fromPosition: number, direction: 'next' | 'previous') => Promise<number>;
+  /** Sets rows' tag records verbatim (null removes the record); used to undo label edits. */
+  restoreTags: (records: Record<number, TagRecord | null>) => Promise<TagRowsResponse>;
   groupBy: (request: GroupingRequest) => Promise<GroupingResult>;
-  globalSearch: (request: SearchRequest) => Promise<GlobalSearchResult>;
-  clearSearch: (request?: ClearSearchRequest) => Promise<void>;
+  exportCsv: (request: ExportCsvRequest) => Promise<Blob>;
   loadTags: () => Promise<TaggingSnapshot>;
   tagRows: (request: TagRowsRequest) => Promise<TagRowsResponse>;
   clearTag: (rowIds: number[]) => Promise<TagRowsResponse>;
@@ -176,4 +199,4 @@ export type {
   DeleteLabelResponse,
   ImportTagsRequest,
   LabelDefinition
-} from './types';
+};

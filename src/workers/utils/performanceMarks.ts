@@ -1,34 +1,16 @@
 type PerformanceCleanup = () => void;
 
 /**
- * Wraps performance.mark/measure calls so worker code can emit profiling data
- * without littering guards everywhere.
+ * Starts a `performance.measure` entry named `label` (visible in DevTools' Performance panel) and
+ * returns a function that ends it. Measures carry their own start time, so overlapping runs of the
+ * same label (e.g. a superseded load) never clobber each other.
  */
 export const startPerformanceMeasure = (label: string): PerformanceCleanup | null => {
-  if (
-    typeof performance === 'undefined' ||
-    typeof performance.mark !== 'function' ||
-    typeof performance.measure !== 'function'
-  ) {
+  if (typeof performance === 'undefined' || typeof performance.measure !== 'function') {
     return null;
   }
-
-  const startMark = `${label}-start`;
-  performance.mark(startMark);
-
+  const start = performance.now();
   return () => {
-    const endMark = `${label}-end`;
-
-    try {
-      performance.mark(endMark);
-      performance.measure(label, startMark, endMark);
-    } catch (error) {
-      console.warn('[performance-marks] Failed to record measure', { label, error });
-    } finally {
-      if (typeof performance.clearMarks === 'function') {
-        performance.clearMarks(startMark);
-        performance.clearMarks(endMark);
-      }
-    }
+    performance.measure(label, { start, end: performance.now() });
   };
 };

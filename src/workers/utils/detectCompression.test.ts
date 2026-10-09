@@ -1,27 +1,22 @@
+// @vitest-environment node
+
 import { describe, expect, it } from 'vitest';
 
-import { detectCompression } from './detectCompression';
+import { isGzip } from './detectCompression';
 
-describe('detectCompression', () => {
-  it('returns gzip for .csv.gz files', () => {
-    expect(detectCompression({ fileName: 'metrics.csv.gz' })).toBe('gzip');
+describe('isGzip', () => {
+  it('detects gzip by magic bytes regardless of name or MIME type', async () => {
+    const file = new File([new Uint8Array([0x1f, 0x8b, 0x08, 0x00])], 'data.csv', { type: 'text/csv' });
+    await expect(isGzip(file)).resolves.toBe(true);
   });
 
-  it('returns gzip for .tsv.gzip files', () => {
-    expect(detectCompression({ fileName: 'events.tsv.gzip' })).toBe('gzip');
+  it('rejects files named .gz that are not gzip', async () => {
+    const file = new File(['a,b\n1,2\n'], 'data.csv.gz', { type: 'application/gzip' });
+    await expect(isGzip(file)).resolves.toBe(false);
   });
 
-  it('ignores gzip files without CSV or TSV base extension', () => {
-    expect(detectCompression({ fileName: 'data.json.gz' })).toBeNull();
-  });
-
-  it('falls back to gzip when mime type is application/gzip', () => {
-    expect(detectCompression({ fileName: 'metrics.backup', mimeType: 'application/gzip' })).toBe(
-      'gzip'
-    );
-  });
-
-  it('returns null for plain csv files', () => {
-    expect(detectCompression({ fileName: 'metrics.csv' })).toBeNull();
+  it('handles empty and one-byte files', async () => {
+    await expect(isGzip(new Blob([]))).resolves.toBe(false);
+    await expect(isGzip(new Blob([new Uint8Array([0x1f])]))).resolves.toBe(false);
   });
 });
