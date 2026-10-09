@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type JSX, useEffect, useState } from 'react';
 
 import { Modal } from '@components/Modal';
 import { getDataWorker, type ColumnProfile } from '@workers/dataWorkerProxy';

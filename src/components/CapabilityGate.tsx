@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import type { CapabilityReport } from '@utils/capabilities';
 
 interface CapabilityGateProps {

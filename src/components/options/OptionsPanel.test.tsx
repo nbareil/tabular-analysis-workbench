@@ -6,7 +6,7 @@ import { PREFERENCES_STORAGE_KEY, useAppStore } from '@state/appStore';
 import { DATA_DEFAULT_FONT_ID, DEFAULT_FONT_ID, DEFAULT_FONT_SIZE, FONT_OPTIONS } from '@constants/fonts';
 
 const renderPanel = (props: Partial<Parameters<typeof OptionsPanel>[0]> = {}) =>
-  render(<OptionsPanel open onClose={() => {}} onFlushStoredData={async () => {}} {...props} />);
+  render(<OptionsPanel onClose={() => {}} onFlushStoredData={async () => {}} {...props} />);
 
 const storedPreferences = (): Record<string, unknown> =>
   JSON.parse(window.localStorage.getItem(PREFERENCES_STORAGE_KEY) ?? '{}').state ?? {};
@@ -31,11 +31,6 @@ describe('OptionsPanel', () => {
     fireEvent.change(screen.getByLabelText(/display time zone/i), { target: { value: 'UTC' } });
     expect(useAppStore.getState().displayTimeZone).toBe('UTC');
     expect(storedPreferences()).toMatchObject({ displayTimeZone: 'UTC' });
-  });
-
-  it('renders nothing when closed', () => {
-    renderPanel({ open: false });
-    expect(screen.queryByText('Options')).not.toBeInTheDocument();
   });
 
   it('shows the current font preferences', () => {
@@ -82,12 +77,12 @@ describe('OptionsPanel', () => {
     const onClose = vi.fn();
     renderPanel({ onClose });
 
-    fireEvent.mouseDown(screen.getByRole('dialog'));
+    fireEvent.click(screen.getByRole('dialog'));
     expect(onClose).not.toHaveBeenCalled();
 
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    fireEvent.mouseDown(screen.getByRole('dialog').parentElement!);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Options' }));
     expect(onClose).toHaveBeenCalledTimes(3);
   });
 

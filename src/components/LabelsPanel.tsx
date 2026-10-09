@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type JSX, useMemo, useState } from 'react';
 
 import type { FilterState } from '@state/sessionStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
@@ -9,7 +9,6 @@ import { parseTagExport } from '@utils/tagExport';
 import { shallow } from 'zustand/shallow';
 
 interface LabelsPanelProps {
-  open: boolean;
   onClose: () => void;
 }
 
@@ -61,7 +60,8 @@ const normalizeColorForInput = (color: string | undefined): string => {
   return '#8899ff';
 };
 
-const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null => {
+/** Rendered only while open, so its form state starts fresh each time. */
+const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
   const { labels, status, error } = useTagStore(
     (state) => ({
       labels: state.labels,
@@ -80,15 +80,6 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
   const [importing, setImporting] = useState(false);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [importErrorMessage, setImportErrorMessage] = useState<string | null>(null);
-
-
-  useEffect(() => {
-    if (!open) {
-      setLabelName('');
-      setImportFeedback(null);
-      setImportErrorMessage(null);
-    }
-  }, [open]);
 
   const sortedLabels = useMemo(
     () => labels.slice().sort((a, b) => a.name.localeCompare(b.name)),
@@ -231,10 +222,6 @@ const LabelsPanel = ({ open, onClose }: LabelsPanelProps): JSX.Element | null =>
       setImporting(false);
     }
   };
-
-  if (!open) {
-    return null;
-  }
 
   return (
     <Modal

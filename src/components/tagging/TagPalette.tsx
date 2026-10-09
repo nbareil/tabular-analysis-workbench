@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import type { LabelDefinition } from '@workers/types';
 
 interface TagPaletteProps {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
 import type { GridApi, IRowNode, RowClassRules, RowSelectedEvent } from 'ag-grid-community';
 
 import type { GridRow } from '@state/dataStore';
@@ -22,7 +22,7 @@ const rowIdOf = (node: IRowNode<GridRow> | null | undefined): number | null =>
 
 export const useGridSelection = (
   gridApi: GridApi<GridRow> | null,
-  containerRef: RefObject<HTMLDivElement>
+  containerRef: RefObject<HTMLDivElement | null>
 ): GridSelection => {
   const selected = useRef(new Set<number>());
   const focused = useRef<number | null>(null);
@@ -146,9 +146,10 @@ export const useGridSelection = (
     return () => container.removeEventListener('keydown', handleKeyDown);
   }, [containerRef, gridApi, setFocused]);
 
-  const rowClassRules = useRef<RowClassRules<GridRow>>({
-    [FOCUS_CLASS]: (params) => params.data != null && params.data.__rowId === focused.current
-  }).current;
+  const rowClassRules = useMemo<RowClassRules<GridRow>>(
+    () => ({ [FOCUS_CLASS]: (params) => params.data != null && params.data.__rowId === focused.current }),
+    []
+  );
 
   return {
     getSelectedRowIds: useCallback(() => Array.from(selected.current).sort((a, b) => a - b), []),

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { type JSX, useCallback, useMemo } from 'react';
 
 import { useDataStore } from '@state/dataStore';
 import type { GridColumn } from '@state/dataStore';

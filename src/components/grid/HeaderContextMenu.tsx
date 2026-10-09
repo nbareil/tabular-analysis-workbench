@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type JSX, useState } from 'react';
 
 import type { ColumnValueDistributionCacheEntry, GridColumn } from '@state/dataStore';
 import { GridMenu, MenuItem, MenuSection } from './GridMenu';

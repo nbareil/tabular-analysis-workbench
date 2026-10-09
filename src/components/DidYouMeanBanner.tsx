@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { type JSX, useCallback, useMemo } from 'react';
 
 import { useDataStore } from '@state/dataStore';
 import { useFilterSync } from '@/hooks/useFilterSync';
@@ -81,7 +81,7 @@ export const DidYouMeanBanner = (): JSX.Element | null => {
           </div>
           <div className="space-y-1">
             <p>
-              No exact matches for <code className="rounded bg-yellow-100 px-1 dark:bg-yellow-900/60">'{didYouMean.query}'</code> in{' '}
+              No exact matches for <code className="rounded bg-yellow-100 px-1 dark:bg-yellow-900/60">&lsquo;{didYouMean.query}&rsquo;</code> in{' '}
               <strong>{columnLabel}</strong>.
             </p>
             <p className="text-xs text-yellow-800 dark:text-yellow-200">

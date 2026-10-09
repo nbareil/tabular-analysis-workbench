@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useTagStore } from '@state/tagStore';
 import TagPalette from './TagPalette';
@@ -103,7 +103,13 @@ const TagNotePanel = ({
 
   return (
     <div className="fixed inset-0 z-50 flex">
-      <div className="absolute inset-0 bg-slate-950/70" onClick={handleOverlayClick} />
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label="Close row annotation"
+        className="absolute inset-0 cursor-default bg-slate-950/70"
+        onClick={handleOverlayClick}
+      />
       <aside
         ref={panelRef}
         role="dialog"
@@ -180,15 +186,16 @@ const TagNotePanel = ({
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-[11px] uppercase tracking-wide text-slate-500">
+                <label htmlFor="tag-note-editor" className="text-[11px] uppercase tracking-wide text-slate-500">
                   Write <span className="text-slate-400">(Cmd/Ctrl + Enter saves)</span>
                 </label>
                 <MarkdownEditor
+                  id="tag-note-editor"
                   value={note}
                   onChange={setNote}
                   placeholder="Add context for this row…"
                   disabled={saving}
-                  autoFocus
+                  focusOnMount
                   onSubmitShortcut={() => {
                     if (!saving) {
                       handleSave();
@@ -197,8 +204,11 @@ const TagNotePanel = ({
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-[11px] uppercase tracking-wide text-slate-500">Preview</label>
+                <p id="tag-note-preview-label" className="text-[11px] uppercase tracking-wide text-slate-500">
+                  Preview
+                </p>
                 <div
+                  aria-labelledby="tag-note-preview-label"
                   className="h-56 overflow-auto rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
                   data-testid="note-preview"
                 >

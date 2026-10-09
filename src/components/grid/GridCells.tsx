@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { type JSX, useRef } from 'react';
 import type { ICellRendererParams, IHeaderParams } from 'ag-grid-community';
 
 import type { TagCellValue, TagLabelView } from '@utils/tagCells';

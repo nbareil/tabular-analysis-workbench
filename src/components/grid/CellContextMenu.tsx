@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import type { LabelDefinition, TagRecord } from '@workers/types';
 import { GridMenu, MenuItem, MenuSection } from './GridMenu';
 import type { CellContextMenuState, FilterMenuMetadata } from './gridUtils';

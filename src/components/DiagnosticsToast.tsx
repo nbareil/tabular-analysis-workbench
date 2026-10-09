@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { type JSX, useMemo, useState } from 'react';
 
 import type { DataState } from '@state/dataStore';
 

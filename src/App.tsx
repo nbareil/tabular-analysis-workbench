@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type JSX, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { proxy } from 'comlink';
 
 import { useAppStore } from '@state/appStore';
@@ -78,6 +78,7 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
   const columnLayout = useSessionStore((state) => state.columnLayout);
   const openFiles = useSessionStore((state) => state.openFiles);
   const loaderStatus = useDataStore((state) => state.status);
+  const loadId = useDataStore((state) => state.loadId);
   const errorDetails = useDataStore((state) => state.errorDetails);
   const clearErrorDetails = useDataStore((state) => state.clearError);
   const matchedRows = useDataStore((state) => state.matchedRows);
@@ -164,24 +165,19 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
     }
   }, []);
 
-  useEffect(() => {
-    if (workerReady && fileHandles.length) {
-      void loadFiles(fileHandles);
-    }
-  }, [fileHandles, loadFiles, workerReady]);
-
   const handleOpenFile = useCallback(async () => {
     try {
       const handles = await window.showOpenFilePicker!({ multiple: true, types: FILE_PICKER_TYPES });
       if (handles.length) {
         openFiles(handles);
+        void loadFiles(handles);
       }
     } catch (error) {
       if ((error as DOMException)?.name !== 'AbortError') {
         reportAppError(error instanceof Error ? error.message : String(error), error, { operation: 'file.open' });
       }
     }
-  }, [openFiles]);
+  }, [loadFiles, openFiles]);
 
   const visibleColumnKeys = useMemo(
     () => columns.filter((column) => columnLayout.visibility[column.key] !== false).map((column) => column.key),
@@ -491,16 +487,16 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
               {showPivot ? (
                 <PivotView />
               ) : (
-                <DataGrid status={loaderStatus} searchQuery={searchTerm} onEditTagNote={openNoteEditor} />
+                <DataGrid key={loadId} status={loaderStatus} searchQuery={searchTerm} onEditTagNote={openNoteEditor} />
               )}
             </div>
           </div>
           <StatusBar labelFilterSummary={labelFilterSummary} fileSize={fileSize} />
         </section>
       </main>
-      <OptionsPanel open={optionsOpen} onClose={() => setOptionsOpen(false)} onFlushStoredData={handleFlushStoredData} />
-      <LabelsPanel open={labelsOpen} onClose={() => setLabelsOpen(false)} />
-      <ColumnsPanel open={columnsOpen} onClose={() => setColumnsOpen(false)} />
+      {optionsOpen && <OptionsPanel onClose={() => setOptionsOpen(false)} onFlushStoredData={handleFlushStoredData} />}
+      {labelsOpen && <LabelsPanel onClose={() => setLabelsOpen(false)} />}
+      {columnsOpen && <ColumnsPanel onClose={() => setColumnsOpen(false)} />}
       <TagNotePanel
         open={noteEditor != null}
         rowId={noteEditor?.rowId ?? null}

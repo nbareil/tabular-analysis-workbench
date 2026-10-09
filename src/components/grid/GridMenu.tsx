@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { type JSX, useEffect, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 const ITEM_SELECTOR = '[role="menuitem"]:not([disabled]), [role="menuitemcheckbox"]:not([disabled])';
@@ -58,6 +58,7 @@ export const GridMenu = ({ label, x, y, className = '', onClose, children }: Gri
     <div
       ref={ref}
       role="menu"
+      tabIndex={-1}
       aria-label={label}
       data-grid-context-menu="true"
       className={`fixed z-[10000] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl ${className}`}

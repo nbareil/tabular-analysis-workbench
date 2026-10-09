@@ -94,17 +94,17 @@ describe('Modal', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('closes on backdrop mousedown but not on mousedown inside the dialog', () => {
+  it('closes on a backdrop click but not on clicks inside the dialog', () => {
     const onClose = vi.fn();
     render(
       <Modal title="Settings" onClose={onClose}>
         <p>Body</p>
       </Modal>
     );
-    fireEvent.mouseDown(screen.getByText('Body'));
+    fireEvent.click(screen.getByText('Body'));
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.mouseDown(screen.getByRole('dialog').parentElement!);
+    fireEvent.click(screen.getByRole('button', { name: 'Close Settings' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 

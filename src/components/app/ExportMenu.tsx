@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { type JSX, useRef, useState } from 'react';
 
 import { GridMenu, MenuItem, MenuSection } from '@components/grid/GridMenu';
 import type { CsvExportFormat } from '@utils/csvExport';

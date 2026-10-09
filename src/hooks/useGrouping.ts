@@ -90,6 +90,29 @@ export interface UseGroupingResult {
   refresh: () => Promise<void>;
 }
 
+/** Runs a grouping in the worker and publishes the result (or error) to the data store. */
+const computeGrouping = async (groups: string[], aggregations: GroupAggregationDefinition[]): Promise<void> => {
+  const data = useDataStore.getState();
+  if (!groups.length) {
+    data.clearGrouping();
+    return;
+  }
+  try {
+    data.setGroupingLoading();
+    data.setGroupingResult(await getDataWorker().groupBy({ groupBy: groups, aggregations }));
+  } catch (error) {
+    if (isStaleOperation(error)) {
+      return;
+    }
+    data.setGroupingError(error instanceof Error ? error.message : 'Failed to compute grouping results');
+    reportAppError('Failed to compute grouping results', error, {
+      operation: 'grouping.compute',
+      context: { groups, aggregationCount: aggregations.length },
+      retry: () => computeGrouping(groups, aggregations)
+    });
+  }
+};
+
 /**
  * Hook for managing grouping state and operations.
  * Integrates with session store for persistence and data store for results.
@@ -105,9 +128,6 @@ export const useGrouping = (): UseGroupingResult => {
   const totalRows = useDataStore((state) => state.totalRows);
   const viewVersion = useDataStore((state) => state.viewVersion);
   const grouping = useDataStore((state) => state.grouping);
-  const setGroupingLoading = useDataStore((state) => state.setGroupingLoading);
-  const setGroupingResult = useDataStore((state) => state.setGroupingResult);
-  const setGroupingError = useDataStore((state) => state.setGroupingError);
   const clearGrouping = useDataStore((state) => state.clearGrouping);
 
   const normalizedAggregations = useMemo(
@@ -194,46 +214,10 @@ export const useGrouping = (): UseGroupingResult => {
   );
 
   const performRefresh = useCallback(async () => {
-    if (!groups.length) {
-      clearGrouping();
-      return;
+    if (loaderStatus !== 'loading') {
+      await computeGrouping(groups, sanitizedAggregations);
     }
-
-    if (loaderStatus === 'loading') {
-      return;
-    }
-
-    try {
-      setGroupingLoading();
-      const worker = getDataWorker();
-      const result = await worker.groupBy({
-        groupBy: groups,
-        aggregations: sanitizedAggregations
-      });
-      setGroupingResult(result);
-    } catch (error) {
-      if (isStaleOperation(error)) {
-        return;
-      }
-      const message =
-        error instanceof Error ? error.message : 'Failed to compute grouping results';
-      setGroupingError(message);
-      console.error('Failed to compute grouping results', error);
-      reportAppError('Failed to compute grouping results', error, {
-        operation: 'grouping.compute',
-        context: { groups, aggregationCount: sanitizedAggregations.length },
-        retry: () => performRefresh()
-      });
-    }
-  }, [
-    clearGrouping,
-    groups,
-    loaderStatus,
-    sanitizedAggregations,
-    setGroupingError,
-    setGroupingLoading,
-    setGroupingResult
-  ]);
+  }, [groups, loaderStatus, sanitizedAggregations]);
 
   useEffect(() => {
     if (!groups.length) {

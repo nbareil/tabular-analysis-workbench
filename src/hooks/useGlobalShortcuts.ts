@@ -25,7 +25,9 @@ const overlayOpen = (): boolean => document.querySelector('[aria-modal="true"], 
  */
 export const useGlobalShortcuts = (handlers: GlobalShortcutHandlers): void => {
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+  useEffect(() => {
+    handlersRef.current = handlers;
+  });
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

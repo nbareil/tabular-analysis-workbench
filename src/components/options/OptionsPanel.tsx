@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type JSX, useMemo, useState } from 'react';
 
 import { Modal } from '@components/Modal';
 import { availableTimeZones } from '@utils/datetimeFormat';
@@ -12,16 +12,15 @@ import {
 import { useAppStore } from '@state/appStore';
 
 interface OptionsPanelProps {
-  open: boolean;
   onClose: () => void;
   onFlushStoredData: () => Promise<void>;
 }
 
+/** Rendered only while open, so the delete-data progress starts fresh each time. */
 const OptionsPanel = ({
-  open,
   onClose,
   onFlushStoredData
-}: OptionsPanelProps): JSX.Element | null => {
+}: OptionsPanelProps): JSX.Element => {
   const interfaceFontFamily = useAppStore((state) => state.interfaceFontFamily);
   const interfaceFontSize = useAppStore((state) => state.interfaceFontSize);
   const dataFontFamily = useAppStore((state) => state.dataFontFamily);
@@ -35,17 +34,6 @@ const OptionsPanel = ({
   const displayTimeZone = useAppStore((state) => state.displayTimeZone);
   const setDisplayTimeZone = useAppStore((state) => state.setDisplayTimeZone);
   const timeZones = useMemo(() => availableTimeZones(), []);
-
-  useEffect(() => {
-    if (open) {
-      setFlushState('idle');
-      setFlushError(null);
-    }
-  }, [open]);
-
-  if (!open) {
-    return null;
-  }
 
   const handleInterfaceFontChange = (value: string) => {
     setInterfaceFontFamily(value);

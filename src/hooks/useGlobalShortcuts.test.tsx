@@ -1,15 +1,16 @@
 import { fireEvent, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 import { useGlobalShortcuts, type GlobalShortcutHandlers } from './useGlobalShortcuts';
 
-const makeHandlers = (): Record<keyof GlobalShortcutHandlers, ReturnType<typeof vi.fn>> => ({
-  toggleFilters: vi.fn(),
-  addFilter: vi.fn(),
-  focusSearch: vi.fn(),
-  focusJumpToRow: vi.fn(),
-  undo: vi.fn(),
-  redo: vi.fn()
+const makeHandlers = (): Record<keyof GlobalShortcutHandlers, Mock<() => void>> => ({
+  toggleFilters: vi.fn<() => void>(),
+  addFilter: vi.fn<() => void>(),
+  focusSearch: vi.fn<() => void>(),
+  focusJumpToRow: vi.fn<() => void>(),
+  undo: vi.fn<() => void>(),
+  redo: vi.fn<() => void>()
 });
 
 const press = (target: Element | Document | Window, key: string, init: KeyboardEventInit = {}): boolean =>

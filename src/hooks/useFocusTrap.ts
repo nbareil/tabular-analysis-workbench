@@ -7,7 +7,7 @@ const FOCUSABLE =
  * While `active`, moves focus into the container (preferring `[data-autofocus]`), keeps Tab and
  * Shift+Tab cycling inside it, and returns focus to the previously focused element on release.
  */
-export const useFocusTrap = (ref: RefObject<HTMLElement>, active = true): void => {
+export const useFocusTrap = (ref: RefObject<HTMLElement | null>, active = true): void => {
   useEffect(() => {
     const container = ref.current;
     if (!active || !container) {

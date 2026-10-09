@@ -1,14 +1,20 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { type JSX, memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { AgGridReact } from 'ag-grid-react';
-import type {
-  CellContextMenuEvent,
-  ColDef,
-  GridApi,
-  GridReadyEvent,
-  IDatasource,
-  IGetRowsParams,
-  SortChangedEvent,
-  ValueFormatterParams
+import {
+  AllCommunityModule,
+  ModuleRegistry,
+  colorSchemeDarkBlue,
+  colorSchemeLight,
+  themeQuartz,
+  type CellContextMenuEvent,
+  type ColDef,
+  type GridApi,
+  type GridReadyEvent,
+  type IDatasource,
+  type IGetRowsParams,
+  type RowSelectionOptions,
+  type SortChangedEvent,
+  type ValueFormatterParams
 } from 'ag-grid-community';
 
 import { useAppStore } from '@state/appStore';
@@ -46,8 +52,21 @@ import {
   type GridContextMenuState
 } from './grid/gridUtils';
 
-import 'ag-grid-community/styles/ag-grid.css';
-import 'ag-grid-community/styles/ag-theme-quartz.css';
+ModuleRegistry.registerModules([AllCommunityModule]);
+
+const gridFont = { fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' };
+const GRID_THEMES = {
+  light: themeQuartz.withPart(colorSchemeLight).withParams(gridFont),
+  dark: themeQuartz.withPart(colorSchemeDarkBlue).withParams(gridFont)
+};
+const ROW_SELECTION: RowSelectionOptions = {
+  mode: 'multiRow',
+  checkboxes: true,
+  headerCheckbox: false,
+  enableClickSelection: true,
+  enableSelectionWithoutKeys: true
+};
+const SELECTION_COLUMN = { pinned: 'left' as const, width: 44 };
 
 const CACHE_BLOCK_SIZE = 500;
 const MAX_BLOCKS_IN_CACHE = 40;
@@ -107,12 +126,6 @@ const DataGrid = ({ status, searchQuery, onEditTagNote }: DataGridProps): JSX.El
     contextMenu?.kind === 'header' ? state.columnValueDistributions[contextMenu.columnId] : undefined
   );
 
-  useEffect(() => {
-    setTimelineColumn(null);
-    setProfiledColumn(null);
-    setTimeWindow(null);
-  }, [loadId]);
-
   // Columns that appear later (or a reset layout) join the layout at the end, visible.
   useEffect(() => {
     const missing = columns.filter((column) => !columnLayout.order.includes(column.key));
@@ -163,7 +176,6 @@ const DataGrid = ({ status, searchQuery, onEditTagNote }: DataGridProps): JSX.El
       headerTooltip: 'Row labels',
       pinned: 'left',
       lockPosition: true,
-      checkboxSelection: true,
       sortable: false,
       resizable: false,
       suppressSizeToFit: true,
@@ -644,7 +656,7 @@ const DataGrid = ({ status, searchQuery, onEditTagNote }: DataGridProps): JSX.El
       ) : null}
       <div
         ref={containerRef}
-        className={`${theme === 'dark' ? 'ag-theme-quartz-dark' : 'ag-theme-quartz'} min-h-0 w-full flex-1`}
+        className="min-h-0 w-full flex-1"
         style={{ fontFamily: 'var(--data-font-family)', fontSize: 'var(--data-font-size)' }}
         onContextMenu={handleContainerContextMenu}
       >
@@ -653,12 +665,13 @@ const DataGrid = ({ status, searchQuery, onEditTagNote }: DataGridProps): JSX.El
         ) : (
           <div className="relative h-full w-full">
             <AgGridReact<GridRow>
+              theme={GRID_THEMES[theme]}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
               suppressContextMenu
               suppressFieldDotNotation
-              rowSelection="multiple"
-              rowMultiSelectWithClick
+              rowSelection={ROW_SELECTION}
+              selectionColumnDef={SELECTION_COLUMN}
               rowModelType="infinite"
               cacheBlockSize={CACHE_BLOCK_SIZE}
               maxBlocksInCache={MAX_BLOCKS_IN_CACHE}

@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type JSX, useEffect, useMemo, useState } from 'react';
 
 import { useFilterSync } from '@/hooks/useFilterSync';
 import { useDataStore, type GridColumn } from '@state/dataStore';
 import type { FilterState } from '@state/sessionStore';
 import { useTagStore } from '@state/tagStore';
-import { reportAppError } from '@utils/diagnostics';
-import { getDataWorker } from '@workers/dataWorkerProxy';
 import {
   TAG_COLUMN_ID,
   TAG_NO_LABEL_FILTER_VALUE,
@@ -168,7 +166,6 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
   const columnValueDistributions = useDataStore((state) => state.columnValueDistributions);
   const loadColumnValueDistribution = useDataStore((state) => state.loadColumnValueDistribution);
   const tagLabels = useTagStore((state) => state.labels);
-  const tagStatus = useTagStore((state) => state.status);
   const [distributionSort, setDistributionSort] = useState<
     Record<string, DistributionSortOrder>
   >({});

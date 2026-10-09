@@ -1,15 +1,14 @@
-import { useMemo, useState } from 'react';
+import { type JSX, useMemo, useState } from 'react';
 
 import { useDataStore } from '@state/dataStore';
 import { useSessionStore } from '@state/sessionStore';
 import { Modal } from '@components/Modal';
 
 interface ColumnsPanelProps {
-  open: boolean;
   onClose: () => void;
 }
 
-const ColumnsPanel = ({ open, onClose }: ColumnsPanelProps): JSX.Element | null => {
+const ColumnsPanel = ({ onClose }: ColumnsPanelProps): JSX.Element => {
   const columns = useDataStore((state) => state.columns);
   const columnLayout = useSessionStore((state) => state.columnLayout);
   const setColumnLayout = useSessionStore((state) => state.setColumnLayout);
@@ -79,10 +78,6 @@ const ColumnsPanel = ({ open, onClose }: ColumnsPanelProps): JSX.Element | null 
       visibility: nextVisibility
     });
   };
-
-  if (!open) {
-    return null;
-  }
 
   const buttonClass = 'rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-30';
 

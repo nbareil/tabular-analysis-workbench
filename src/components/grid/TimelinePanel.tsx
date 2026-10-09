@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { type JSX, useCallback, useEffect, useState } from 'react';
 
 import { useAppStore } from '@state/appStore';
 import { useDataStore } from '@state/dataStore';
@@ -52,11 +52,27 @@ export const TimelinePanel = ({ column, onSelectRange, onClose }: TimelinePanelP
   const inDrag = (index: number) =>
     drag != null && index >= Math.min(drag.from, drag.to) && index <= Math.max(drag.from, drag.to);
 
-  const commit = (from: number, to: number) => {
-    const low = Math.min(from, to);
-    const high = Math.max(from, to);
-    onSelectRange(start + low * bucketMs, start + (high + 1) * bucketMs - 1);
-  };
+  const commit = useCallback(
+    (from: number, to: number) => {
+      const low = Math.min(from, to);
+      const high = Math.max(from, to);
+      onSelectRange(start + low * bucketMs, start + (high + 1) * bucketMs - 1);
+    },
+    [bucketMs, onSelectRange, start]
+  );
+
+  // A drag may end anywhere on the page; releasing outside the bars still commits the range.
+  useEffect(() => {
+    if (!drag) {
+      return undefined;
+    }
+    const finish = () => {
+      commit(drag.from, drag.to);
+      setDrag(null);
+    };
+    window.addEventListener('mouseup', finish);
+    return () => window.removeEventListener('mouseup', finish);
+  }, [commit, drag]);
 
   const caption =
     hovered != null
@@ -78,25 +94,14 @@ export const TimelinePanel = ({ column, onSelectRange, onClose }: TimelinePanelP
       </div>
       <div className="flex items-start gap-2">
         <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-slate-500">{peak.toLocaleString()}</span>
-        <div
-          className="flex h-16 flex-1 items-end gap-[2px] border-b border-slate-700"
-          onMouseLeave={() => {
-            setHovered(null);
-            setDrag(null);
-          }}
-          onMouseUp={() => {
-            if (drag) {
-              commit(drag.from, drag.to);
-              setDrag(null);
-            }
-          }}
-        >
+        <div className="flex h-16 flex-1 items-end gap-[2px] border-b border-slate-700">
           {counts.map((count, index) => (
             <button
               key={index}
               type="button"
               aria-label={`${formatBucket(start + index * bucketMs, bucketMs)}: ${count.toLocaleString()} rows`}
               className="flex h-full max-w-[24px] flex-1 items-end focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-300"
+              onMouseLeave={() => setHovered(null)}
               onMouseEnter={() => {
                 setHovered(index);
                 setDrag((current) => (current ? { ...current, to: index } : current));

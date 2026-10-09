@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from 'react';
+import { type JSX, useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import { useFocusTrap } from '@/hooks/useFocusTrap';
@@ -20,30 +20,34 @@ export const Modal = ({ title, onClose, children, footer, widthClassName = 'max-
 
   useFocusTrap(dialogRef);
 
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      onClose();
-    }
-  };
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    // Capture phase, so Escape closes the dialog without also reaching handlers behind it.
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [onClose]);
 
   return createPortal(
-    <div
-      className="fixed inset-0 z-[10001] flex items-center justify-center bg-slate-950/70 p-4"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) {
-          onClose();
-        }
-      }}
-    >
+    <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4">
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-label={`Close ${title}`}
+        className="absolute inset-0 cursor-default bg-slate-950/70"
+        onClick={onClose}
+      />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        onKeyDown={handleKeyDown}
-        className={`flex max-h-[90vh] w-full ${widthClassName} flex-col rounded border border-slate-700 bg-slate-900 text-sm text-slate-200 shadow-2xl focus:outline-none`}
+        className={`relative flex max-h-[90vh] w-full ${widthClassName} flex-col rounded border border-slate-700 bg-slate-900 text-sm text-slate-200 shadow-2xl focus:outline-none`}
       >
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
           <h2 className="text-sm font-semibold">{title}</h2>
