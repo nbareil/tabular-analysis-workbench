@@ -131,7 +131,7 @@ const ColumnsPanel = ({ onClose }: ColumnsPanelProps): JSX.Element => {
                   <span className="truncate font-medium">{column.headerName}</span>
                 </label>
                 <span className="flex shrink-0 items-center gap-1">
-                  <span className="text-xs uppercase text-slate-500">{column.type}</span>
+                  <span className="text-xs uppercase text-slate-400">{column.type}</span>
                   <button
                     type="button"
                     className={buttonClass}

@@ -40,7 +40,7 @@ const DiagnosticsToast = ({
   };
 
   return (
-    <div className="pointer-events-auto fixed bottom-4 right-4 z-20 max-w-sm rounded-lg border border-red-500/40 bg-slate-900/95 p-4 text-sm shadow-2xl">
+    <div role="alert" className="pointer-events-auto fixed bottom-4 right-4 z-20 max-w-sm rounded-lg border border-red-500/40 bg-slate-900/95 p-4 text-sm shadow-2xl">
       <div className="flex items-start gap-3">
         <div className="text-red-400">
           <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">

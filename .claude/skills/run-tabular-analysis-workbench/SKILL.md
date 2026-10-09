@@ -23,7 +23,7 @@ Project deps: the repo's `node_modules` must be installed (`npm ci`).
 ## Run (agent path)
 
 ```bash
-(nohup npm run dev -- --port 5199 --strictPort > /tmp/twb-dev.log 2>&1 &); until curl -sf -o /dev/null http://localhost:5199/tabular-analysis-workbench/; do sleep 1; done; echo up
+(nohup npm run dev -- --port 5199 --strictPort >| /tmp/twb-dev.log 2>&1 &); for i in $(seq 30); do curl -sf -o /dev/null http://localhost:5199/tabular-analysis-workbench/ && break; sleep 1; done; echo up
 NODE_PATH=/tmp/twb-driver/node_modules node .claude/skills/run-tabular-analysis-workbench/driver.cjs; echo "exit=$?"
 ```
 
@@ -62,6 +62,13 @@ npm run lint && npx tsc -p tsconfig.json --noEmit && TZ=Europe/Paris npx vitest 
 
 CI runs tests with `TZ=Europe/Paris`; some datetime tests assume a non-UTC zone.
 
+The Playwright e2e + axe suite (`e2e/`, same picker stubs as the driver, in `e2e/fixtures.ts`)
+starts its own dev server on port 4174 - prefer adding a spec there over growing the driver:
+
+```bash
+npx playwright install chromium && npm run e2e
+```
+
 ## Gotchas
 
 - **The app is served under `/tabular-analysis-workbench/`** (Vite `base`). `/` returns 404.
@@ -88,6 +95,8 @@ CI runs tests with `TZ=Europe/Paris`; some datetime tests assume a non-UTC zone.
 ## Troubleshooting
 
 - `Cannot find module 'playwright'` → you forgot `NODE_PATH=/tmp/twb-driver/node_modules`.
+- Startup hangs or `up` prints but the driver can't connect → read `/tmp/twb-dev.log`. With zsh
+  `noclobber`, plain `>` refuses to overwrite an old log, so the command uses `>|`.
 - `Error: Port 5199 is already in use` → a previous server is still up; kill it with the stop command above.
 - `HTTP 404 …/favicon.ico` in console errors → `index.html` lost its inline favicon `<link>`.
 - `locator.click: Timeout` on a header → you targeted `.ag-header-cell-text`; it doesn't exist

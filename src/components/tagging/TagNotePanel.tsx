@@ -107,7 +107,7 @@ const TagNotePanel = ({
         type="button"
         tabIndex={-1}
         aria-label="Close row annotation"
-        className="absolute inset-0 cursor-default bg-slate-950/70"
+        className="absolute inset-0 cursor-default bg-black/60"
         onClick={handleOverlayClick}
       />
       <aside
@@ -115,11 +115,11 @@ const TagNotePanel = ({
         role="dialog"
         aria-modal="true"
         aria-label="Row labels and note"
-        className="ml-auto flex h-full w-full max-w-xl flex-col border-l border-slate-800 bg-slate-900 text-slate-100 shadow-2xl"
+        className="relative ml-auto flex h-full w-full max-w-xl flex-col border-l border-slate-800 bg-slate-900 text-slate-100 shadow-2xl"
       >
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-4">
           <div>
-            <p className="text-[11px] uppercase tracking-wide text-slate-500">Row annotation</p>
+            <p className="text-[11px] uppercase tracking-wide text-slate-400">Row annotation</p>
             <p className="text-lg font-semibold text-slate-100">
               Row {rowId != null ? `#${rowId + 1}` : 'selection'}
             </p>
@@ -137,7 +137,7 @@ const TagNotePanel = ({
                     </span>
                   ))}
                   {selectedLabels.length > 3 ? (
-                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                    <span className="text-[10px] uppercase tracking-wide text-slate-400">
                       +{selectedLabels.length - 3} more
                     </span>
                   ) : null}
@@ -186,7 +186,7 @@ const TagNotePanel = ({
             </div>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <label htmlFor="tag-note-editor" className="text-[11px] uppercase tracking-wide text-slate-500">
+                <label htmlFor="tag-note-editor" className="text-[11px] uppercase tracking-wide text-slate-400">
                   Write <span className="text-slate-400">(Cmd/Ctrl + Enter saves)</span>
                 </label>
                 <MarkdownEditor
@@ -204,7 +204,7 @@ const TagNotePanel = ({
                 />
               </div>
               <div className="space-y-2">
-                <p id="tag-note-preview-label" className="text-[11px] uppercase tracking-wide text-slate-500">
+                <p id="tag-note-preview-label" className="text-[11px] uppercase tracking-wide text-slate-400">
                   Preview
                 </p>
                 <div
@@ -218,7 +218,7 @@ const TagNotePanel = ({
                       dangerouslySetInnerHTML={{ __html: previewHtml }}
                     />
                   ) : (
-                    <p className="text-slate-500">Nothing to preview yet.</p>
+                    <p className="text-slate-400">Nothing to preview yet.</p>
                   )}
                 </div>
               </div>
@@ -245,7 +245,7 @@ const TagNotePanel = ({
             </button>
             <button
               type="button"
-              className="rounded-sm bg-accent px-4 py-1 font-semibold text-slate-900 disabled:opacity-40"
+              className="rounded-sm bg-accent px-4 py-1 font-semibold text-accent-ink disabled:opacity-40"
               onClick={handleSave}
               disabled={saving}
             >

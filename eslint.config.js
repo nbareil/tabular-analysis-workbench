@@ -38,5 +38,15 @@ export default tseslint.config(
       'jsx-a11y/click-events-have-key-events': 'off'
     }
   },
+  {
+    // Playwright fixtures call `use()`, which is not a React hook.
+    files: ['e2e/**'],
+    rules: { 'react-hooks/rules-of-hooks': 'off' }
+  },
+  {
+    files: ['**/*.cjs'],
+    languageOptions: { sourceType: 'commonjs' },
+    rules: { '@typescript-eslint/no-require-imports': 'off' }
+  },
   prettier
 );

@@ -134,7 +134,7 @@ const PivotView = (): JSX.Element => {
           <header className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-200">Group columns</h2>
             <div className="flex gap-2 text-xs">
-              <span className="text-slate-500">
+              <span className="text-slate-400">
                 {groups.length > 0
                   ? `${groups.length} selected`
                   : 'Select one or more columns'}
@@ -152,7 +152,7 @@ const PivotView = (): JSX.Element => {
           </header>
           <div className="max-h-64 space-y-2 overflow-auto pr-1 text-sm text-slate-300">
             {columns.length === 0 && (
-              <p className="text-xs text-slate-500">Columns load after a file is opened.</p>
+              <p className="text-xs text-slate-400">Columns load after a file is opened.</p>
             )}
             {columns.map((column) => (
               <label
@@ -168,7 +168,7 @@ const PivotView = (): JSX.Element => {
                   />
                   {column.headerName}
                 </span>
-                <span className="text-xs uppercase text-slate-500">{column.type}</span>
+                <span className="text-xs uppercase text-slate-400">{column.type}</span>
               </label>
             ))}
           </div>
@@ -283,7 +283,7 @@ const PivotView = (): JSX.Element => {
       </div>
       <div className="flex-1 overflow-auto rounded-sm border border-slate-800">
         {groups.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-slate-500">
+          <div className="flex h-full items-center justify-center text-sm text-slate-400">
             Select at least one group column to see pivot results.
           </div>
         ) : grouping.status === 'loading' ? (
@@ -295,7 +295,7 @@ const PivotView = (): JSX.Element => {
             {grouping.error ?? 'Grouping failed. Try again.'}
           </div>
         ) : grouping.rows.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-slate-500">
+          <div className="flex h-full items-center justify-center text-sm text-slate-400">
             No groups found for the current selection.
           </div>
         ) : (

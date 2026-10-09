@@ -134,9 +134,10 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
     setSearchTerm('');
     setNoteEditor(null);
     setFileSize(null);
-    void Promise.all(handles.map((handle) => handle.getFile())).then((files) =>
-      setFileSize(files.reduce((total, file) => total + file.size, 0))
-    );
+    // An unreadable file is reported by the load itself.
+    Promise.all(handles.map((handle) => handle.getFile()))
+      .then((files) => setFileSize(files.reduce((total, file) => total + file.size, 0)))
+      .catch(() => undefined);
 
     try {
       await getDataWorker().loadFile(
@@ -412,7 +413,7 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
           </form>
           <button
             type="button"
-            className="rounded-sm bg-accent px-3 py-1 text-sm font-semibold text-slate-900"
+            className="rounded-sm bg-accent px-3 py-1 text-sm font-semibold text-accent-ink"
             onClick={handleOpenFile}
             disabled={!workerReady || loaderStatus === 'loading'}
             title="Select several files to merge them into one timeline"

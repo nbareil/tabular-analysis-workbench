@@ -54,7 +54,7 @@ export const StatusBar = ({ labelFilterSummary, fileSize }: StatusBarProps): JSX
   }
 
   return (
-    <footer className="border-t border-slate-800 px-4 py-2 text-xs text-slate-500" aria-live="polite">
+    <footer className="border-t border-slate-800 px-4 py-2 text-xs text-slate-400" aria-live="polite">
       {segments.join(' • ')}
     </footer>
   );

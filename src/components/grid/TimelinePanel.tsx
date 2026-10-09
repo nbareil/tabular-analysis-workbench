@@ -93,7 +93,7 @@ export const TimelinePanel = ({ column, onSelectRange, onClose }: TimelinePanelP
         </button>
       </div>
       <div className="flex items-start gap-2">
-        <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-slate-500">{peak.toLocaleString()}</span>
+        <span className="w-10 shrink-0 text-right text-[10px] tabular-nums text-slate-400">{peak.toLocaleString()}</span>
         <div className="flex h-16 flex-1 items-end gap-[2px] border-b border-slate-700">
           {counts.map((count, index) => (
             <button
@@ -131,7 +131,7 @@ export const TimelinePanel = ({ column, onSelectRange, onClose }: TimelinePanelP
         </div>
       </div>
       {histogram?.start != null ? (
-        <div className="ml-12 mt-1 flex justify-between text-[10px] tabular-nums text-slate-500">
+        <div className="ml-12 mt-1 flex justify-between text-[10px] tabular-nums text-slate-400">
           <span>{formatUtcIso(start)}</span>
           <span>{formatUtcIso(start + counts.length * bucketMs)}</span>
         </div>
@@ -140,7 +140,7 @@ export const TimelinePanel = ({ column, onSelectRange, onClose }: TimelinePanelP
         <summary className="cursor-pointer">Table view</summary>
         <table className="mt-1 w-full tabular-nums">
           <thead>
-            <tr className="text-left text-slate-500">
+            <tr className="text-left text-slate-400">
               <th className="font-normal">Bucket (UTC)</th>
               <th className="text-right font-normal">Rows</th>
             </tr>

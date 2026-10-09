@@ -186,7 +186,7 @@ describe('dataWorkerState tagging', () => {
     state.markTaggingDirty();
     state.markTaggingDirty();
     expect(state.tagging.dirty).toBe(true);
-    await vi.advanceTimersByTimeAsync(4_999);
+    await vi.advanceTimersByTimeAsync(299);
     expect(store.save).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
@@ -205,12 +205,15 @@ describe('dataWorkerState tagging', () => {
     state.tagging.store = store;
 
     state.markTaggingDirty();
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(300);
     expect(store.save).toHaveBeenCalledTimes(1);
     expect(state.tagging.dirty).toBe(true);
     expect(state.tagging.persistTimer).not.toBeNull();
 
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Failures back off instead of retrying at the edit debounce.
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(store.save).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(store.save).toHaveBeenCalledTimes(2);
     expect(state.tagging.dirty).toBe(false);
   });
@@ -230,6 +233,40 @@ describe('dataWorkerState tagging', () => {
     expect(state.tagging.persistTimer).toBeNull();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(store.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs saves one at a time so an older snapshot never lands last', async () => {
+    const state = createDataWorkerState();
+    const store = createMockTaggingStore();
+    const order: string[] = [];
+    let releaseFirst!: () => void;
+    store.save
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            order.push('first:start');
+            releaseFirst = () => {
+              order.push('first:end');
+              resolve();
+            };
+          })
+      )
+      .mockImplementationOnce(async () => {
+        order.push('second:start');
+      });
+    state.tagging.store = store;
+
+    state.markTaggingDirty();
+    const first = state.persistTaggingNow();
+    await vi.waitFor(() => expect(order).toEqual(['first:start']));
+    state.markTaggingDirty(); // edited while the first save is still writing
+    const second = state.persistTaggingNow();
+    await Promise.resolve();
+    expect(order).toEqual(['first:start']);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['first:start', 'first:end', 'second:start']);
   });
 
   it('resetTagging cancels a pending save', async () => {

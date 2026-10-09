@@ -45,7 +45,7 @@ https://nbareil.github.io/tabular-analysis-workbench/
   `Event 4624` is never mistaken for a date, and `007` stays `007` on screen.
 - **Exact-value suggestions:** when an equality filter returns zero rows, the
   worker suggests nearby exact values without changing the result set.
-- **Labels & notes:** labels and notes are saved per file within seconds of an
+- **Labels & notes:** labels and notes are saved per file within a second of an
   edit, and kept for 21 days after the file was last opened. Imports from a file
   with a different row count are rejected so labels never land on the wrong rows.
 - **Security posture:** all work stays local, markdown is sanitised, CSV exports
@@ -59,7 +59,8 @@ https://nbareil.github.io/tabular-analysis-workbench/
 - **Origin Private File System (OPFS):** holds the row cache for the open dataset
   and the per-file annotation snapshots.
 - **Testing stack:** Vitest + Testing Library for unit, worker integration and
-  component tests. See `TDD.md` for the design.
+  component tests; Playwright + axe-core for end-to-end and accessibility tests
+  in Chromium. See `TDD.md` for the design.
 
 ## Installation
 
@@ -128,12 +129,16 @@ npm run preview   # Serves dist/ for local smoke tests
 ### Exporting Results
 - **Export → Rows in current view** writes the filtered, searched and sorted
   rows to `.csv` or `.csv.gz` without touching the source file.
-- **Export → Labelled rows only** adds `labels` and `note` columns.
-- **Export → Labels & notes** saves the annotation bundle as JSON.
+- **Export → All labelled rows** adds `labels` and `note` columns.
+- **Export → All labels & notes** saves the annotation bundle as JSON.
+- Both annotation exports always contain every labelled or annotated row and ignore filters and
+  search; use **Rows in current view** for a filtered subset.
 
 ## Development Commands
 - `npm run lint` – ESLint across `ts`/`tsx` files.
 - `npm run test` – Vitest unit and worker suites.
+- `npm run e2e` – Playwright end-to-end and axe accessibility tests in Chromium
+  (starts its own dev server on port 4174; run `npx playwright install chromium` once).
 - `npm run dev` – Vite dev server with hot reload.
 - `npm run build` – Type check + optimized production build.
 

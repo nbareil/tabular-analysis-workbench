@@ -74,7 +74,14 @@ export const HeaderContextMenu = ({
                     className="flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1 text-left hover:bg-slate-800 focus:bg-slate-800 focus:outline-hidden"
                     onClick={() => onToggleValue(item.value)}
                   >
-                    <input type="checkbox" readOnly checked={checked} tabIndex={-1} className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                    <span
+                      aria-hidden
+                      className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border text-[10px] leading-none ${
+                        checked ? 'border-cyan-500 bg-cyan-500 text-accent-ink' : 'border-slate-600'
+                      }`}
+                    >
+                      {checked ? '✓' : ''}
+                    </span>
                     <span className="truncate">{item.value}</span>
                     <span className="ml-auto shrink-0 text-[10px] text-slate-400">{item.count.toLocaleString()}</span>
                   </button>

@@ -63,13 +63,13 @@ export const ColumnProfileDialog = ({ column, onClose }: ColumnProfileDialogProp
           </table>
           {profile.topValues.length ? (
             <table className="w-full text-xs">
-              <caption className="mb-1 text-left text-[10px] uppercase tracking-wide text-slate-500">Most common values</caption>
+              <caption className="mb-1 text-left text-[10px] uppercase tracking-wide text-slate-400">Most common values</caption>
               <tbody>
                 {profile.topValues.map((item) => (
                   <tr key={item.value}>
                     <td className="truncate py-0.5 pr-4 font-mono">{item.value}</td>
                     <td className="py-0.5 text-right tabular-nums text-slate-400">{item.count.toLocaleString()}</td>
-                    <td className="w-16 py-0.5 text-right tabular-nums text-slate-500">{percent(item.count, profile.rows)}</td>
+                    <td className="w-16 py-0.5 text-right tabular-nums text-slate-400">{percent(item.count, profile.rows)}</td>
                   </tr>
                 ))}
               </tbody>

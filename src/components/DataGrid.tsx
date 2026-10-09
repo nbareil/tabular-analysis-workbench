@@ -344,16 +344,20 @@ const DataGrid = ({ status, searchQuery, onEditTagNote }: DataGridProps): JSX.El
         closeMenu();
       }
     };
-    const handleScroll = (event: Event) => {
+    // Close when the user scrolls, not on programmatic scrolls (AG Grid scrolling a focused
+    // header into view would otherwise close a menu the moment it opens).
+    const handleUserScroll = (event: Event) => {
       if (!isWithinGridContextMenu(event.target)) {
         closeMenu();
       }
     };
     window.addEventListener('mousedown', handleMouseDown);
-    window.addEventListener('scroll', handleScroll, true);
+    window.addEventListener('wheel', handleUserScroll, { capture: true, passive: true });
+    window.addEventListener('touchmove', handleUserScroll, { capture: true, passive: true });
     return () => {
       window.removeEventListener('mousedown', handleMouseDown);
-      window.removeEventListener('scroll', handleScroll, true);
+      window.removeEventListener('wheel', handleUserScroll, true);
+      window.removeEventListener('touchmove', handleUserScroll, true);
     };
   }, [closeMenu, contextMenu]);
 
@@ -661,7 +665,7 @@ const DataGrid = ({ status, searchQuery, onEditTagNote }: DataGridProps): JSX.El
         onContextMenu={handleContainerContextMenu}
       >
         {showPlaceholder ? (
-          <div className="flex h-full items-center justify-center text-sm text-slate-500">{emptyStateMessage}</div>
+          <div className="flex h-full items-center justify-center text-sm text-slate-400">{emptyStateMessage}</div>
         ) : (
           <div className="relative h-full w-full">
             <AgGridReact<GridRow>

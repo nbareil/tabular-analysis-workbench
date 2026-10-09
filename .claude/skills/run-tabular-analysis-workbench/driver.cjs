@@ -9,7 +9,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
-const URL = process.env.TWB_URL ?? 'http://localhost:5199/tabular-analysis-workbench/';
+const APP_URL = process.env.TWB_URL ?? 'http://localhost:5199/tabular-analysis-workbench/';
 const OUT = process.env.TWB_OUT ?? '/tmp/twb-shots';
 const args = process.argv.slice(2);
 const mode = args.find((a) => !a.startsWith('--') && args[args.indexOf(a) - 1] !== '--csv') ?? 'smoke';
@@ -63,7 +63,7 @@ const step = async (name, fn) => {
       (await navigator.storage.getDirectory()).getFileHandle(`saved-${options.suggestedName}`, { create: true });
   });
 
-  await page.goto(URL);
+  await page.goto(APP_URL);
   const csv = csvArg ? fs.readFileSync(csvArg, 'utf8') : fixtureCsv();
   await page.evaluate(async (text) => {
     const handle = await (await navigator.storage.getDirectory()).getFileHandle('fixture.csv', { create: true });

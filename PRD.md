@@ -90,7 +90,9 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
   - `labelIds` (any number of color labels; MITRE ATT&CK tactics are provided by default)
   - `note` (markdown text)
 - Stored separately in OPFS as `{labels, tags: {row_id: {labelIds, note}}}`.
+- Labels are applied inline from the Labels column; notes are edited in a side panel (markdown with preview).
 - Export/import as JSON for sharing; imports into a file with a different row count are rejected.
+- Annotation exports (JSON and the labelled-rows CSV) always include every annotated row, regardless of filters.
 
 ### 4.5 Grid & Visualization
 - Virtualized grid (AG Grid or equivalent):  
@@ -283,8 +285,6 @@ Typography: Inter + JetBrains Mono.
 | Topic | Question |
 |--------|-----------|
 | Filter execution | Do we need additional indexing or precomputation for repeated filters? |
-| Annotation UX | Inline cell vs side panel editor? |
-| Export | Should filters affect note JSON export? |
 
 ---
 ### Options Panel

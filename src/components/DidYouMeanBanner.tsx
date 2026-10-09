@@ -67,7 +67,7 @@ export const DidYouMeanBanner = (): JSX.Element | null => {
   const controlsDisabled = !matchingFilter;
 
   return (
-    <div className="mb-4 rounded-sm border border-yellow-500/40 bg-yellow-50 px-4 py-3 text-sm text-yellow-900 shadow-inner dark:border-yellow-500/40 dark:bg-yellow-950/40 dark:text-yellow-100">
+    <div className="mb-4 rounded-sm border border-yellow-500/40 bg-yellow-950/40 px-4 py-3 text-sm text-yellow-100 shadow-inner">
       <div className="flex flex-col gap-3 md:flex-row md:items-center">
         <div className="flex flex-1 items-start gap-3">
           <div className="mt-0.5 text-yellow-500">
@@ -81,10 +81,10 @@ export const DidYouMeanBanner = (): JSX.Element | null => {
           </div>
           <div className="space-y-1">
             <p>
-              No exact matches for <code className="rounded-sm bg-yellow-100 px-1 dark:bg-yellow-900/60">&lsquo;{didYouMean.query}&rsquo;</code> in{' '}
+              No exact matches for <code className="rounded-sm bg-yellow-900/60 px-1">&lsquo;{didYouMean.query}&rsquo;</code> in{' '}
               <strong>{columnLabel}</strong>.
             </p>
-            <p className="text-xs text-yellow-800 dark:text-yellow-200">
+            <p className="text-xs text-yellow-200">
               Did you mean one of these exact values?
             </p>
           </div>
@@ -96,7 +96,7 @@ export const DidYouMeanBanner = (): JSX.Element | null => {
               type="button"
               onClick={() => handleApplySuggestion(suggestion)}
               disabled={controlsDisabled}
-              className="rounded-full border border-yellow-500 bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-900 transition hover:bg-yellow-200 disabled:opacity-50 dark:border-yellow-500/60 dark:bg-yellow-900/50 dark:text-yellow-100"
+              className="rounded-full border border-yellow-500/60 bg-yellow-900/50 px-3 py-1 text-xs font-medium text-yellow-100 transition hover:bg-yellow-800 disabled:opacity-50"
             >
               {suggestion}
             </button>

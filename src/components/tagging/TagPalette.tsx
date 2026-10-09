@@ -71,7 +71,7 @@ const TagPalette = ({
                 />
                 <span className="truncate">{label.name}</span>
               </span>
-              <span className="text-[10px] uppercase tracking-wide text-slate-500">
+              <span className="text-[10px] uppercase tracking-wide text-slate-400">
                 {label.description ? 'Custom' : 'Label'}
               </span>
             </button>

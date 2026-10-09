@@ -92,7 +92,7 @@
 
 ### 6.4 Tagging
 1. UI calls `tagRows`, `clearTag`, `restoreTags` (undo), `updateLabel`, `deleteLabel`, `importTags`.
-2. The worker updates its in-memory map and saves the snapshot at most every 5 seconds, and immediately when the page is hidden or another file is opened. A failed save keeps the snapshot dirty and retries.
+2. The worker updates its in-memory map and saves the snapshot 300 ms after the last edit, and immediately when the page is hidden or another file is opened. Saves run one at a time. A failed save keeps the snapshot dirty and retries after 5 seconds. (The worker dies on unload before an async write can commit, so the short delay is what bounds data loss when a tab closes.)
 
 ### 6.5 Export
 - `exportCsv` builds a `Blob` from 10,000-row string chunks in the worker (no single giant string). Scopes: the current view, or only labelled/annotated rows (with `labels` and `note` columns). The main thread optionally gzips it with `CompressionStream` and saves it with `showSaveFilePicker`.
@@ -147,6 +147,7 @@ localStorage
 ## 9. UI and UX details
 - Keyboard: `/` or Ctrl/Cmd+K search; Enter/Shift+Enter in search moves to the next/previous match; `g` row number; `f` filter panel; `a` add filter; Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z undo/redo; in the grid, arrows move (Shift extends the selection), Space toggles selection, `T` edits the focused row's labels/note, `[`/`]` jump to the previous/next labelled row.
 - Grid context menu: copy rows/cell, filter in/out, filter a time window around a timestamp, labels, hide column. Header menu: hide, profile column, timeline histogram, value counts with checkbox filters.
+- Themes: components are styled dark-first with Tailwind palette utilities; light mode (`html:not(.dark)` in `global.css`) mirrors every palette the UI uses, so one class list serves both themes. Text on fixed colours (the accent) uses fixed tokens, and scrims are always black.
 - Status bar: row counts, active scopes, label filter summary, streaming progress, malformed row count, browser storage usage.
 
 ## 10. Performance
@@ -169,8 +170,9 @@ localStorage
 - Vitest unit tests: parser edge cases (quotes, chunk boundaries, delimiters, BOM, ragged rows), strict parsing (run with `TZ=Europe/Paris` to catch local-time bugs), filter/sort/group semantics, stores and hooks.
 - Worker integration tests run the worker API in Node with the in-memory store: loading, merging, superseded requests, view pipeline, tagging persistence, export.
 - Component tests with Testing Library for menus, dialogs, shortcuts and the filter builder.
-- CI runs lint, type check, tests and build on every push and pull request.
-- Not yet automated: Playwright end-to-end tests, large-file performance benchmarks, axe accessibility audits (tracked in bd).
+- CI runs lint, type check, unit tests, build and the Playwright suite on every push and pull request.
+- Playwright end-to-end tests (`e2e/`) drive the real app in Chromium. The native file pickers are replaced with OPFS file handles, so loading, filtering, labelling (including persistence across a reload), notes, export and error paths run unattended. Any uncaught page error fails the test.
+- axe-core audits (WCAG 2.1 A/AA) run in the same suite on the start screen, the loaded grid with a filter, menus, the timeline and every dialog, in both themes.
 
 ## 14. Tooling
 - npm with `package-lock.json`; Node 22 (also provided by `nix develop`).
@@ -179,4 +181,3 @@ localStorage
 
 ## 15. Open questions
 - Whether repeated filter/search workloads need additional indexing once real-world datasets are profiled.
-- Fuzzy (typo-tolerant) fallback search from the PRD is not implemented yet; it is tracked in bd.

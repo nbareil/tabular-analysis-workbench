@@ -18,7 +18,10 @@ const DEFAULT_OPTIONS = {
   slowBatchThresholdMs: 32
 } as const;
 
-const TAG_PERSIST_DEBOUNCE_MS = 5_000;
+// Short, so closing the tab right after an edit loses at most a fraction of a second of work:
+// the worker is killed on unload before an async OPFS write started then can commit.
+const TAG_PERSIST_DEBOUNCE_MS = 300;
+const TAG_PERSIST_RETRY_MS = 5_000;
 
 export class StaleOperationError extends Error {
   override name = 'StaleOperationError';
@@ -223,12 +226,20 @@ class DataWorkerState implements DataWorkerStateController {
     this.schedulePersist();
   }
 
-  async persistTaggingNow(): Promise<void> {
-    const tagging = this.tagging;
-    if (tagging.persistTimer != null) {
-      clearTimeout(tagging.persistTimer);
-      tagging.persistTimer = null;
+  persistTaggingNow(): Promise<void> {
+    if (this.tagging.persistTimer != null) {
+      clearTimeout(this.tagging.persistTimer);
+      this.tagging.persistTimer = null;
     }
+    // One save at a time: each starts from the state current when it runs, so the last write wins.
+    this.saveQueue = this.saveQueue.then(() => this.saveTagging());
+    return this.saveQueue;
+  }
+
+  private saveQueue: Promise<void> = Promise.resolve();
+
+  private async saveTagging(): Promise<void> {
+    const tagging = this.tagging;
     if (!tagging.store || !tagging.dirty) {
       return;
     }
@@ -238,19 +249,20 @@ class DataWorkerState implements DataWorkerStateController {
     } catch (error) {
       console.warn('[data-worker][tagging] Failed to persist labels; will retry', error);
       if (tagging === this.tagging) {
-        this.markTaggingDirty();
+        tagging.dirty = true;
+        this.schedulePersist(TAG_PERSIST_RETRY_MS);
       }
     }
   }
 
-  private schedulePersist(): void {
+  private schedulePersist(delay = TAG_PERSIST_DEBOUNCE_MS): void {
     if (!this.tagging.store || this.tagging.persistTimer != null) {
       return;
     }
     this.tagging.persistTimer = setTimeout(() => {
       this.tagging.persistTimer = null;
       void this.persistTaggingNow();
-    }, TAG_PERSIST_DEBOUNCE_MS);
+    }, delay);
   }
 }
 

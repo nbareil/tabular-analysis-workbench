@@ -74,7 +74,7 @@ export const GridMenu = ({ label, x, y, className = '', onClose, children }: Gri
 
 export const MenuSection = ({ title, children }: { title: string; children: ReactNode }): JSX.Element => (
   <div role="group" aria-label={title} className="mt-1 border-t border-slate-800 pt-1 first:mt-0 first:border-t-0 first:pt-0">
-    <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-500" aria-hidden>
+    <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-slate-400" aria-hidden>
       {title}
     </div>
     {children}

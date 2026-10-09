@@ -41,7 +41,8 @@ A dataset without a saved snapshot starts with the MITRE ATT&CK tactic labels (`
 
 ## Persistence
 
-- Mutations mark the snapshot dirty. The worker saves at most every 5 seconds, and immediately when another dataset is opened or the page becomes hidden (`visibilitychange`).
+- Mutations mark the snapshot dirty. The worker saves 300 ms after the last edit, and immediately when another dataset is opened or the page becomes hidden (`visibilitychange`). Saves are serialised, so the last edit always lands last.
+- Closing or reloading the tab kills the worker before an OPFS write started at that moment can commit; the short debounce is what keeps the loss window under a second.
 - `createWritable()` writes to a swap file that atomically replaces the snapshot on `close()`, so an interrupted write leaves the previous snapshot intact.
 - A failed save keeps the snapshot dirty and is retried.
 - Opening a dataset re-saves its snapshot (restarting its retention clock) and deletes snapshots of other datasets whose file was last modified more than 21 days ago.
@@ -67,6 +68,7 @@ A dataset without a saved snapshot starts with the MITRE ATT&CK tactic labels (`
 - **Navigate:** `]` / `[` jump to the next/previous labelled or annotated row in the current view.
 - **Filter:** label filters (`eq` / `neq`, or *no label*) in the filter builder or via *Filter in/out* on the Labels column. Several label equality filters are ORed. The status bar summarises active label filters.
 - **Undo:** Ctrl/Cmd+Z undoes the last label or filter edit; Ctrl/Cmd+Shift+Z redoes it. History resets when another dataset is opened.
-- **Export:** *Export → Labels & notes (.json)* for sharing; *Export → Labelled rows only* writes those rows as CSV with `labels` and `note` columns.
+- **Export:** *Export → All labels & notes (.json)* for sharing; *Export → All labelled rows* writes those rows as CSV with `labels` and `note` columns. Both ignore filters and search: the JSON is keyed by row number and is also a backup, so a partial export followed by a *replace* import would silently drop annotations. Use *Rows in current view* for a filtered subset.
+- **Editing surfaces:** labels are applied inline (Labels column context menu, applies to the selection) because it is the frequent, quick action; notes are edited in the side panel because markdown needs room and a preview.
 - **Import:** Labels panel → import JSON, choosing merge or replace.
 - Notes render through `marked` + DOMPurify; links open in a new tab so the session is not lost.

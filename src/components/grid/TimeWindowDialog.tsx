@@ -38,7 +38,7 @@ export const TimeWindowDialog = ({ column, center, onApply, onClose }: TimeWindo
           </button>
           <button
             type="button"
-            className="rounded-sm bg-accent px-3 py-1 text-xs font-semibold text-slate-900 disabled:opacity-50"
+            className="rounded-sm bg-accent px-3 py-1 text-xs font-semibold text-accent-ink disabled:opacity-50"
             disabled={!valid}
             onClick={apply}
           >
@@ -82,7 +82,7 @@ export const TimeWindowDialog = ({ column, center, onApply, onClose }: TimeWindo
           </select>
         </div>
         {valid ? (
-          <p className="text-[11px] text-slate-500">
+          <p className="text-[11px] text-slate-400">
             {formatUtcIso(center - span)} → {formatUtcIso(center + span)}
           </p>
         ) : null}

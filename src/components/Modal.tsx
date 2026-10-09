@@ -38,7 +38,7 @@ export const Modal = ({ title, onClose, children, footer, widthClassName = 'max-
         type="button"
         tabIndex={-1}
         aria-label={`Close ${title}`}
-        className="absolute inset-0 cursor-default bg-slate-950/70"
+        className="absolute inset-0 cursor-default bg-black/60"
         onClick={onClose}
       />
       <div

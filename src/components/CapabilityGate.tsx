@@ -41,7 +41,7 @@ export const CapabilityGate = ({ report }: CapabilityGateProps): JSX.Element => 
             </ul>
           </div>
         )}
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-400">
           UA detection avoided; capability probing refreshes automatically when features become
           available.
         </p>

@@ -64,12 +64,12 @@ export const ExportMenu = ({
       {anchor ? (
         <GridMenu label="Export" x={anchor.x} y={anchor.y} onClose={close} className="w-64">
           <MenuSection title="Rows in current view">{formats(canExportView, (format) => onExportRows('view', format))}</MenuSection>
-          <MenuSection title="Labelled rows only">
+          <MenuSection title="All labelled rows (ignores filters)">
             {formats(canExportLabelled, (format) => onExportRows('labelled', format))}
           </MenuSection>
           <MenuSection title="Grouping">{formats(canExportGrouping, onExportGrouping)}</MenuSection>
           <MenuSection title="Annotations">
-            <MenuItem onClick={choose(onExportAnnotations)}>Labels &amp; notes (.json)</MenuItem>
+            <MenuItem onClick={choose(onExportAnnotations)}>All labels &amp; notes (.json)</MenuItem>
           </MenuSection>
         </GridMenu>
       ) : null}

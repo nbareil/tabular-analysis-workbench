@@ -95,7 +95,7 @@ const OptionsPanel = ({
                 ))}
               </select>
               {activeInterfaceFont.description && (
-                <p className="text-xs text-slate-500">{activeInterfaceFont.description}</p>
+                <p className="text-xs text-slate-400">{activeInterfaceFont.description}</p>
               )}
             </label>
             <label className="flex items-center gap-2 text-xs text-slate-400">
@@ -108,7 +108,7 @@ const OptionsPanel = ({
                 onChange={(event) => handleInterfaceFontSizeChange(event.target.value)}
                 className="w-20 rounded-sm border border-slate-600 bg-slate-950 px-2 py-1 text-sm text-slate-200"
               />
-              <span className="text-slate-500">px</span>
+              <span className="text-slate-400">px</span>
             </label>
             <div className="rounded-sm border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
               <span
@@ -140,7 +140,7 @@ const OptionsPanel = ({
                 ))}
               </select>
               {activeDataFont.description && (
-                <p className="text-xs text-slate-500">{activeDataFont.description}</p>
+                <p className="text-xs text-slate-400">{activeDataFont.description}</p>
               )}
             </label>
             <label className="flex items-center gap-2 text-xs text-slate-400">
@@ -153,7 +153,7 @@ const OptionsPanel = ({
                 onChange={(event) => handleDataFontSizeChange(event.target.value)}
                 className="w-20 rounded-sm border border-slate-600 bg-slate-950 px-2 py-1 text-sm text-slate-200"
               />
-              <span className="text-slate-500">px</span>
+              <span className="text-slate-400">px</span>
             </label>
             <div className="rounded-sm border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
               <span
@@ -183,7 +183,7 @@ const OptionsPanel = ({
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-400">
                 Converts datetime columns for display only. Timestamps without a zone are read as UTC.
               </p>
             </label>
@@ -212,7 +212,7 @@ const OptionsPanel = ({
               </button>
             </div>
             {flushState === 'pending' && (
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-slate-400">
                 Clearing stored browser data and restarting the workspace…
               </p>
             )}
