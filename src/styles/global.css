@@ -3,9 +3,6 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --color-canvas: #0f172a;
-  --color-canvas-accent: #1f2937;
-
   --color-accent: #22d3ee;
   --color-accent-subtle: #0ea5e9;
 
@@ -31,6 +28,24 @@
   }
 }
 
+/*
+  The UI is styled dark-first with slate utilities. Light mode mirrors the slate scale
+  (50 <-> 950, 100 <-> 900, ...) so every surface, border and text colour flips together.
+*/
+html:not(.dark) {
+  color-scheme: light;
+  --color-slate-50: oklch(12.9% 0.042 264.695);
+  --color-slate-100: oklch(20.8% 0.042 265.755);
+  --color-slate-200: oklch(27.9% 0.041 260.031);
+  --color-slate-300: oklch(37.2% 0.044 257.287);
+  --color-slate-400: oklch(44.6% 0.043 257.281);
+  --color-slate-600: oklch(70.4% 0.04 256.788);
+  --color-slate-700: oklch(86.9% 0.022 252.894);
+  --color-slate-800: oklch(92.9% 0.013 255.508);
+  --color-slate-900: oklch(96.8% 0.007 247.896);
+  --color-slate-950: oklch(98.4% 0.003 247.858);
+}
+
 :root {
   color-scheme: dark;
   --app-font-family: 'Inter', system-ui, sans-serif;
@@ -47,8 +62,8 @@ body,
 
 body {
   margin: 0;
-  background-color: #0f172a;
-  color: rgb(226 232 240);
+  background-color: var(--color-slate-900);
+  color: var(--color-slate-200);
   font-family: var(--app-font-family);
   font-size: var(--app-font-size);
 }

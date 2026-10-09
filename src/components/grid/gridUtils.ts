@@ -84,6 +84,8 @@ export type DistributionSortOrder = 'asc' | 'desc';
 export const AUTO_WIDTH_MAX_SAMPLE_ROWS = 1_000;
 export const AUTO_WIDTH_BLOCK_SIZE = 250;
 export const CELL_HORIZONTAL_PADDING_PX = 32;
+/** Sort arrow, menu button and gaps drawn next to the header name. */
+export const HEADER_CONTROLS_PX = 44;
 export const MIN_COLUMN_WIDTH = 80;
 export const MAX_COLUMN_WIDTH = 520;
 

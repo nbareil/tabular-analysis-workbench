@@ -6,7 +6,7 @@ import {
   AUTO_WIDTH_BLOCK_SIZE,
   AUTO_WIDTH_MAX_SAMPLE_ROWS,
   CELL_HORIZONTAL_PADDING_PX,
-  MIN_COLUMN_WIDTH,
+  HEADER_CONTROLS_PX,
   computeAutoColumnWidth
 } from './gridUtils';
 
@@ -64,7 +64,7 @@ export const useAutoColumnWidths = (
       for (const column of columns) {
         next[column.key] = computeAutoColumnWidth({
           valueSamples: rows.map((row) => measureText(String(row[column.key] ?? ''))),
-          headerWidth: measureText(column.headerName) || MIN_COLUMN_WIDTH
+          headerWidth: measureText(column.headerName) + HEADER_CONTROLS_PX
         });
       }
       setWidths({ loadId, widths: next });

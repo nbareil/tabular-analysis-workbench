@@ -347,7 +347,7 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
   const hasData = workerReady && fileHandles.length > 0 && loaderStatus !== 'idle';
 
   return (
-    <div className="flex h-full flex-col bg-canvas text-slate-100">
+    <div className="flex h-full flex-col bg-slate-900 text-slate-100">
       {capabilityReport.ok && capabilityWarnings.length > 0 && !warningsDismissed && (
         <CapabilityWarningBanner warnings={capabilityWarnings} onDismiss={onDismissWarnings} />
       )}

@@ -64,9 +64,9 @@ export const TagCellRenderer = ({
 }: ICellRendererParams<TagCellValue | null>): JSX.Element => {
   if (!value) {
     return (
-      <span className="flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-400">
+      <span className="flex items-center gap-2 text-[11px] text-slate-400">
         <span
-          className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-400 dark:border-slate-600"
+          className="h-2.5 w-2.5 shrink-0 rounded-full border border-slate-600"
           aria-hidden
         />
         Add label
@@ -80,7 +80,7 @@ export const TagCellRenderer = ({
   const text = primaryLabel?.name ?? (note ? 'No label' : 'Tagged');
 
   return (
-    <span className="flex items-center gap-2 truncate text-xs text-slate-900 dark:text-slate-100">
+    <span className="flex items-center gap-2 truncate text-xs text-slate-100">
       <span
         className="h-2.5 w-2.5 shrink-0 rounded-full"
         style={
@@ -92,12 +92,12 @@ export const TagCellRenderer = ({
       />
       <span className="truncate">{text}</span>
       {extraCount > 0 ? (
-        <span className="text-[10px] uppercase tracking-wide text-slate-600 dark:text-slate-400">
+        <span className="text-[10px] uppercase tracking-wide text-slate-400">
           +{extraCount} more
         </span>
       ) : null}
       {note ? (
-        <span className="text-[10px] uppercase tracking-wide text-slate-600 dark:text-slate-400">
+        <span className="text-[10px] uppercase tracking-wide text-slate-400">
           Note
         </span>
       ) : null}
