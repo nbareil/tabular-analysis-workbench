@@ -14,15 +14,14 @@
     "allowSyntheticDefaultImports": true,
     "jsx": "react-jsx",
     "types": ["vitest/globals", "@testing-library/jest-dom/vitest", "node"],
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "@components/*": ["src/components/*"],
-      "@state/*": ["src/state/*"],
-      "@constants/*": ["src/constants/*"],
-      "@workers/*": ["src/workers/*"],
-      "@utils/*": ["src/utils/*"],
-      "@styles/*": ["src/styles/*"]
+      "@/*": ["./src/*"],
+      "@components/*": ["./src/components/*"],
+      "@state/*": ["./src/state/*"],
+      "@constants/*": ["./src/constants/*"],
+      "@workers/*": ["./src/workers/*"],
+      "@utils/*": ["./src/utils/*"],
+      "@styles/*": ["./src/styles/*"]
     }
   },
   "include": ["src"],

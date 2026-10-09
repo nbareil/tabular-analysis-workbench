@@ -49,7 +49,7 @@ export const CellContextMenu = ({
   const hasTagOrNote = activeLabelIds.length > 0 || Boolean(activeRecord?.note);
 
   return (
-    <GridMenu label="Cell actions" x={menu.x} y={menu.y} onClose={onClose} className="min-w-[14rem]">
+    <GridMenu label="Cell actions" x={menu.x} y={menu.y} onClose={onClose} className="min-w-56">
       <MenuSection title="Copy">
         <MenuItem onClick={onCopyRows} disabled={!canCopy}>
           {targetRowCount > 1 ? `Copy ${targetRowCount} rows` : 'Copy row'}

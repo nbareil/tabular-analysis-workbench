@@ -84,7 +84,7 @@ const OptionsPanel = ({
             <label className="flex flex-col gap-2">
               <span className="text-xs text-slate-400">Interface font</span>
               <select
-                className="rounded border border-slate-600 bg-slate-950 px-3 py-2 text-sm"
+                className="rounded-sm border border-slate-600 bg-slate-950 px-3 py-2 text-sm"
                 value={interfaceFontFamily}
                 onChange={(event) => handleInterfaceFontChange(event.target.value)}
               >
@@ -106,11 +106,11 @@ const OptionsPanel = ({
                 max={24}
                 value={interfaceFontSize}
                 onChange={(event) => handleInterfaceFontSizeChange(event.target.value)}
-                className="w-20 rounded border border-slate-600 bg-slate-950 px-2 py-1 text-sm text-slate-200"
+                className="w-20 rounded-sm border border-slate-600 bg-slate-950 px-2 py-1 text-sm text-slate-200"
               />
               <span className="text-slate-500">px</span>
             </label>
-            <div className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+            <div className="rounded-sm border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
               <span
                 style={{
                   fontFamily: getFontStack(interfaceFontFamily),
@@ -129,7 +129,7 @@ const OptionsPanel = ({
             <label className="flex flex-col gap-2">
               <span className="text-xs text-slate-400">Data font</span>
               <select
-                className="rounded border border-slate-600 bg-slate-950 px-3 py-2 text-sm"
+                className="rounded-sm border border-slate-600 bg-slate-950 px-3 py-2 text-sm"
                 value={dataFontFamily}
                 onChange={(event) => handleDataFontChange(event.target.value)}
               >
@@ -151,11 +151,11 @@ const OptionsPanel = ({
                 max={24}
                 value={dataFontSize}
                 onChange={(event) => handleDataFontSizeChange(event.target.value)}
-                className="w-20 rounded border border-slate-600 bg-slate-950 px-2 py-1 text-sm text-slate-200"
+                className="w-20 rounded-sm border border-slate-600 bg-slate-950 px-2 py-1 text-sm text-slate-200"
               />
               <span className="text-slate-500">px</span>
             </label>
-            <div className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+            <div className="rounded-sm border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300">
               <span
                 style={{
                   fontFamily: getFontStack(dataFontFamily),
@@ -172,7 +172,7 @@ const OptionsPanel = ({
             <label className="flex flex-col gap-2">
               <span className="text-xs text-slate-400">Display time zone</span>
               <select
-                className="rounded border border-slate-600 bg-slate-950 px-3 py-2 text-sm"
+                className="rounded-sm border border-slate-600 bg-slate-950 px-3 py-2 text-sm"
                 value={displayTimeZone}
                 onChange={(event) => setDisplayTimeZone(event.target.value)}
               >
@@ -197,14 +197,14 @@ const OptionsPanel = ({
               Removes cached rows, all saved labels and notes, and these preferences from this browser,
               then reloads. Your files are not touched.
             </p>
-            <div className="flex items-center justify-between gap-3 rounded border border-rose-900/60 bg-rose-950/20 px-3 py-3">
+            <div className="flex items-center justify-between gap-3 rounded-sm border border-rose-900/60 bg-rose-950/20 px-3 py-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-rose-100">Delete everything</p>
                 <p className="text-xs text-rose-200/80">Export labels first if you want to keep them.</p>
               </div>
               <button
                 type="button"
-                className="shrink-0 rounded border border-rose-600 px-3 py-2 text-xs font-semibold text-rose-100 hover:bg-rose-900/40 disabled:cursor-not-allowed disabled:opacity-60"
+                className="shrink-0 rounded-sm border border-rose-600 px-3 py-2 text-xs font-semibold text-rose-100 hover:bg-rose-900/40 disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={handleFlushStoredData}
                 disabled={flushState === 'pending' || flushState === 'done'}
               >

@@ -366,7 +366,7 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
             type="search"
             aria-label="Search visible columns"
             placeholder="Search visible columns  ( / )"
-            className="w-56 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+            className="w-56 rounded-sm border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
             onKeyDown={(event) => {
@@ -404,7 +404,7 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
               min={1}
               aria-label="Go to row number"
               placeholder="Row #  ( g )"
-              className="w-24 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+              className="w-24 rounded-sm border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
               value={jumpTarget}
               onChange={(event) => setJumpTarget(event.target.value)}
               disabled={!hasData}
@@ -412,19 +412,19 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
           </form>
           <button
             type="button"
-            className="rounded bg-accent px-3 py-1 text-sm font-semibold text-slate-900"
+            className="rounded-sm bg-accent px-3 py-1 text-sm font-semibold text-slate-900"
             onClick={handleOpenFile}
             disabled={!workerReady || loaderStatus === 'loading'}
             title="Select several files to merge them into one timeline"
           >
             {loaderStatus === 'loading' ? 'Loading…' : 'Open Files'}
           </button>
-          <button type="button" className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300" onClick={() => setOptionsOpen(true)}>
+          <button type="button" className="rounded-sm border border-slate-600 px-2 py-1 text-xs text-slate-300" onClick={() => setOptionsOpen(true)}>
             Options
           </button>
           <button
             type="button"
-            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+            className="rounded-sm border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setColumnsOpen(true)}
             disabled={!hasData}
           >
@@ -432,7 +432,7 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
           </button>
           <button
             type="button"
-            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+            className="rounded-sm border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setLabelsOpen(true)}
             disabled={!hasData}
           >
@@ -450,13 +450,13 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
           />
           <button
             type="button"
-            className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+            className="rounded-sm border border-slate-600 px-2 py-1 text-xs text-slate-300"
             onClick={() => setShowPivot((value) => !value)}
             disabled={!hasData || loaderStatus === 'loading'}
           >
             {showPivot ? 'Show Grid' : 'Pivot View'}
           </button>
-          <button type="button" className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300" onClick={toggleTheme}>
+          <button type="button" className="rounded-sm border border-slate-600 px-2 py-1 text-xs text-slate-300" onClick={toggleTheme}>
             Toggle Theme
           </button>
         </div>
@@ -483,7 +483,7 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
         <section className="flex flex-1 flex-col">
           <div className="flex flex-1 flex-col overflow-hidden p-4">
             <DidYouMeanBanner />
-            <div className="min-h-0 flex-1 rounded border border-slate-800">
+            <div className="min-h-0 flex-1 rounded-sm border border-slate-800">
               {showPivot ? (
                 <PivotView />
               ) : (

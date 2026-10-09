@@ -149,7 +149,7 @@ const TagNotePanel = ({
           </div>
           <button
             type="button"
-            className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+            className="rounded-sm border border-slate-700 px-3 py-1 text-xs text-slate-300 hover:bg-slate-800 disabled:opacity-40"
             onClick={onClose}
             disabled={saving}
           >
@@ -209,7 +209,7 @@ const TagNotePanel = ({
                 </p>
                 <div
                   aria-labelledby="tag-note-preview-label"
-                  className="h-56 overflow-auto rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
+                  className="h-56 overflow-auto rounded-sm border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
                   data-testid="note-preview"
                 >
                   {previewHtml ? (
@@ -228,7 +228,7 @@ const TagNotePanel = ({
         <footer className="flex items-center justify-between border-t border-slate-800 px-4 py-3 text-sm">
           <button
             type="button"
-            className="rounded border border-red-500/60 px-3 py-1 text-red-200 hover:bg-red-900/40 disabled:opacity-40"
+            className="rounded-sm border border-red-500/60 px-3 py-1 text-red-200 hover:bg-red-900/40 disabled:opacity-40"
             onClick={handleClear}
             disabled={saving}
           >
@@ -237,7 +237,7 @@ const TagNotePanel = ({
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="rounded border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+              className="rounded-sm border border-slate-700 px-3 py-1 text-slate-300 hover:bg-slate-800 disabled:opacity-40"
               onClick={onClose}
               disabled={saving}
             >
@@ -245,7 +245,7 @@ const TagNotePanel = ({
             </button>
             <button
               type="button"
-              className="rounded bg-accent px-4 py-1 font-semibold text-slate-900 disabled:opacity-40"
+              className="rounded-sm bg-accent px-4 py-1 font-semibold text-slate-900 disabled:opacity-40"
               onClick={handleSave}
               disabled={saving}
             >

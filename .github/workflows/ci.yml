@@ -15,7 +15,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
-      - run: npx tsc --noEmit
+      - run: npx tsc --noEmit && npx tsc --noEmit -p tsconfig.node.json
       - name: Test (non-UTC zone catches local-time parsing bugs)
         run: npm test
         env:

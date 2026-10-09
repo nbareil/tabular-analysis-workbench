@@ -50,7 +50,7 @@ export const ExportMenu = ({
       <button
         ref={buttonRef}
         type="button"
-        className="rounded border border-slate-600 px-2 py-1 text-xs text-slate-300"
+        className="rounded-sm border border-slate-600 px-2 py-1 text-xs text-slate-300"
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={anchor != null}

@@ -65,7 +65,7 @@ const DiagnosticsToast = ({
         {hasRetry && (
           <button
             type="button"
-            className="rounded bg-red-500/90 px-3 py-1 text-xs font-semibold text-white disabled:opacity-60"
+            className="rounded-sm bg-red-500/90 px-3 py-1 text-xs font-semibold text-white disabled:opacity-60"
             onClick={handleRetry}
             disabled={retrying}
           >
@@ -74,14 +74,14 @@ const DiagnosticsToast = ({
         )}
         <button
           type="button"
-          className="rounded border border-slate-500 px-3 py-1 text-xs text-slate-100"
+          className="rounded-sm border border-slate-500 px-3 py-1 text-xs text-slate-100"
           onClick={onDownload}
         >
           Download diagnostics
         </button>
         <button
           type="button"
-          className="rounded border border-transparent px-3 py-1 text-xs text-slate-400 hover:text-slate-200"
+          className="rounded-sm border border-transparent px-3 py-1 text-xs text-slate-400 hover:text-slate-200"
           onClick={onDismiss}
         >
           Dismiss

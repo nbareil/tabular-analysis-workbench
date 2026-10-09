@@ -33,7 +33,7 @@ export const Modal = ({ title, onClose, children, footer, widthClassName = 'max-
   }, [onClose]);
 
   return createPortal(
-    <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-10001 flex items-center justify-center p-4">
       <button
         type="button"
         tabIndex={-1}
@@ -47,11 +47,11 @@ export const Modal = ({ title, onClose, children, footer, widthClassName = 'max-
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className={`relative flex max-h-[90vh] w-full ${widthClassName} flex-col rounded border border-slate-700 bg-slate-900 text-sm text-slate-200 shadow-2xl focus:outline-none`}
+        className={`relative flex max-h-[90vh] w-full ${widthClassName} flex-col rounded-sm border border-slate-700 bg-slate-900 text-sm text-slate-200 shadow-2xl focus:outline-hidden`}
       >
         <header className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
           <h2 className="text-sm font-semibold">{title}</h2>
-          <button type="button" aria-label="Close" className="rounded px-2 text-slate-400 hover:text-slate-100" onClick={onClose}>
+          <button type="button" aria-label="Close" className="rounded-sm px-2 text-slate-400 hover:text-slate-100" onClick={onClose}>
             ×
           </button>
         </header>

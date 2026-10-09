@@ -232,7 +232,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
         labelFilters.length > 0 ? (
           <button
             type="button"
-            className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
+            className="rounded-sm border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
             onClick={handleClearLabelFilters}
           >
             Clear label filters
@@ -249,7 +249,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                   type="text"
                   value={labelName}
                   placeholder="Label name"
-                  className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+                  className="rounded-sm border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
                   onChange={(event) => setLabelName(event.target.value)}
                 />
               </label>
@@ -258,13 +258,13 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                 <input
                   type="color"
                   value={labelColor}
-                  className="h-10 w-16 cursor-pointer rounded border border-slate-700 bg-slate-950 p-1"
+                  className="h-10 w-16 cursor-pointer rounded-sm border border-slate-700 bg-slate-950 p-1"
                   onChange={(event) => setLabelColor(event.target.value)}
                 />
               </label>
               <button
                 type="button"
-                className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                className="rounded-sm border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
                 onClick={handleCreateLabel}
                 disabled={!labelName.trim()}
               >
@@ -277,7 +277,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                 <select
                   value={mergeStrategy}
                   onChange={(e) => setMergeStrategy(e.target.value as 'merge' | 'replace')}
-                  className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+                  className="rounded-sm border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
                 >
                   <option value="merge">Merge with existing</option>
                   <option value="replace">Replace all</option>
@@ -285,7 +285,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
               </label>
               <button
                 type="button"
-                className="rounded border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
+                className="rounded-sm border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800"
                 onClick={handleImport}
                 disabled={importing}
               >
@@ -311,13 +311,13 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
               {sortedLabels.map((label) => (
                 <li
                   key={label.id}
-                  className="flex flex-col gap-2 rounded border border-slate-800 px-3 py-2"
+                  className="flex flex-col gap-2 rounded-sm border border-slate-800 px-3 py-2"
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-3">
                       <input
                         type="color"
-                        className="h-6 w-10 cursor-pointer rounded border border-slate-700 bg-slate-950 p-0.5"
+                        className="h-6 w-10 cursor-pointer rounded-sm border border-slate-700 bg-slate-950 p-0.5"
                         value={normalizeColorForInput(label.color)}
                         onChange={(event) => handleColorChange(label.id, event.target.value)}
                         aria-label={`Pick color for ${label.name}`}
@@ -332,7 +332,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                     <div className="flex gap-2">
                       <button
                         type="button"
-                        className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                        className="rounded-sm border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
                         onClick={() => handleShowOnly(label.id)}
                         disabled={isLabelIncluded(label.id)}
                       >
@@ -340,7 +340,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                       </button>
                       <button
                         type="button"
-                        className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                        className="rounded-sm border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
                         onClick={() => handleExclude(label.id)}
                         disabled={isLabelExcluded(label.id)}
                       >
@@ -348,7 +348,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                       </button>
                       <button
                         type="button"
-                        className="rounded border border-slate-700 px-2 py-1 text-xs text-red-300 hover:bg-red-900/40"
+                        className="rounded-sm border border-slate-700 px-2 py-1 text-xs text-red-300 hover:bg-red-900/40"
                         onClick={() => handleDelete(label.id)}
                       >
                         Remove
@@ -357,7 +357,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                   </div>
                 </li>
               ))}
-              <li className="flex flex-col gap-2 rounded border border-dashed border-slate-800 px-3 py-2">
+              <li className="flex flex-col gap-2 rounded-sm border border-dashed border-slate-800 px-3 py-2">
                 <div className="flex items-center justify-between gap-2">
                   <div>
                     <p className="font-medium text-slate-100">No label</p>
@@ -366,7 +366,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                      className="rounded-sm border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
                       onClick={() => handleShowOnly(null)}
                       disabled={isLabelIncluded(null)}
                     >
@@ -374,7 +374,7 @@ const LabelsPanel = ({ onClose }: LabelsPanelProps): JSX.Element => {
                     </button>
                     <button
                       type="button"
-                      className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+                      className="rounded-sm border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
                       onClick={() => handleExclude(null)}
                       disabled={isLabelExcluded(null)}
                     >

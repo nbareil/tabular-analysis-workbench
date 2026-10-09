@@ -61,7 +61,7 @@ export const GridMenu = ({ label, x, y, className = '', onClose, children }: Gri
       tabIndex={-1}
       aria-label={label}
       data-grid-context-menu="true"
-      className={`fixed z-[10000] rounded border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl ${className}`}
+      className={`fixed z-10000 rounded-sm border border-slate-700 bg-slate-900 p-1 text-xs text-slate-200 shadow-xl ${className}`}
       style={{ top: y, left: x }}
       onMouseDown={(event) => event.stopPropagation()}
       onKeyDown={handleKeyDown}
@@ -89,7 +89,7 @@ export const MenuItem = ({
   <button
     type="button"
     role="menuitem"
-    className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 focus:bg-slate-800 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+    className={`flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left hover:bg-slate-800 focus:bg-slate-800 focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
     {...props}
   >
     {children}

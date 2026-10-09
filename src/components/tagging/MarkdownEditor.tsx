@@ -58,7 +58,7 @@ const MarkdownEditor = ({
       id={id}
       onChange={(event) => onChange(event.target.value)}
       onKeyDown={handleKeyDown}
-      className="h-56 w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-50 outline-none focus-visible:border-slate-600 focus-visible:ring-2 focus-visible:ring-slate-500/40"
+      className="h-56 w-full rounded-sm border border-slate-800 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-50 outline-hidden focus-visible:border-slate-600 focus-visible:ring-2 focus-visible:ring-slate-500/40"
       style={{ resize: 'vertical' }}
     />
   );

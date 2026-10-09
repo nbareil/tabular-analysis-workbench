@@ -33,12 +33,12 @@ export const TimeWindowDialog = ({ column, center, onApply, onClose }: TimeWindo
       widthClassName="max-w-sm"
       footer={
         <>
-          <button type="button" className="rounded border border-slate-600 px-3 py-1 text-xs" onClick={onClose}>
+          <button type="button" className="rounded-sm border border-slate-600 px-3 py-1 text-xs" onClick={onClose}>
             Cancel
           </button>
           <button
             type="button"
-            className="rounded bg-accent px-3 py-1 text-xs font-semibold text-slate-900 disabled:opacity-50"
+            className="rounded-sm bg-accent px-3 py-1 text-xs font-semibold text-slate-900 disabled:opacity-50"
             disabled={!valid}
             onClick={apply}
           >
@@ -66,13 +66,13 @@ export const TimeWindowDialog = ({ column, center, onApply, onClose }: TimeWindo
             type="number"
             min="0"
             step="any"
-            className="w-24 rounded border border-slate-600 bg-slate-950 px-2 py-1"
+            className="w-24 rounded-sm border border-slate-600 bg-slate-950 px-2 py-1"
             value={amount}
             onChange={(event) => setAmount(event.target.value)}
           />
           <select
             aria-label="Window unit"
-            className="rounded border border-slate-600 bg-slate-950 px-2 py-1"
+            className="rounded-sm border border-slate-600 bg-slate-950 px-2 py-1"
             value={unit}
             onChange={(event) => setUnit(event.target.value as Unit)}
           >

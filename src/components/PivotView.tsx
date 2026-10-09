@@ -130,7 +130,7 @@ const PivotView = (): JSX.Element => {
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="grid gap-4 lg:grid-cols-2">
-        <section className="rounded border border-slate-800 p-4">
+        <section className="rounded-sm border border-slate-800 p-4">
           <header className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-200">Group columns</h2>
             <div className="flex gap-2 text-xs">
@@ -142,7 +142,7 @@ const PivotView = (): JSX.Element => {
               {groups.length > 0 && (
                 <button
                   type="button"
-                  className="rounded border border-slate-600 px-2 py-0.5 text-slate-300 hover:bg-slate-800"
+                  className="rounded-sm border border-slate-600 px-2 py-0.5 text-slate-300 hover:bg-slate-800"
                   onClick={handleClearGroups}
                 >
                   Clear
@@ -157,7 +157,7 @@ const PivotView = (): JSX.Element => {
             {columns.map((column) => (
               <label
                 key={column.key}
-                className="flex items-center justify-between gap-2 rounded border border-transparent px-2 py-1 hover:border-slate-700 hover:bg-slate-900"
+                className="flex items-center justify-between gap-2 rounded-sm border border-transparent px-2 py-1 hover:border-slate-700 hover:bg-slate-900"
               >
                 <span>
                   <input
@@ -173,12 +173,12 @@ const PivotView = (): JSX.Element => {
             ))}
           </div>
         </section>
-        <section className="rounded border border-slate-800 p-4">
+        <section className="rounded-sm border border-slate-800 p-4">
           <header className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-semibold text-slate-200">Aggregations</h2>
             <button
               type="button"
-              className="rounded border border-slate-600 px-2 py-0.5 text-xs text-slate-300 hover:bg-slate-800"
+              className="rounded-sm border border-slate-600 px-2 py-0.5 text-xs text-slate-300 hover:bg-slate-800"
               onClick={() => addAggregation('count')}
             >
               Add metric
@@ -188,12 +188,12 @@ const PivotView = (): JSX.Element => {
             {aggregations.map((aggregation, index) => (
               <div
                 key={`${aggregation.operator}:${index}`}
-                className="rounded border border-slate-700 p-3"
+                className="rounded-sm border border-slate-700 p-3"
               >
                 <div className="flex flex-wrap items-center gap-2">
                   <select
                     aria-label={`Aggregation ${index + 1} operator`}
-                    className="rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+                    className="rounded-sm border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
                     value={aggregation.operator}
                     onChange={(event) =>
                       handleOperatorChange(
@@ -211,7 +211,7 @@ const PivotView = (): JSX.Element => {
                   {requiresColumn(aggregation.operator) && (
                     <select
                       aria-label={`Aggregation ${index + 1} column`}
-                      className="rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+                      className="rounded-sm border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
                       value={aggregation.column ?? ''}
                       onChange={(event) => handleColumnChange(index, event.target.value)}
                     >
@@ -225,7 +225,7 @@ const PivotView = (): JSX.Element => {
                   )}
                   <input
                     type="text"
-                    className="min-w-[120px] flex-1 rounded border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
+                    className="min-w-[120px] flex-1 rounded-sm border border-slate-600 bg-slate-900 px-2 py-1 text-sm text-slate-200"
                     value={aggregation.alias ?? ''}
                     onChange={(event) => handleAliasChange(index, event.target.value)}
                     placeholder="Alias"
@@ -233,7 +233,7 @@ const PivotView = (): JSX.Element => {
                   />
                   <button
                     type="button"
-                    className="rounded border border-slate-600 px-2 py-0.5 text-xs text-slate-300 hover:bg-red-900/40 hover:border-red-700 disabled:opacity-40"
+                    className="rounded-sm border border-slate-600 px-2 py-0.5 text-xs text-slate-300 hover:bg-red-900/40 hover:border-red-700 disabled:opacity-40"
                     onClick={() => removeAggregation(index)}
                     disabled={aggregations.length <= 1}
                     aria-label={`Remove aggregation ${index + 1}`}
@@ -251,7 +251,7 @@ const PivotView = (): JSX.Element => {
           )}
         </section>
       </div>
-      <div className="flex items-center justify-between rounded border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-400">
+      <div className="flex items-center justify-between rounded-sm border border-slate-800 bg-slate-950 px-4 py-2 text-xs text-slate-400">
         <div className="flex flex-col gap-1 md:flex-row md:items-center md:gap-4">
           <span>
             Status:{' '}
@@ -274,14 +274,14 @@ const PivotView = (): JSX.Element => {
         </div>
         <button
           type="button"
-          className="rounded border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
+          className="rounded-sm border border-slate-600 px-3 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-40"
           onClick={() => refresh()}
           disabled={!groups.length}
         >
           Refresh
         </button>
       </div>
-      <div className="flex-1 overflow-auto rounded border border-slate-800">
+      <div className="flex-1 overflow-auto rounded-sm border border-slate-800">
         {groups.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-slate-500">
             Select at least one group column to see pivot results.

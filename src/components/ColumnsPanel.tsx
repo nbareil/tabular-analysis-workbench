@@ -79,7 +79,7 @@ const ColumnsPanel = ({ onClose }: ColumnsPanelProps): JSX.Element => {
     });
   };
 
-  const buttonClass = 'rounded border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-30';
+  const buttonClass = 'rounded-sm border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-30';
 
   return (
     <Modal
@@ -105,7 +105,7 @@ const ColumnsPanel = ({ onClose }: ColumnsPanelProps): JSX.Element => {
             return (
               <li
                 key={column.key}
-                className="flex cursor-move items-center justify-between gap-3 rounded border border-slate-800 px-3 py-2 hover:bg-slate-800"
+                className="flex cursor-move items-center justify-between gap-3 rounded-sm border border-slate-800 px-3 py-2 hover:bg-slate-800"
                 draggable
                 onDragStart={(event) => {
                   setDragIndex(index);

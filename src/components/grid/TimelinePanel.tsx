@@ -82,13 +82,13 @@ export const TimelinePanel = ({ column, onSelectRange, onClose }: TimelinePanelP
         : 'No parseable timestamps in the current view';
 
   return (
-    <section aria-label={`Timeline of ${column}`} className="mb-2 rounded border border-slate-800 px-3 py-2 text-xs">
+    <section aria-label={`Timeline of ${column}`} className="mb-2 rounded-sm border border-slate-800 px-3 py-2 text-xs">
       <div className="mb-1 flex items-center justify-between gap-2">
         <h3 className="font-semibold text-slate-300">Timeline · {column}</h3>
         <span className="truncate text-slate-400" aria-live="polite">
           {caption}
         </span>
-        <button type="button" className="rounded px-2 text-slate-400 hover:text-slate-100" aria-label="Close timeline" onClick={onClose}>
+        <button type="button" className="rounded-sm px-2 text-slate-400 hover:text-slate-100" aria-label="Close timeline" onClick={onClose}>
           ×
         </button>
       </div>
@@ -100,7 +100,7 @@ export const TimelinePanel = ({ column, onSelectRange, onClose }: TimelinePanelP
               key={index}
               type="button"
               aria-label={`${formatBucket(start + index * bucketMs, bucketMs)}: ${count.toLocaleString()} rows`}
-              className="flex h-full max-w-[24px] flex-1 items-end focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-300"
+              className="flex h-full max-w-[24px] flex-1 items-end focus:outline-hidden focus-visible:ring-1 focus-visible:ring-slate-300"
               onMouseLeave={() => setHovered(null)}
               onMouseEnter={() => {
                 setHovered(index);

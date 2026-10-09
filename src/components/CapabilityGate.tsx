@@ -19,7 +19,7 @@ export const CapabilityGate = ({ report }: CapabilityGateProps): JSX.Element => 
           DecompressionStream. Please open it in a recent Chromium-based browser (Chrome,
           Edge, Brave) with experimental features enabled.
         </p>
-        <div className="rounded border border-red-400/40 bg-red-400/10 p-4 text-left">
+        <div className="rounded-sm border border-red-400/40 bg-red-400/10 p-4 text-left">
           <p className="text-sm font-semibold text-red-200">Missing requirements</p>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-red-100">
             {report.blocking.map((entry) => (
@@ -30,7 +30,7 @@ export const CapabilityGate = ({ report }: CapabilityGateProps): JSX.Element => 
           </ul>
         </div>
         {report.warnings.length > 0 && (
-          <div className="rounded border border-amber-400/40 bg-amber-400/10 p-4 text-left">
+          <div className="rounded-sm border border-amber-400/40 bg-amber-400/10 p-4 text-left">
             <p className="text-sm font-semibold text-amber-200">Limited functionality</p>
             <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-100">
               {report.warnings.map((entry) => (

@@ -41,7 +41,7 @@ export const DataGridHeader = ({
         ref={menuButtonRef}
         type="button"
         aria-label={`Open ${displayName} menu`}
-        className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-200/10 hover:text-slate-200"
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-slate-500 hover:bg-slate-200/10 hover:text-slate-200"
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -151,7 +151,7 @@ export const HighlightCell = ({
       pieces.push(<span key={`t${cursor}`}>{text.slice(cursor, index)}</span>);
     }
     pieces.push(
-      <mark key={`m${index}`} className="rounded-sm bg-amber-300/70 text-inherit">
+      <mark key={`m${index}`} className="rounded-xs bg-amber-300/70 text-inherit">
         {match[0]}
       </mark>
     );

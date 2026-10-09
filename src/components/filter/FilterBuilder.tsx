@@ -310,7 +310,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
 
   if (columns.length === 0) {
     return (
-      <div className="rounded border border-slate-700 p-2 text-sm text-slate-500">
+      <div className="rounded-sm border border-slate-700 p-2 text-sm text-slate-500">
         Load a dataset to configure filters.
       </div>
     );
@@ -322,14 +322,14 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
         <h2 className="text-sm font-semibold text-slate-200">Filters</h2>
         <button
           type="button"
-          className="rounded border border-slate-600 px-1 py-0.5 text-xs text-slate-200"
+          className="rounded-sm border border-slate-600 px-1 py-0.5 text-xs text-slate-200"
           onClick={handleAdd}
         >
           Add Filter
         </button>
       </div>
       {filters.length === 0 ? (
-        <div className="rounded border border-dashed border-slate-700 p-2 text-xs text-slate-500">
+        <div className="rounded-sm border border-dashed border-slate-700 p-2 text-xs text-slate-500">
           No filters applied. Add one to narrow results.
         </div>
       ) : (
@@ -353,7 +353,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
             return (
               <div
                 key={filter.id}
-                className="flex flex-col gap-2 rounded border border-slate-700 p-2 text-xs text-slate-300"
+                className="flex flex-col gap-2 rounded-sm border border-slate-700 p-2 text-xs text-slate-300"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] uppercase tracking-wide text-slate-500">
                   <label className="flex items-center gap-1 text-slate-300">
@@ -376,7 +376,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                 </div>
                 <div className={innerSectionClasses}>
                   <select
-                    className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                    className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                     value={filter.column}
                     onChange={(event) => handleChange(filter.id, { column: event.target.value })}
                   >
@@ -387,7 +387,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                     ))}
                   </select>
                   <select
-                    className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                    className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                     value={filter.operator}
                     onChange={(event) => handleChange(filter.id, { operator: event.target.value })}
                   >
@@ -420,7 +420,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                 >
                   {filter.column === TAG_COLUMN_ID ? (
                     <select
-                      className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                      className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                       value={
                         typeof filter.value === 'string' && filter.value.length > 0
                           ? filter.value
@@ -442,7 +442,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                           <span className="w-12 text-xs text-slate-400">Start</span>
                           <input
                             type="text"
-                            className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                            className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                             value={filter.rawValue ?? formatDatetimeForInput(filter.value)}
                             onChange={onDatetimeChange(filter, 'value')}
                             onBlur={onDatetimeBlur(filter, 'value')}
@@ -452,7 +452,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                       ) : column?.type === 'datetime' ? (
                         <input
                           type="text"
-                          className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                          className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                           value={filter.rawValue ?? formatDatetimeForInput(filter.value)}
                           onChange={onDatetimeChange(filter, 'value')}
                           onBlur={onDatetimeBlur(filter, 'value')}
@@ -460,7 +460,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                         />
                       ) : (
                         <input
-                          className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                          className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                           value={String(filter.value ?? '')}
                           onChange={(event) =>
                             handleChange(filter.id, { value: event.target.value })
@@ -478,7 +478,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                             <span className="w-12 text-xs text-slate-400">End</span>
                             <input
                               type="text"
-                              className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                              className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                               value={filter.rawValue2 ?? formatDatetimeForInput(filter.value2)}
                               onChange={onDatetimeChange(filter, 'value2')}
                               onBlur={onDatetimeBlur(filter, 'value2')}
@@ -488,7 +488,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                         ) : column?.type === 'datetime' ? (
                           <input
                             type="text"
-                            className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                            className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                             value={filter.rawValue2 ?? formatDatetimeForInput(filter.value2)}
                             onChange={onDatetimeChange(filter, 'value2')}
                             onBlur={onDatetimeBlur(filter, 'value2')}
@@ -496,7 +496,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                           />
                         ) : (
                           <input
-                            className="flex-1 rounded border border-slate-600 bg-slate-900 px-1 py-0.5"
+                            className="flex-1 rounded-sm border border-slate-600 bg-slate-900 px-1 py-0.5"
                             value={String(filter.value2 ?? '')}
                             onChange={(event) =>
                               handleChange(filter.id, { value2: event.target.value })
@@ -508,14 +508,14 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                     )}
                 </div>
                 {showValueDistribution && (
-                  <div className={`${isEnabled ? '' : 'opacity-60'} rounded border border-slate-800 bg-slate-950/70 p-2`}>
+                  <div className={`${isEnabled ? '' : 'opacity-60'} rounded-sm border border-slate-800 bg-slate-950/70 p-2`}>
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <span className="text-[10px] uppercase tracking-wide text-slate-500">
                         Value counts
                       </span>
                       <button
                         type="button"
-                        className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300"
+                        className="rounded-sm border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300"
                         onClick={() =>
                           setDistributionSort((current) => ({
                             ...current,
@@ -536,7 +536,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                         </p>
                         <button
                           type="button"
-                          className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300"
+                          className="rounded-sm border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300"
                           onClick={() => void loadColumnValueDistribution(filter.column)}
                         >
                           Retry
@@ -603,7 +603,7 @@ const FilterBuilder = ({ columns }: FilterBuilderProps): JSX.Element => {
                   )}
                   <button
                     type="button"
-                    className="rounded border border-slate-600 px-1 py-0.5 text-xs text-red-300"
+                    className="rounded-sm border border-slate-600 px-1 py-0.5 text-xs text-red-300"
                     onClick={() => handleRemove(filter.id)}
                   >
                     Remove

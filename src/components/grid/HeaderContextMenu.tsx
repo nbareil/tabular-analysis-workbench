@@ -66,12 +66,12 @@ export const HeaderContextMenu = ({
             {items.map((item) => {
               const checked = selectedValues.has(item.value);
               return (
-                <div key={item.value} className={`group flex items-center gap-1 rounded ${checked ? 'bg-cyan-950/30' : ''}`}>
+                <div key={item.value} className={`group flex items-center gap-1 rounded-sm ${checked ? 'bg-cyan-950/30' : ''}`}>
                   <button
                     type="button"
                     role="menuitemcheckbox"
                     aria-checked={checked}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1 text-left hover:bg-slate-800 focus:bg-slate-800 focus:outline-none"
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-sm px-2 py-1 text-left hover:bg-slate-800 focus:bg-slate-800 focus:outline-hidden"
                     onClick={() => onToggleValue(item.value)}
                   >
                     <input type="checkbox" readOnly checked={checked} tabIndex={-1} className="h-3.5 w-3.5 shrink-0" aria-hidden />
@@ -82,7 +82,7 @@ export const HeaderContextMenu = ({
                     type="button"
                     role="menuitem"
                     aria-label={`Show only ${item.value}`}
-                    className="invisible shrink-0 rounded border border-slate-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-200 hover:bg-slate-700 focus:visible group-hover:visible"
+                    className="invisible shrink-0 rounded-sm border border-slate-700 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-200 hover:bg-slate-700 focus:visible group-hover:visible"
                     onClick={() => onOnlyValue(item.value)}
                   >
                     Only
