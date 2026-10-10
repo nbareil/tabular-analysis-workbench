@@ -21,7 +21,12 @@ const BOOLEAN_TRUE = new Set(['true', 't', 'yes', 'y']);
 const BOOLEAN_FALSE = new Set(['false', 'f', 'no', 'n']);
 
 export const parseBoolean = (raw: string): boolean | null => {
-  const lower = raw.trim().toLowerCase();
+  const trimmed = raw.trim();
+  // Skips lowercasing every longer cell during type inference: "false" is the longest word accepted.
+  if (trimmed.length > 5) {
+    return null;
+  }
+  const lower = trimmed.toLowerCase();
   if (BOOLEAN_TRUE.has(lower)) {
     return true;
   }

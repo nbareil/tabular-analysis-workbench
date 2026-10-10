@@ -15,20 +15,24 @@ const setup = () => {
 const allRows = async (state: ReturnType<typeof createDataWorkerState>) =>
   state.dataset.batchStore!.getRows(Array.from({ length: state.dataset.totalRows }, (_, index) => index));
 
+/** Rows without their empty cells, which sparse and dense columns represent differently. */
+const filledRows = async (state: ReturnType<typeof createDataWorkerState>) =>
+  (await allRows(state)).map((row) => Object.fromEntries(Object.entries(row).filter(([, value]) => value !== '')));
+
 describe('ingestionPipeline', () => {
   it('loads a single file and reports start, progress and completion', async () => {
     const { state, pipeline } = setup();
-    const onStart = vi.fn();
+    const onColumns = vi.fn();
     const progress: LoadProgress[] = [];
     const onComplete = vi.fn();
     const onError = vi.fn();
 
     await pipeline.run(
       { handles: [createMockFileHandle('name,age\nAlice,30\nBob,25\nCarol,41\n', { name: 'people.csv' })], batchSize: 1 },
-      { onStart, onProgress: (entry) => void progress.push(entry), onComplete, onError }
+      { onColumns, onProgress: (entry) => void progress.push(entry), onComplete, onError }
     );
 
-    expect(onStart).toHaveBeenCalledWith({ columns: ['name', 'age'] });
+    expect(onColumns).toHaveBeenCalledWith({ columns: ['name', 'age'] });
     expect(progress.length).toBeGreaterThanOrEqual(2);
     expect(progress.at(-1)?.rowsParsed).toBe(3);
     expect(onError).not.toHaveBeenCalled();
@@ -82,6 +86,101 @@ describe('ingestionPipeline', () => {
     expect((await allRows(state)).map((row) => row.label)).toEqual(['one', 'two']);
   });
 
+  it('loads JSON Lines recognised from the content, whatever the file name', async () => {
+    const { state, pipeline } = setup();
+    const onComplete = vi.fn();
+    await pipeline.run(
+      { handles: [createMockFileHandle('\n{"id":1,"user":{"name":"alice"}}\n{"id":2,"user":{"name":"bob"},"tags":[1]}\n', { name: 'events.log' })] },
+      { onComplete }
+    );
+
+    expect(state.dataset.header).toEqual(['id', 'user.name', 'tags']);
+    expect(onComplete.mock.calls[0]![0]).toMatchObject({
+      columns: ['id', 'user.name', 'tags'],
+      rowsParsed: 2,
+      malformedRows: 0,
+      columnTypes: { id: 'number', 'user.name': 'string', tags: 'string' }
+    });
+    expect(await filledRows(state)).toEqual([
+      { __rowId: 0, id: '1', 'user.name': 'alice' },
+      { __rowId: 1, id: '2', 'user.name': 'bob', tags: '[1]' }
+    ]);
+  });
+
+  it('reports JSON Lines columns as new keys appear and keeps known types meanwhile', async () => {
+    const { state, pipeline } = setup();
+    const reported: string[][] = [];
+    const typesWhenReported: Array<string | undefined> = [];
+    const onComplete = vi.fn();
+    await pipeline.run(
+      {
+        handles: [createMockFileHandle('{"when":"2024-01-01T00:00:00Z","a":{"x":1}}\n{"b":2}\n{"a":{"y":3}}\n')],
+        batchSize: 1
+      },
+      {
+        onColumns: ({ columns }) => {
+          reported.push(columns);
+          typesWhenReported.push(state.dataset.columnTypes.when);
+        },
+        onComplete
+      }
+    );
+
+    expect(reported).toEqual([
+      ['when', 'a.x'],
+      ['when', 'a.x', 'b'],
+      ['when', 'a.x', 'a.y', 'b']
+    ]);
+    // A filter that runs while the UI handles the callback must still see the inferred type.
+    expect(typesWhenReported).toEqual(['string', 'datetime', 'datetime']);
+    expect(onComplete.mock.calls[0]![0].columns).toEqual(['when', 'a.x', 'a.y', 'b']);
+    expect(state.dataset.totalRows).toBe(3);
+  });
+
+  it('loads gzip-compressed JSON Lines and counts malformed lines', async () => {
+    const { state, pipeline } = setup();
+    const onComplete = vi.fn();
+    const compressed = new Uint8Array(gzipSync(Buffer.from('{"a":"x"}\n{"a":\n')));
+    await pipeline.run({ handles: [createMockFileHandle(compressed, { name: 'events.jsonl.gz' })] }, { onComplete });
+
+    expect(onComplete.mock.calls[0]![0]).toMatchObject({ rowsParsed: 2, malformedRows: 1 });
+    expect(await filledRows(state)).toEqual([
+      { __rowId: 0, a: 'x' },
+      { __rowId: 1, malformed_line: '{"a":' }
+    ]);
+  });
+
+  it('merges delimited and JSON Lines files into one timeline', async () => {
+    const { state, pipeline } = setup();
+    await pipeline.run(
+      {
+        handles: [
+          createMockFileHandle('host,event\nWS01,logon\n', { name: 'a.csv' }),
+          createMockFileHandle('{"host":"WS02","user":{"name":"bob"},"source_file":"x"}\n', { name: 'b.jsonl' })
+        ]
+      },
+      {}
+    );
+
+    expect(state.dataset.header).toEqual([SOURCE_COLUMN, 'host', 'event', 'user.name', 'source_file_2']);
+    expect(await filledRows(state)).toEqual([
+      { __rowId: 0, [SOURCE_COLUMN]: 'a.csv', host: 'WS01', event: 'logon' },
+      { __rowId: 1, [SOURCE_COLUMN]: 'b.jsonl', host: 'WS02', 'user.name': 'bob', source_file_2: 'x' }
+    ]);
+  });
+
+  it.each([
+    ['a JSON array', '[{"a":1},\n{"a":2}]\n'],
+    ['pretty-printed JSON', '{\r\n  "a": 1\r\n}\r\n']
+  ])('rejects %s with a hint to convert it', async (_name, text) => {
+    const { pipeline } = setup();
+    const onError = vi.fn();
+    await expect(
+      pipeline.run({ handles: [createMockFileHandle(text, { name: 'export.json' })] }, { onError })
+    ).rejects.toThrow('export.json is a JSON document, not JSON Lines');
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("jq -c '.[]'") }));
+  });
+
   it('reports errors through onError and rejects', async () => {
     const { pipeline } = setup();
     const onError = vi.fn();
@@ -111,11 +210,11 @@ describe('ingestionPipeline', () => {
     });
     let second: Promise<void> | null = null;
     const firstCallbacks: LoadFileCallbacks = {
-      onStart: async () => {
+      onColumns: async () => {
         // Start the newer load while the first is parsing, and let it reach its own header first.
         second = pipeline.run(
           { handles: [createMockFileHandle('city\nParis\n', { name: 'second.csv' })] },
-          { onStart: () => secondStarted() }
+          { onColumns: () => secondStarted() }
         );
         await secondStartedPromise;
       },
@@ -156,7 +255,7 @@ describe('ingestionPipeline', () => {
 
     const first = pipeline.run(
       { handles: [createMockFileHandle('name\nAlice\nBob\n', { name: 'first.csv', stream })] },
-      { onStart: () => firstStarted() }
+      { onColumns: () => firstStarted() }
     );
     first.catch(() => undefined);
     await started;

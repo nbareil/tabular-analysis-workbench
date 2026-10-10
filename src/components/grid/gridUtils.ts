@@ -159,7 +159,7 @@ export const getEmptyStateMessage = ({
     return 'No rows match the current filters or search.';
   }
 
-  return 'Select a CSV or TSV file to begin.';
+  return 'Select a CSV, TSV or JSON Lines file to begin.';
 };
 
 export const shouldShowInitialPlaceholder = ({

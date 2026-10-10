@@ -2,8 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { encodeColumn } from './csvParser';
-import { RowBatchStore, ROW_CACHE_DIRECTORY, type BatchView } from './rowBatchStore';
+import { encodeColumn, encodeSparseColumn, RowBatchStore, ROW_CACHE_DIRECTORY, type BatchView } from './rowBatchStore';
 import type { RowBatch } from './types';
 
 const makeBatch = (rowStart: number, columns: Record<string, string[]>): RowBatch => {
@@ -65,7 +64,68 @@ const sharedBehaviour = (createStore: () => Promise<RowBatchStore>) => {
     expect(store.totalRows).toBe(0);
     expect(await store.getRows([0])).toEqual([]);
   });
+
+  it('reads sparse columns as empty cells wherever they have no value', async () => {
+    const store = await createStore();
+    await store.storeBatch(sparseBatch());
+
+    const [view] = await collect(store);
+    expect(view!.column('rare')).toEqual(['', 'ü', '', '']);
+    expect(view!.cells('rare')).toEqual({ rows: Uint32Array.from([1]), values: ['ü'] });
+    expect(view!.cells('id')).toEqual({ rows: null, values: ['a', 'b', 'c', 'd'] });
+    expect(view!.cells('missing')).toEqual({ rows: new Uint32Array(0), values: [] });
+    expect(await store.getRows([1, 2])).toEqual([
+      { __rowId: 1, id: 'b', rare: 'ü' },
+      { __rowId: 2, id: 'c' }
+    ]);
+  });
+
+  it('never mistakes a column name for an Object.prototype member', async () => {
+    const store = await createStore();
+    await store.storeBatch(makeBatch(0, { id: ['a'] }));
+    const [view] = await collect(store);
+    expect(view!.column('constructor')).toEqual(['']);
+    expect(view!.cells('toString').values).toEqual([]);
+  });
 };
+
+/** Four rows; `rare` has a value in row 1 only. */
+const sparseBatch = (rowStart = 0): RowBatch => ({
+  ...makeBatch(rowStart, { id: ['a', 'b', 'c', 'd'] }),
+  columns: { id: encodeColumn(['a', 'b', 'c', 'd']), rare: encodeSparseColumn([1], ['ü'], 4) }
+});
+
+describe('encodeColumn', () => {
+  const decodeAll = (values: string[]) => {
+    const { data, offsets } = encodeColumn(values);
+    const bytes = new Uint8Array(data);
+    return Array.from({ length: values.length }, (_, index) =>
+      new TextDecoder().decode(bytes.subarray(offsets[index]!, offsets[index + 1]!))
+    );
+  };
+
+  it('round-trips ASCII, multi-byte and astral text cell by cell', () => {
+    const values = ['', 'plain', 'Zürich', '日本', '🚀 launch', 'é', ''];
+    expect(decodeAll(values)).toEqual(values);
+  });
+
+  it('keeps lone surrogates in their own cell even when neighbours would pair them', () => {
+    // TextEncoder writes each lone surrogate as U+FFFD; joined, these two would form one emoji.
+    expect(decodeAll(['a\uD83D', '\uDE80b', '\uDC00'])).toEqual(['a�', '�b', '�']);
+  });
+});
+
+describe('encodeSparseColumn', () => {
+  it('stores only the given cells when fewer than half the rows have one', () => {
+    expect(encodeSparseColumn([1], ['x'], 4).rows).toEqual(Uint32Array.from([1]));
+  });
+
+  it('stores a cell per row once half the rows have one', () => {
+    const column = encodeSparseColumn([0, 2], ['x', 'y'], 4);
+    expect(column.rows).toBeUndefined();
+    expect(Array.from(column.offsets)).toEqual([0, 1, 1, 2, 2]);
+  });
+});
 
 describe('RowBatchStore without OPFS (memory fallback)', () => {
   sharedBehaviour(() => RowBatchStore.create('memory'));
@@ -153,6 +213,25 @@ describe('RowBatchStore with OPFS', () => {
 
     const all = (await collect(store)).flatMap((view) => view.column('v'));
     expect(all).toEqual(Array.from({ length: 24 }, (_, index) => `r${index}`));
+  });
+
+  it('reads an evicted sparse batch back from disk', async () => {
+    stubOpfs();
+    const store = await RowBatchStore.create('opfs');
+    await store.storeBatch(sparseBatch());
+    for (let batch = 1; batch <= 8; batch += 1) {
+      await store.storeBatch(makeBatch(batch * 4, { id: ['w', 'x', 'y', 'z'] }));
+    }
+    const firstFile = root.directories.get(ROW_CACHE_DIRECTORY)!.directories.values().next().value!.files.get('batch-000000.bin')!;
+    expect(firstFile.reads).toBe(0);
+
+    expect(await store.getRows([1, 0])).toEqual([
+      { __rowId: 1, id: 'b', rare: 'ü' },
+      { __rowId: 0, id: 'a' }
+    ]);
+    expect(firstFile.reads).toBe(1);
+    const [view] = await collect(store);
+    expect(view!.column('rare')).toEqual(['', 'ü', '', '']);
   });
 
   it('deletes its directory on dispose', async () => {

@@ -7,11 +7,8 @@ import { TAG_COLUMN_ID, TAG_NO_LABEL_FILTER_VALUE } from './types';
 
 const view = (columns: Record<string, string[]>, rowStart = 0): BatchView => {
   const rowCount = Object.values(columns)[0]!.length;
-  return {
-    rowStart,
-    rowCount,
-    column: (name) => columns[name] ?? new Array<string>(rowCount).fill('')
-  };
+  const column = (name: string) => columns[name] ?? new Array<string>(rowCount).fill('');
+  return { rowStart, rowCount, column, cells: (name) => ({ rows: null, values: column(name) }) };
 };
 
 const columns = {

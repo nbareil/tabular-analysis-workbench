@@ -31,7 +31,8 @@ NODE_PATH=/tmp/twb-driver/node_modules node .claude/skills/run-tabular-analysis-
   stray quote, quoted newline, extra/short rows, `=cmd|calc`, `007` IDs, 2000 bulk rows), then
   sorts, searches, filters by value, labels + undo/redo, opens timeline and profile, exports.
 - `open` only loads and screenshots: `... driver.cjs open --csv /tmp/twb-mini.csv --light`
-- `--csv FILE` uses your own file; `--light` emulates a light-mode OS (default dark).
+- `--csv FILE` uses your own file, CSV, TSV or JSON Lines (the app detects the format from the
+  content); `--light` emulates a light-mode OS (default dark).
 - Output: `»` log lines on stdout, screenshots `1-loaded.png` … `6-profile.png` and the
   exported `export.csv` in `/tmp/twb-shots` (`TWB_OUT` overrides; `TWB_URL` overrides the URL).
 - Exit code 1 if any step failed or the page logged a console error / HTTP ≥ 400.

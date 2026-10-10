@@ -34,7 +34,7 @@ export const StatusBar = ({ labelFilterSummary, fileSize }: StatusBarProps): JSX
   } else if (totalRows > 0) {
     segments.push(`Showing ${(matchedRows ?? totalRows).toLocaleString()} of ${totalRows.toLocaleString()} rows`);
   } else {
-    segments.push(message ?? 'Open a CSV or TSV file to begin.');
+    segments.push(message ?? 'Open a CSV, TSV or JSON Lines file to begin.');
   }
   const scopes = [filterActive ? 'filtered' : null, searchActive ? 'search' : null].filter(Boolean);
   if (scopes.length) {

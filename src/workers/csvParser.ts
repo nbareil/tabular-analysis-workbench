@@ -1,38 +1,26 @@
 import type { ColumnBatch, Delimiter, RowBatch } from './types';
 import { TAG_COLUMN_ID } from './types';
 import { TypeInferencer } from './typeInference';
+import { encodeColumn } from './rowBatchStore';
 
 export interface ParserOptions {
   delimiter?: Delimiter;
   batchSize?: number;
   encoding?: string;
-  /** Extra header names to avoid, e.g. a column the caller adds itself. */
+  /** Extra column names to avoid, e.g. a column the caller adds itself. */
   reservedColumns?: string[];
 }
 
+/** Shared by the delimited and JSON Lines parsers. */
 export interface ParserCallbacks {
-  onHeader?: (header: string[]) => void | Promise<void>;
+  /** Every column so far, in display order; called again before a batch that adds columns. */
+  onColumns?: (columns: string[]) => void | Promise<void>;
   onBatch: (batch: RowBatch) => void | Promise<void>;
 }
 
-const DEFAULT_BATCH_SIZE = 10_000;
+export const DEFAULT_BATCH_SIZE = 10_000;
 const CANDIDATE_DELIMITERS: Delimiter[] = ['\t', ',', ';', '|'];
 const RESERVED_COLUMN_NAMES = new Set(['__rowId', TAG_COLUMN_ID, '__proto__']);
-
-const textEncoder = new TextEncoder();
-
-export const encodeColumn = (values: string[]): ColumnBatch => {
-  const encoded = values.map((value) => textEncoder.encode(value));
-  const offsets = new Uint32Array(values.length + 1);
-  let total = 0;
-  encoded.forEach((bytes, index) => {
-    total += bytes.byteLength;
-    offsets[index + 1] = total;
-  });
-  const data = new Uint8Array(total);
-  encoded.forEach((bytes, index) => data.set(bytes, offsets[index]!));
-  return { data: data.buffer, offsets };
-};
 
 /** Picks the candidate delimiter that occurs most often outside quotes in the header line. */
 export const sniffDelimiter = (headerLine: string): Delimiter => {
@@ -57,19 +45,21 @@ export const sniffDelimiter = (headerLine: string): Delimiter => {
   return best;
 };
 
+/** Returns `base`, or the first of `base_2`, `base_3`… that is neither used nor reserved, and marks it used. */
+export const claimColumnName = (base: string, used: Set<string>): string => {
+  let candidate = base;
+  let suffix = 1;
+  while (used.has(candidate) || RESERVED_COLUMN_NAMES.has(candidate)) {
+    suffix += 1;
+    candidate = `${base}_${suffix}`;
+  }
+  used.add(candidate);
+  return candidate;
+};
+
 export const dedupeHeader = (cells: string[], reserved: string[] = []): string[] => {
   const used = new Set<string>(reserved);
-  return cells.map((raw, index) => {
-    const base = raw.trim() || `column_${index + 1}`;
-    let candidate = base;
-    let suffix = 1;
-    while (used.has(candidate) || RESERVED_COLUMN_NAMES.has(candidate)) {
-      suffix += 1;
-      candidate = `${base}_${suffix}`;
-    }
-    used.add(candidate);
-    return candidate;
-  });
+  return cells.map((raw, index) => claimColumnName(raw.trim() || `column_${index + 1}`, used));
 };
 
 const LF = 10;
@@ -143,7 +133,7 @@ export const parseDelimitedStream = async (
       header = dedupeHeader(cells, options.reservedColumns);
       inferencer = new TypeInferencer(header);
       columnValues = header.map(() => []);
-      await callbacks.onHeader?.(header);
+      await callbacks.onColumns?.(header);
       return;
     }
 

@@ -43,6 +43,8 @@ export interface LoadProgress {
 }
 
 export interface LoadCompleteSummary {
+  /** Every column, in display order. */
+  columns: string[];
   rowsParsed: number;
   bytesParsed: number;
   malformedRows: number;
@@ -52,7 +54,8 @@ export interface LoadCompleteSummary {
 }
 
 export interface LoadFileCallbacks {
-  onStart?: (payload: { columns: string[] }) => void | Promise<void>;
+  /** Every column so far; called again whenever a header or new JSON keys add columns. */
+  onColumns?: (payload: { columns: string[] }) => void | Promise<void>;
   onProgress?: (progress: LoadProgress) => void | Promise<void>;
   onComplete?: (summary: LoadCompleteSummary) => void | Promise<void>;
   onError?: (error: { message: string; name?: string; stack?: string }) => void | Promise<void>;

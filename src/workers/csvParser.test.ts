@@ -31,7 +31,7 @@ const parseBytes = async (parts: Uint8Array[], options?: ParserOptions): Promise
   await parseDelimitedStream(
     chunksOf(parts),
     {
-      onHeader: (value) => {
+      onColumns: (value) => {
         header = value;
       },
       onBatch: (batch) => {

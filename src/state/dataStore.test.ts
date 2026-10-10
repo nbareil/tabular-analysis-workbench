@@ -15,6 +15,7 @@ vi.mock('@workers/dataWorkerProxy', async () => {
 import { useDataStore } from './dataStore';
 
 const summary: LoadCompleteSummary = {
+  columns: ['alpha'],
   rowsParsed: 100,
   bytesParsed: 1024,
   malformedRows: 0,
@@ -78,7 +79,7 @@ describe('useDataStore', () => {
 
     it('complete mentions malformed rows', () => {
       useDataStore.getState().complete({ ...summary, malformedRows: 3 });
-      expect(useDataStore.getState().message).toMatch(/3 rows had the wrong number of fields/);
+      expect(useDataStore.getState().message).toMatch(/3 malformed rows/);
     });
 
     it('setError records details without changing the load status', () => {

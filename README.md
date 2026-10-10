@@ -1,7 +1,7 @@
 # Tabular Analysis Workbench
 
 The Tabular Analysis Workbench is a Chromium-only, browser-native environment for
-forensic timelines and other long CSV/TSV datasets. It streams multi-gigabyte
+forensic timelines and other long CSV, TSV and JSON Lines datasets. It streams multi-gigabyte
 files directly from the local file system, evaluates complex filters inside a
 dedicated worker, and lets analysts tag, annotate, and export insights without
 ever uploading data off the device.
@@ -12,8 +12,8 @@ https://nbareil.github.io/tabular-analysis-workbench/
 ## Why This Tool Exists
 - 100% local analysis: zero ingestion services, no telemetry, and no data leaves
   the user’s machine.
-- Built for very large CSV/TSV files, compressed or not, with back-pressure-aware
-  streaming and incremental rendering.
+- Built for very large CSV, TSV and JSON Lines files, compressed or not, with
+  back-pressure-aware streaming and incremental rendering.
 - Feels like a spreadsheet tuned for DFIR workflows: global search, timelines,
   grouping, labels and notes.
 - Never alters your data: every cell keeps its original text; type inference only
@@ -23,8 +23,8 @@ https://nbareil.github.io/tabular-analysis-workbench/
 
 | Capability | Description |
 | --- | --- |
-| Streaming ingestion | Streams multi-GB files (gzip detected automatically) into an OPFS row cache; the grid shows rows while the file is still loading. |
-| Super-timelines | Open several files at once to merge them into one dataset with a `source_file` column. |
+| Streaming ingestion | Streams multi-GB CSV, TSV or JSON Lines files (format and gzip detected from the content) into an OPFS row cache; the grid shows rows while the file is still loading. |
+| Super-timelines | Open several files at once, in any mix of formats, to merge them into one dataset with a `source_file` column. |
 | Filtering & search | Filter builder (equals, contains, starts with, regex, ranges), cell context menu shortcuts, time-window filters, highlighted global search, and exact-value suggestions when an equality filter matches nothing. |
 | Timelines & profiling | Timeline histogram per datetime column (click or drag to filter) and column profiles (empties, distinct values, min/max, top values). |
 | Grouping & aggregations | Worker-powered pivot over the current view with count, sum, min, max and average. |
@@ -33,10 +33,26 @@ https://nbareil.github.io/tabular-analysis-workbench/
 | Export | Current view or labelled rows only, as `.csv` or `.csv.gz`, with spreadsheet formula injection neutralised. |
 
 ### Detailed Capabilities
-- **File support:** delimited text (`.csv`, `.tsv`, `.txt`) and their gzip
-  variants. The delimiter (tab, comma, semicolon or pipe) is detected from the
-  header line. Files never leave the device thanks to the File System Access API.
-- **Robust parsing:** quoted fields with embedded delimiters, quotes and newlines;
+- **File support:** delimited text (`.csv`, `.tsv`, `.txt`) and JSON Lines
+  (`.jsonl`, `.ndjson`, or `.json` and `.log` files with one object per line),
+  plain or gzip-compressed. The content decides the format, not the file name: a
+  file whose first non-blank character is `{` is JSON Lines. For delimited text, the
+  delimiter (tab, comma, semicolon or pipe) is detected from the header line.
+  Files never leave the device thanks to the File System Access API.
+- **JSON Lines:** each line holding a JSON object becomes a row, and nested
+  objects become dotted columns such as `process.parent.pid`. Columns that share
+  a parent stay next to each other, however late their keys first appear. Arrays
+  keep their JSON text, numbers keep every digit as written (`12345678901234567890`
+  is not rounded), strings are unescaped, `null` is an empty cell, and a repeated
+  key keeps its last value.
+- **Imperfect JSON Lines:** a line that is not a JSON object, such as a truncated
+  last line, stays in the dataset as a row with its text in the `malformed_line`
+  column, and is counted in the status bar. A file creates at most 1,000 columns
+  from its keys; values of later keys go into an `other_fields` column as a JSON
+  object, and objects nested more than 20 levels deep keep their JSON text. A
+  JSON document (an array, or one object spread over several lines) is rejected
+  with a hint to convert it.
+- **Robust delimited parsing:** quoted fields with embedded delimiters, quotes and newlines;
   stray quotes inside unquoted fields (`12" disk`) stay literal; blank lines are
   skipped; rows with too many or too few fields are kept and counted in the
   status bar; duplicate header names are renamed.
@@ -88,7 +104,7 @@ npm run preview   # Serves dist/ for local smoke tests
 
 ### Loading Data
 1. Choose **Open Files** and pick one file, or several to merge them into a
-   single timeline.
+   single timeline. CSV, TSV and JSON Lines files can be mixed.
 2. The status bar shows streaming progress. The grid renders as soon as the
    first batch is parsed, so you can start triaging before ingestion completes.
 

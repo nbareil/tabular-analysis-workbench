@@ -2,9 +2,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { encodeColumn } from './csvParser';
 import { suggestDidYouMean } from './didYouMean';
-import { RowBatchStore } from './rowBatchStore';
+import { encodeColumn, RowBatchStore } from './rowBatchStore';
 import type { FilterNode } from './types';
 import { TAG_COLUMN_ID } from './types';
 

@@ -37,10 +37,13 @@ import { useGlobalShortcuts } from '@/hooks/useGlobalShortcuts';
 
 const FILE_PICKER_TYPES = [
   {
-    description: 'Delimited text',
+    description: 'Delimited text or JSON Lines',
     accept: {
       'text/csv': ['.csv'],
       'text/tab-separated-values': ['.tsv', '.txt'],
+      'application/x-ndjson': ['.jsonl', '.ndjson'],
+      'application/json': ['.json'],
+      'text/plain': ['.log'],
       'application/gzip': ['.gz']
     }
   }
@@ -143,13 +146,13 @@ const AppShell = ({ capabilityReport, warningsDismissed, onDismissWarnings }: Ap
       await getDataWorker().loadFile(
         { handles },
         proxy({
-          onStart: ({ columns: header }) => useDataStore.getState().setHeader(header),
+          onColumns: ({ columns: header }) => useDataStore.getState().setHeader(header),
           onProgress: (progress) => useDataStore.getState().reportProgress(progress),
           onComplete: async (summary) => {
             useDataStore.getState().complete(summary);
             useSessionStore
               .getState()
-              .initializeColumnLayout(Object.keys(summary.columnTypes), summary.columnInference, summary.rowsParsed);
+              .initializeColumnLayout(summary.columns, summary.columnInference, summary.rowsParsed);
             await useTagStore.getState().load();
             await refreshViewAfterLoad();
           },

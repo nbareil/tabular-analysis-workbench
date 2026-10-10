@@ -2,8 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { encodeColumn } from './csvParser';
-import { RowBatchStore } from './rowBatchStore';
+import { encodeColumn, RowBatchStore } from './rowBatchStore';
 import { sortRowIds } from './sortEngine';
 import type { ColumnType, SortDefinition } from './types';
 

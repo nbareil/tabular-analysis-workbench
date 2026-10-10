@@ -16,13 +16,16 @@ export interface MaterializedRow extends Record<string, unknown> {
 export interface BatchView {
   rowStart: number;
   rowCount: number;
+  /** One cell per row; empty cells are ''. */
   column(name: string): string[];
+  /** Only the stored cells: `values[i]` belongs to batch row `rows[i]`, or to row `i` when `rows` is null. */
+  cells(name: string): { rows: Uint32Array | null; values: string[] };
 }
 
 interface StoredBatchHeader {
   rowStart: number;
   rowCount: number;
-  columns: Array<{ name: string; offsetsByteLength: number; dataByteLength: number }>;
+  columns: Array<{ name: string; offsetsByteLength: number; dataByteLength: number; rowsByteLength: number }>;
 }
 
 interface BatchMeta {
@@ -32,48 +35,171 @@ interface BatchMeta {
   byteLength: number;
 }
 
+/** Bytes TextEncoder writes for `value`; it encodes a lone surrogate as U+FFFD (3 bytes). */
+const utf8Length = (value: string): number => {
+  let bytes = value.length;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x80) {
+      continue;
+    }
+    if (code < 0x800) {
+      bytes += 1;
+    } else if (code <= 0xdbff && code >= 0xd800 && (value.charCodeAt(index + 1) & 0xfc00) === 0xdc00) {
+      bytes += 2;
+      index += 1;
+    } else {
+      bytes += 2;
+    }
+  }
+  return bytes;
+};
+
+const encodeEachCell = (values: string[]): ColumnBatch => {
+  const cells = values.map((value) => textEncoder.encode(value));
+  const offsets = new Uint32Array(values.length + 1);
+  cells.forEach((cell, index) => {
+    offsets[index + 1] = offsets[index]! + cell.byteLength;
+  });
+  const data = new Uint8Array(offsets[values.length]!);
+  cells.forEach((cell, index) => data.set(cell, offsets[index]!));
+  return { data: data.buffer, offsets };
+};
+
+/** Encodes one cell per row, with a single encoder call for the whole column when possible. */
+export const encodeColumn = (values: string[]): ColumnBatch => {
+  let joined: string;
+  try {
+    joined = values.join('');
+  } catch {
+    // Longer than the engine's maximum string length.
+    return encodeEachCell(values);
+  }
+  const data = textEncoder.encode(joined);
+  const offsets = new Uint32Array(values.length + 1);
+  // Pure ASCII takes one byte per character.
+  const ascii = data.byteLength === joined.length;
+  let total = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    total += ascii ? values[index]!.length : utf8Length(values[index]!);
+    offsets[index + 1] = total;
+  }
+  if (total !== data.byteLength) {
+    // Lone surrogates ending one cell and starting the next became one character once joined.
+    return encodeEachCell(values);
+  }
+  return { data: data.buffer.byteLength === data.byteLength ? data.buffer : data.slice().buffer, offsets };
+};
+
+/**
+ * Encodes a column from its non-empty cells, `values[i]` being batch row `rows[i]` (ascending).
+ * Columns that most rows lack are stored sparse; the others get '' for the missing rows.
+ */
+export const encodeSparseColumn = (rows: number[], values: string[], rowCount: number): ColumnBatch => {
+  if (rows.length * 2 < rowCount) {
+    return { ...encodeColumn(values), rows: Uint32Array.from(rows) };
+  }
+  const dense = new Array<string>(rowCount).fill('');
+  rows.forEach((row, index) => {
+    dense[row] = values[index]!;
+  });
+  return encodeColumn(dense);
+};
+
 const decodeColumn = (column: ColumnBatch): string[] => {
   const bytes = new Uint8Array(column.data);
-  const rowCount = column.offsets.length - 1;
-  const values = new Array<string>(rowCount);
+  const valueCount = column.offsets.length - 1;
+  const values = new Array<string>(valueCount);
   const text = textDecoder.decode(bytes);
   // Pure ASCII lets byte offsets double as string offsets, avoiding one decode per cell.
   if (text.length === bytes.byteLength) {
-    for (let index = 0; index < rowCount; index += 1) {
+    for (let index = 0; index < valueCount; index += 1) {
       values[index] = text.slice(column.offsets[index]!, column.offsets[index + 1]!);
     }
     return values;
   }
-  for (let index = 0; index < rowCount; index += 1) {
+  for (let index = 0; index < valueCount; index += 1) {
     values[index] = textDecoder.decode(bytes.subarray(column.offsets[index]!, column.offsets[index + 1]!));
   }
   return values;
 };
 
-const decodeCell = (column: ColumnBatch, index: number): string =>
+/** Index of the stored value for a batch row, or -1 when a sparse column has nothing for it. */
+const valueIndexOf = (column: ColumnBatch, row: number): number => {
+  const rows = column.rows;
+  if (!rows) {
+    return row;
+  }
+  let low = 0;
+  let high = rows.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (rows[mid]! < row) {
+      low = mid + 1;
+    } else if (rows[mid]! > row) {
+      high = mid - 1;
+    } else {
+      return mid;
+    }
+  }
+  return -1;
+};
+
+const decodeValue = (column: ColumnBatch, index: number): string =>
   textDecoder.decode(
     new Uint8Array(column.data, column.offsets[index]!, column.offsets[index + 1]! - column.offsets[index]!)
   );
 
+const NO_ROWS = new Uint32Array(0);
+
 const createBatchView = (rowStart: number, rowCount: number, columns: Record<string, ColumnBatch>): BatchView => {
-  const decoded = new Map<string, string[]>();
+  const stored = new Map<string, string[]>();
+  const dense = new Map<string, string[]>();
+  // Column names come from the file, so names such as "constructor" must not reach Object.prototype.
+  const columnNamed = (name: string): ColumnBatch | undefined => (Object.hasOwn(columns, name) ? columns[name] : undefined);
+  const storedValues = (name: string, column: ColumnBatch): string[] => {
+    let values = stored.get(name);
+    if (!values) {
+      values = decodeColumn(column);
+      stored.set(name, values);
+    }
+    return values;
+  };
   return {
     rowStart,
     rowCount,
     column(name) {
-      let values = decoded.get(name);
+      let values = dense.get(name);
       if (!values) {
-        const column = columns[name];
-        values = column ? decodeColumn(column) : new Array<string>(rowCount).fill('');
-        decoded.set(name, values);
+        const column = columnNamed(name);
+        if (column && !column.rows) {
+          values = storedValues(name, column);
+        } else {
+          const all = new Array<string>(rowCount).fill('');
+          if (column) {
+            const sparse = storedValues(name, column);
+            column.rows!.forEach((row, index) => {
+              all[row] = sparse[index]!;
+            });
+          }
+          values = all;
+        }
+        dense.set(name, values);
       }
       return values;
+    },
+    cells(name) {
+      const column = columnNamed(name);
+      return column ? { rows: column.rows ?? null, values: storedValues(name, column) } : { rows: NO_ROWS, values: [] };
     }
   };
 };
 
 const batchByteLength = (batch: RowBatch): number =>
-  Object.values(batch.columns).reduce((sum, column) => sum + column.data.byteLength + column.offsets.byteLength, 0);
+  Object.values(batch.columns).reduce(
+    (sum, column) => sum + column.data.byteLength + column.offsets.byteLength + (column.rows?.byteLength ?? 0),
+    0
+  );
 
 const locksAvailable = (): boolean => typeof navigator !== 'undefined' && Boolean(navigator.locks);
 
@@ -172,14 +298,19 @@ export class RowBatchStore {
       columns: names.map((name) => ({
         name,
         offsetsByteLength: batch.columns[name]!.offsets.byteLength,
-        dataByteLength: batch.columns[name]!.data.byteLength
+        dataByteLength: batch.columns[name]!.data.byteLength,
+        rowsByteLength: batch.columns[name]!.rows?.byteLength ?? 0
       }))
     };
     const headerBytes = textEncoder.encode(JSON.stringify(header));
     const prefix = new Uint32Array([headerBytes.byteLength]);
     const parts: BlobPart[] = [prefix as Uint32Array<ArrayBuffer>, headerBytes];
     for (const name of names) {
-      parts.push(batch.columns[name]!.offsets as Uint32Array<ArrayBuffer>, batch.columns[name]!.data);
+      const { offsets, data, rows } = batch.columns[name]!;
+      parts.push(offsets as Uint32Array<ArrayBuffer>, data);
+      if (rows) {
+        parts.push(rows as Uint32Array<ArrayBuffer>);
+      }
     }
 
     const handle = await this.directory.getFileHandle(`batch-${String(index).padStart(6, '0')}.bin`, {
@@ -227,6 +358,10 @@ export class RowBatchStore {
       const data = buffer.slice(offset, offset + column.dataByteLength);
       offset += column.dataByteLength;
       columns[column.name] = { offsets, data };
+      if (column.rowsByteLength) {
+        columns[column.name]!.rows = new Uint32Array(buffer.slice(offset, offset + column.rowsByteLength));
+        offset += column.rowsByteLength;
+      }
     }
 
     this.remember(index, columns);
@@ -257,7 +392,7 @@ export class RowBatchStore {
     return -1;
   }
 
-  /** Returns rows in the requested order, decoding only the requested cells. */
+  /** Returns rows in the requested order, decoding only the requested cells. Rows omit cells a sparse column lacks. */
   async getRows(rowIds: ArrayLike<number>): Promise<MaterializedRow[]> {
     const byBatch = new Map<number, number[]>();
     for (let position = 0; position < rowIds.length; position += 1) {
@@ -278,7 +413,10 @@ export class RowBatchStore {
         const rowId = rowIds[position]!;
         const row: MaterializedRow = { __rowId: rowId };
         for (const [name, column] of entries) {
-          row[name] = decodeCell(column, rowId - rowStart);
+          const index = valueIndexOf(column, rowId - rowStart);
+          if (index !== -1) {
+            row[name] = decodeValue(column, index);
+          }
         }
         rows[position] = row;
       }

@@ -2,9 +2,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { encodeColumn } from './csvParser';
 import { groupRows, normaliseGroupColumns, resolveAggregationAlias } from './groupEngine';
-import { RowBatchStore } from './rowBatchStore';
+import { encodeColumn, RowBatchStore } from './rowBatchStore';
 import type { ColumnType } from './types';
 
 const createStore = async (columns: Record<string, string[]>, batchSize = 2): Promise<RowBatchStore> => {

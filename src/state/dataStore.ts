@@ -98,6 +98,11 @@ export interface DataState {
 const confidencePercent = (inference: ColumnInference): number =>
   Math.round(Math.min(1, Math.max(0, inference.confidence)) * 100);
 
+const toGridColumn = (key: string, inference?: ColumnInference): GridColumn =>
+  inference
+    ? { key, headerName: key, type: inference.type, confidence: confidencePercent(inference), examples: inference.examples }
+    : { key, headerName: key, type: 'string', confidence: 0, examples: [] };
+
 const buildErrorDetails = (message: string, details?: unknown): DataState['errorDetails'] => {
   if (details instanceof Error) {
     return {
@@ -151,10 +156,7 @@ export const useDataStore = createWithEqualityFn<DataState>()((set, get) => ({
       viewVersion: state.viewVersion + 1,
       grouping: initialGroupingState()
     })),
-  setHeader: (header) =>
-    set({
-      columns: header.map((key) => ({ key, headerName: key, type: 'string', confidence: 0, examples: [] }))
-    }),
+  setHeader: (header) => set({ columns: header.map((key) => toGridColumn(key)) }),
   reportProgress: (progress) =>
     set((state) => ({
       stats: { rowsParsed: progress.rowsParsed, bytesParsed: progress.bytesParsed, malformedRows: 0, eof: false },
@@ -167,9 +169,7 @@ export const useDataStore = createWithEqualityFn<DataState>()((set, get) => ({
       status: 'ready',
       message:
         `Loaded ${summary.rowsParsed.toLocaleString()} rows in ${(summary.durationMs / 1000).toFixed(1)}s` +
-        (summary.malformedRows > 0
-          ? ` (${summary.malformedRows.toLocaleString()} rows had the wrong number of fields)`
-          : ''),
+        (summary.malformedRows > 0 ? ` (${summary.malformedRows.toLocaleString()} malformed rows)` : ''),
       stats: {
         rowsParsed: summary.rowsParsed,
         bytesParsed: summary.bytesParsed,
@@ -178,12 +178,7 @@ export const useDataStore = createWithEqualityFn<DataState>()((set, get) => ({
       },
       totalRows: summary.rowsParsed,
       matchedRows: state.filterActive || state.searchActive ? state.matchedRows : summary.rowsParsed,
-      columns: state.columns.map((column) => {
-        const inference = summary.columnInference[column.key];
-        return inference
-          ? { ...column, type: inference.type, confidence: confidencePercent(inference), examples: inference.examples }
-          : column;
-      }),
+      columns: summary.columns.map((key) => toGridColumn(key, summary.columnInference[key])),
       columnInference: summary.columnInference,
       columnValueDistributions: {}
     })),

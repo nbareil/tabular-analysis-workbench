@@ -56,7 +56,7 @@ describe('dataWorkerApi loading and fetching', () => {
 
   it('merges several files through loadFile', async () => {
     const api = createDataWorkerApi();
-    const onStart = vi.fn();
+    const onColumns = vi.fn();
     await api.loadFile(
       {
         handles: [
@@ -64,9 +64,9 @@ describe('dataWorkerApi loading and fetching', () => {
           createMockFileHandle('host\nb\n', { name: 'two.csv' })
         ]
       },
-      { onStart }
+      { onColumns }
     );
-    expect(onStart).toHaveBeenLastCalledWith({ columns: ['source_file', 'host'] });
+    expect(onColumns).toHaveBeenLastCalledWith({ columns: ['source_file', 'host'] });
     const { rows } = await api.fetchRows({ offset: 0, limit: 10 });
     expect(rows.map((row) => [row.source_file, row.host])).toEqual([
       ['one.csv', 'a'],
@@ -229,6 +229,43 @@ describe('dataWorkerApi value distributions', () => {
   it('returns an empty distribution for unknown columns', async () => {
     const api = await loaded();
     expect(await api.getColumnValueDistribution({ column: 'nope' })).toMatchObject({ items: [], distinctCount: 0 });
+  });
+});
+
+describe('dataWorkerApi with JSON Lines', () => {
+  // `rare` is in row 7 only, so its batch stores it sparse.
+  const JSONL = Array.from({ length: 10 }, (_, index) =>
+    JSON.stringify({ id: index, user: { name: `u${index}` }, ...(index === 7 ? { rare: 'Needle' } : {}) })
+  ).join('\n');
+
+  it('searches, filters, sorts and exports a key that few rows have', async () => {
+    const api = createDataWorkerApi();
+    await api.loadFile({ handles: [createMockFileHandle(JSONL, { name: 'events.jsonl' })], batchSize: 4 }, {});
+
+    expect(await api.globalSearch({ query: 'needle', columns: [] })).toEqual({ totalRows: 10, matchedRows: 1 });
+    expect((await api.fetchRows({ offset: 0, limit: 10 })).rows).toEqual([
+      { __rowId: 7, id: '7', 'user.name': 'u7', rare: 'Needle' }
+    ]);
+    expect((await api.globalSearch({ query: 'needle', columns: [], caseSensitive: true })).matchedRows).toBe(0);
+    expect((await api.globalSearch({ query: 'needle', columns: ['user.name'] })).matchedRows).toBe(0);
+
+    await api.globalSearch({ query: 'Needle', columns: [] });
+    expect((await api.applyFilter({ expression: { column: 'rare', operator: 'neq', value: 'Needle' } })).matchedRows).toBe(0);
+    await api.globalSearch({ query: '', columns: [] });
+    expect((await api.applyFilter({ expression: { column: 'rare', operator: 'neq', value: 'Needle' } })).matchedRows).toBe(9);
+    await api.applyFilter({ expression: null });
+
+    await api.applySorts({ sorts: [{ column: 'rare', direction: 'desc' }] });
+    expect((await api.fetchRows({ offset: 0, limit: 2 })).rows.map((row) => row.__rowId)).toEqual([7, 0]);
+
+    const blob = await api.exportCsv({
+      columns: [
+        { key: 'id', header: 'id' },
+        { key: 'rare', header: 'rare' }
+      ],
+      scope: 'view'
+    });
+    expect((await blob.text()).split('\n').slice(0, 3)).toEqual(['"id","rare"', '"7","Needle"', '"0",""']);
   });
 });
 

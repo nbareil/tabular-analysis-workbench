@@ -3,8 +3,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { profileColumn, timeHistogram } from './columnStats';
-import { encodeColumn } from './csvParser';
-import { RowBatchStore } from './rowBatchStore';
+import { encodeColumn, RowBatchStore } from './rowBatchStore';
 
 const createStore = async (columns: Record<string, string[]>, batchSize = 2): Promise<RowBatchStore> => {
   const store = await RowBatchStore.create('sort-test');

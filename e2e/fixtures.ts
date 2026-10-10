@@ -22,6 +22,24 @@ export const trickyCsv = (bulkRows = 2000): string => {
   return `${lines.join('\n')}\n`;
 };
 
+/**
+ * JSON Lines edge cases: nested keys, an array, a 19-digit id, escapes, a key only one row has,
+ * a blank line and a truncated record.
+ */
+export const trickyJsonl = (bulkRows = 2000): string => {
+  const lines = [
+    '{"@timestamp":"2024-01-01T10:00:00Z","host":{"name":"WS01"},"process":{"pid":4242,"parent":{"pid":4}},"flow_id":1234567890123456789,"tags":["a","b"]}',
+    '',
+    '{"@timestamp":"2024-01-01T10:05:00Z","host":{"name":"WS02"},"process":{"pid":7,"command_line":"cmd.exe /c \\"C:\\\\Temp\\\\x.bat\\""},"rare":"needle"}',
+    '{"@timestamp":"2024-01-01T10:06:00Z","truncated":'
+  ];
+  for (let i = 0; i < bulkRows; i += 1) {
+    const ts = new Date(Date.UTC(2024, 0, 3) + i * 60_000).toISOString();
+    lines.push(JSON.stringify({ '@timestamp': ts, host: { name: `WS0${i % 5}` }, process: { pid: 1000 + i }, event: `bulk ${i}` }));
+  }
+  return `${lines.join('\n')}\n`;
+};
+
 /** The window as the init script below patches it. */
 export type PickerWindow = {
   showOpenFilePicker: (options?: unknown) => Promise<FileSystemFileHandle[]>;

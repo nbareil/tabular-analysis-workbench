@@ -1,4 +1,4 @@
-# Tabular Analysis Workbench (CSV/TSV) — Product Requirements Document (PRD)
+# Tabular Analysis Workbench (CSV/TSV, JSON Lines) — Product Requirements Document (PRD)
 
 **Version:** 1.2  
 **Author:** [Your Name]  
@@ -10,8 +10,8 @@
 ## 1. Overview
 
 **Goal**  
-Develop a high-performance, browser-native CSV/TSV exploration tool for forensic and analytical use.  
-The application runs **entirely in the analyst’s web browser** (Chromium only), supports **very large CSV/TSV files (up to 2 GB)** via streaming, and provides **filtering, grouping, tagging, and annotation** similar to Eric Zimmerman’s *Timeline Explorer* — but with a **modern, minimalist design** and persistent annotations.
+Develop a high-performance, browser-native CSV/TSV and JSON Lines exploration tool for forensic and analytical use.  
+The application runs **entirely in the analyst’s web browser** (Chromium only), supports **very large CSV/TSV and JSON Lines files (up to 2 GB)** via streaming, and provides **filtering, grouping, tagging, and annotation** similar to Eric Zimmerman’s *Timeline Explorer* — but with a **modern, minimalist design** and persistent annotations.
 
 **Core Principle**  
 - No installation  
@@ -36,7 +36,7 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 
 | # | Objective | Description | Priority |
 |:-:|------------|--------------|-----------|
-| 1 | **Stream large CSV/TSV files** | Efficiently parse and browse up to 2 GB via Streams API + Web Workers. | 🟩 Must |
+| 1 | **Stream large CSV/TSV and JSON Lines files** | Efficiently parse and browse up to 2 GB via Streams API + Web Workers. | 🟩 Must |
 | 2 | **Chromium-only** | Target latest Chromium with experimental APIs (OPFS, DecompressionStream). | 🟩 Must |
 | 3 | **Local-only** | Zero network traffic; runs offline; no telemetry. | 🟩 Must |
 | 4 | **Modern minimalist UI** | Clean, dark-first interface. | 🟩 Must |
@@ -51,8 +51,9 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 ## 4. Functional Requirements
 
 ### 4.1 File Support
-- Accept delimited text (`.csv`, `.tsv`, `.txt`) and gzip-compressed variants; gzip is detected from the file content, not the extension.
-- File selection via **native file picker**; selecting several files merges them into one timeline with a `source_file` column.
+- Accept delimited text (`.csv`, `.tsv`, `.txt`), JSON Lines (`.jsonl`, `.ndjson`, `.json`, `.log`: one JSON object per line) and their gzip-compressed variants. Gzip and the format are detected from the file content, not the extension: a file whose first non-blank character is `{` is JSON Lines.
+- Reject JSON documents (a top-level array, or one object spread over several lines) with a hint to convert them to JSON Lines.
+- File selection via **native file picker**; selecting several files, in any mix of formats, merges them into one timeline with a `source_file` column.
 - Auto-detect the delimiter (tab, comma, semicolon, pipe) from the header line; UTF-8 by default.
 - Stream parse using `File.stream()` + `DecompressionStream('gzip')`.
 - Never copy data; operate on file handle only.
@@ -61,8 +62,14 @@ The tool behaves like a *forensic spreadsheet on steroids* — optimized for fil
 - Parser runs in **Web Worker**:
   - Streaming `TextDecoder`
   - Batch emission (10 000 rows) into an OPFS row cache
-- Designed for **long, narrow** datasets.
+- Designed for **long, narrow** datasets; JSON Lines files may also be wide and sparse.
 - Every cell keeps its original text; type inference only decides how filters, sorts and aggregates interpret a column.
+- JSON Lines:
+  - Each line holding a JSON object is a row; nested objects become dotted columns (`process.parent.pid`), ordered so that keys sharing a parent stay together.
+  - Columns appear as new keys turn up while the file streams in.
+  - Arrays keep their JSON text; numbers and booleans keep their literal text, so long integers are never rounded; strings are unescaped; `null` is an empty cell; a repeated key keeps its last value.
+  - A line that is not a JSON object is kept as a row with its text in a `malformed_line` column and counted as malformed; blank lines are skipped.
+  - At most 1,000 columns per file come from keys; values of later keys are kept, as one JSON object per row, in an `other_fields` column. Objects nested more than 20 levels deep keep their JSON text.
 - Type inference (string, number, datetime, boolean) with strict parsing:
   - Datetime: ISO-like `YYYY-MM-DD[ HH:MM[:SS[.fraction]]][zone]` and epoch seconds/milliseconds (years 2000–2100). Timestamps without a zone are UTC.
   - Datetime cells display the file's text, or are converted to a chosen time zone (Options).
@@ -181,7 +188,7 @@ MessageChannel (postMessage)
 │
 ┌──────────────▼─────────────┐
 │ Worker Engine │
-│ - Stream parser (CSV/TSV) │
+│ - Stream parsers (CSV/TSV, JSON Lines) │
 │ - OPFS row cache (raw text) │
 │ - Filter/Search/Sort/Group │
 │ - Tag/Note manager │
@@ -242,6 +249,7 @@ Typography: Inter + JetBrains Mono.
 | OPFS API changes | Medium | Versioned adapter layer |
 | Gzip performance | Medium | Adjustable chunk size |
 | Large columns in suggestion scans | Medium | Only run suggestions for zero-match exact equality filters |
+| Wide or ever-changing JSON keys | Medium | Sparse column storage; at most 1,000 columns per file, later keys kept in `other_fields` |
 | Annotation loss | Low | Save within seconds of each edit and when the tab is hidden |
 
 ---

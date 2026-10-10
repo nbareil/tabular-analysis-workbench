@@ -77,14 +77,24 @@ const runSearch = async (
   const matched: number[] = [];
   for await (const view of store.iterateBatches()) {
     check();
-    const values = columns.map((column) => view.column(column));
-    for (let index = 0; index < view.rowCount; index += 1) {
-      const rowId = view.rowStart + index;
-      if (mask && mask[rowId] !== 1) {
-        continue;
+    // Only stored cells are visited: wide JSON Lines files leave most cells of most columns empty.
+    const hits = new Uint8Array(view.rowCount);
+    for (const column of columns) {
+      const { rows, values } = view.cells(column);
+      for (let cell = 0; cell < values.length; cell += 1) {
+        const index = rows ? rows[cell]! : cell;
+        if (
+          hits[index] === 0 &&
+          (!mask || mask[view.rowStart + index] === 1) &&
+          normalizeString(values[cell]!, spec.caseSensitive).includes(needle)
+        ) {
+          hits[index] = 1;
+        }
       }
-      if (values.some((column) => normalizeString(column[index]!, spec.caseSensitive).includes(needle))) {
-        matched.push(rowId);
+    }
+    for (let index = 0; index < view.rowCount; index += 1) {
+      if (hits[index] === 1) {
+        matched.push(view.rowStart + index);
       }
     }
   }

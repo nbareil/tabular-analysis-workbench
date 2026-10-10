@@ -75,4 +75,17 @@ describe('TypeInferencer', () => {
     expect(columnTypes).toEqual({ n: 'number', s: 'string' });
     expect(columnInference.s!.nullCount).toBe(1);
   });
+
+  it('counts rows without a cell as empty, including rows before a column was added', () => {
+    const inferencer = new TypeInferencer();
+    inferencer.addColumn('n');
+    inferencer.addRows(2);
+    inferencer.updateCell(0, '7');
+    inferencer.addColumn('s');
+    inferencer.addRows(2);
+    inferencer.updateCell(1, 'x');
+    const { columnInference } = inferencer.resolveAll();
+    expect(columnInference.n).toMatchObject({ type: 'number', samples: 4, nullCount: 3 });
+    expect(columnInference.s).toMatchObject({ type: 'string', samples: 4, nullCount: 3, examples: ['x'] });
+  });
 });

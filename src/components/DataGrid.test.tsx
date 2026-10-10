@@ -308,7 +308,7 @@ describe('getEmptyStateMessage', () => {
         totalRows: 0,
         matchedRows: 0
       })
-    ).toBe('Select a CSV or TSV file to begin.');
+    ).toBe('Select a CSV, TSV or JSON Lines file to begin.');
   });
 });
 

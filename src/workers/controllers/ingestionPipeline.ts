@@ -1,7 +1,9 @@
-import { encodeColumn, parseDelimitedStream } from '../csvParser';
+import { parseDelimitedStream } from '../csvParser';
+import { parseJsonLinesStream } from '../jsonLinesParser';
 import { buildDatasetStorageKey, createDatasetFingerprint } from '../datasetFingerprint';
 import { isGzip } from '../utils/detectCompression';
-import { RowBatchStore } from '../rowBatchStore';
+import { detectFormat } from '../utils/detectFormat';
+import { encodeColumn, RowBatchStore } from '../rowBatchStore';
 import { startPerformanceMeasure } from '../utils/performanceMarks';
 import { logDebug } from '../../utils/debugLog';
 import { StaleOperationError, type DataWorkerStateController, type DatasetState } from '../state/dataWorkerState';
@@ -40,9 +42,10 @@ const sourceInference = (fileNames: string[], rows: number): ColumnInference => 
 });
 
 /**
- * Streams one or more files into a fresh RowBatchStore. Several files become one dataset whose
- * columns are the union of their headers plus SOURCE_COLUMN. Starting another load supersedes this
- * one: the superseded load cancels its reader, discards its store and rejects with StaleOperationError.
+ * Streams one or more files into a fresh RowBatchStore, each parsed as delimited text or JSON Lines
+ * according to its content. Several files become one dataset whose columns are the union of theirs
+ * plus SOURCE_COLUMN. Starting another load supersedes this one: the superseded load cancels its
+ * reader, discards its store and rejects with StaleOperationError.
  */
 export const createIngestionPipeline = (state: DataWorkerStateController): IngestionPipeline => {
   let latestLoad = 0;
@@ -85,7 +88,9 @@ export const createIngestionPipeline = (state: DataWorkerStateController): Inges
       await state.hydrateTagging(fingerprint, dataset);
       check();
 
-      const union: string[] = [];
+      // Each file's columns in its own order; JSON Lines files insert columns as new keys appear.
+      const columnsPerFile: string[][] = [];
+      let union: string[] = [];
       const typesPerFile: Array<Record<string, ColumnType>> = [];
       const inference: Record<string, ColumnInference> = {};
       let bytesRead = 0;
@@ -123,7 +128,7 @@ export const createIngestionPipeline = (state: DataWorkerStateController): Inges
         }
         const activeReader = stream.getReader();
         reader = activeReader;
-        const source: AsyncIterable<Uint8Array> = {
+        const { format, source } = await detectFormat({
           async *[Symbol.asyncIterator]() {
             while (true) {
               check();
@@ -134,24 +139,36 @@ export const createIngestionPipeline = (state: DataWorkerStateController): Inges
               yield value;
             }
           }
-        };
+        });
+        if (format === 'json') {
+          throw new Error(
+            `${file.name} is a JSON document, not JSON Lines. Open a file with one JSON object per line ` +
+              `(for an array of objects: jq -c '.[]' ${file.name}).`
+          );
+        }
+        const parse = format === 'jsonl' ? parseJsonLinesStream : parseDelimitedStream;
 
         typesPerFile[fileIndex] = {};
         let fileMalformedRows = 0;
-        await parseDelimitedStream(
+        await parse(
           source,
           {
-            onHeader: async (header) => {
+            onColumns: async (columns) => {
               check();
-              for (const column of header) {
-                if (!union.includes(column)) {
-                  union.push(column);
+              columnsPerFile[fileIndex] = columns;
+              union = [...new Set(columnsPerFile.flat())];
+              const fileTypes = typesPerFile[fileIndex]!;
+              for (const column of columns) {
+                if (!Object.hasOwn(inference, column)) {
                   inference[column] = { type: 'string', confidence: 0, samples: 0, nullCount: 0, examples: [] };
                 }
-                typesPerFile[fileIndex]![column] = 'string';
+                // Known types stay: a filter may run while this load waits on the callback below.
+                if (!Object.hasOwn(fileTypes, column)) {
+                  fileTypes[column] = 'string';
+                }
               }
               publishSchema();
-              await callbacks.onStart?.({ columns: dataset.header });
+              await callbacks.onColumns?.({ columns: dataset.header });
             },
             onBatch: async (batch) => {
               check();
@@ -201,6 +218,7 @@ export const createIngestionPipeline = (state: DataWorkerStateController): Inges
         });
       }
       await callbacks.onComplete?.({
+        columns: dataset.header,
         rowsParsed: dataset.totalRows,
         bytesParsed: bytesRead,
         malformedRows,

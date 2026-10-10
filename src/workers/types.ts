@@ -13,8 +13,10 @@ export interface ParseStats {
 export interface ColumnBatch {
   /** Concatenated UTF-8 encoded cell text */
   data: ArrayBuffer;
-  /** Length is `rowCount + 1`; offsets[i + 1] - offsets[i] is the byte length of row i. */
+  /** One entry more than stored values; offsets[i + 1] - offsets[i] is the byte length of value i. */
   offsets: Uint32Array;
+  /** Sparse columns only: the batch row of each stored value, ascending. Rows not listed are empty. */
+  rows?: Uint32Array;
 }
 
 export interface ColumnInference {

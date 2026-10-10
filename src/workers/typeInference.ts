@@ -1,4 +1,5 @@
 import type { ColumnInference, ColumnType } from './types';
+import { detachString } from './utils/stringUtils';
 import { parseBoolean, parseDatetime, parseNumber } from './valueParsing';
 
 export type ValueKind = 'null' | ColumnType;
@@ -30,9 +31,8 @@ export const analyzeValue = (raw: string): AnalyzedValue => {
 const TYPE_THRESHOLD = 0.9;
 const MAX_EXAMPLES = 5;
 
+/** Counts the non-empty values of a column; every other row it has seen is empty. */
 interface ColumnInferenceState {
-  samples: number;
-  nullCount: number;
   typeCounts: Record<ColumnType, number>;
   examples: string[];
   minDatetime?: number;
@@ -40,40 +40,51 @@ interface ColumnInferenceState {
 }
 
 const createInitialState = (): ColumnInferenceState => ({
-  samples: 0,
-  nullCount: 0,
   typeCounts: { string: 0, number: 0, datetime: 0, boolean: 0 },
   examples: []
 });
 
+/**
+ * Feed it whole rows with `updateRow`, or, for rows that only list the cells they have,
+ * count them with `addRows` and pass each cell to `updateCell`. Columns added later count
+ * every earlier row as empty.
+ */
 export class TypeInferencer {
-  private readonly state: ColumnInferenceState[];
-  private readonly columns: string[];
+  private readonly state: ColumnInferenceState[] = [];
+  private readonly columns: string[] = [];
+  private rows = 0;
 
-  constructor(header: string[]) {
-    this.columns = header.slice();
-    this.state = this.columns.map(createInitialState);
+  constructor(header: string[] = []) {
+    header.forEach((column) => this.addColumn(column));
+  }
+
+  addColumn(name: string): void {
+    this.columns.push(name);
+    this.state.push(createInitialState());
   }
 
   updateRow(row: string[]): void {
+    this.rows += 1;
     for (let index = 0; index < this.columns.length; index += 1) {
-      this.update(this.state[index]!, row[index] ?? '');
+      this.updateCell(index, row[index] ?? '');
     }
   }
 
-  private update(stats: ColumnInferenceState, rawValue: string): void {
-    const analysis = analyzeValue(rawValue);
-    stats.samples += 1;
+  addRows(count: number): void {
+    this.rows += count;
+  }
 
+  updateCell(columnIndex: number, rawValue: string): void {
+    const stats = this.state[columnIndex]!;
+    const analysis = analyzeValue(rawValue);
     if (analysis.kind === 'null') {
-      stats.nullCount += 1;
       return;
     }
 
     if (stats.examples.length < MAX_EXAMPLES) {
       const trimmed = rawValue.trim();
       if (!stats.examples.includes(trimmed)) {
-        stats.examples.push(trimmed);
+        stats.examples.push(detachString(trimmed));
       }
     }
 
@@ -93,7 +104,7 @@ export class TypeInferencer {
     const columnTypes: Record<string, ColumnType> = {};
     const columnInference: Record<string, ColumnInference> = {};
     this.columns.forEach((column, index) => {
-      const inference = resolveState(this.state[index]!);
+      const inference = resolveState(this.state[index]!, this.rows);
       columnTypes[column] = inference.type;
       columnInference[column] = inference;
     });
@@ -101,11 +112,12 @@ export class TypeInferencer {
   }
 }
 
-const resolveState = (stats: ColumnInferenceState): ColumnInference => {
-  const nonNullSamples = stats.samples - stats.nullCount;
+const resolveState = (stats: ColumnInferenceState, samples: number): ColumnInference => {
+  const { typeCounts } = stats;
+  const nonNullSamples = typeCounts.string + typeCounts.number + typeCounts.datetime + typeCounts.boolean;
   const base = {
-    samples: stats.samples,
-    nullCount: stats.nullCount,
+    samples,
+    nullCount: samples - nonNullSamples,
     examples: stats.examples.slice(),
     minDatetime: stats.minDatetime,
     maxDatetime: stats.maxDatetime
